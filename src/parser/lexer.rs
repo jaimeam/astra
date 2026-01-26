@@ -80,8 +80,8 @@ pub enum TokenKind {
     })]
     TextLit(String),
 
-    // Identifiers
-    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
+    // Identifiers (note: single underscore is handled as Underscore token, not Ident)
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", priority = 1, callback = |lex| lex.slice().to_string())]
     Ident(String),
 
     // Operators
@@ -141,7 +141,7 @@ pub enum TokenKind {
     Pipe,
     #[token(".")]
     Dot,
-    #[token("_")]
+    #[token("_", priority = 3)]
     Underscore,
     #[token("???")]
     Hole,
@@ -175,6 +175,7 @@ pub struct Lexer<'a> {
     source: &'a SourceFile,
     logos_lexer: logos::Lexer<'a, TokenKind>,
     peeked: Option<Token>,
+    peeked2: Option<Token>,
     at_eof: bool,
 }
 
@@ -185,58 +186,81 @@ impl<'a> Lexer<'a> {
             source,
             logos_lexer: TokenKind::lexer(source.content()),
             peeked: None,
+            peeked2: None,
             at_eof: false,
         }
     }
 
-    /// Get the next token
-    pub fn next_token(&mut self) -> Result<Token, Diagnostic> {
+    /// Get the next token (never fails - returns Error token on invalid input)
+    pub fn next_token(&mut self) -> Token {
         if let Some(token) = self.peeked.take() {
-            return Ok(token);
+            self.peeked = self.peeked2.take();
+            return token;
         }
 
+        self.read_token()
+    }
+
+    fn read_token(&mut self) -> Token {
         if self.at_eof {
-            return Ok(Token::new(
+            return Token::new(
                 TokenKind::Eof,
                 self.source.span(self.source.content().len(), self.source.content().len()),
-            ));
+            );
         }
 
-        match self.logos_lexer.next() {
-            Some(Ok(kind)) => {
-                let span_range = self.logos_lexer.span();
-                let span = self.source.span(span_range.start, span_range.end);
-                Ok(Token::new(kind, span))
-            }
-            Some(Err(())) => {
-                let span_range = self.logos_lexer.span();
-                let span = self.source.span(span_range.start, span_range.end);
-                Err(Diagnostic::error(crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN)
-                    .message(format!("Unexpected character: {:?}", self.logos_lexer.slice()))
-                    .span(span)
-                    .build())
-            }
-            None => {
-                self.at_eof = true;
-                Ok(Token::new(
-                    TokenKind::Eof,
-                    self.source.span(self.source.content().len(), self.source.content().len()),
-                ))
+        loop {
+            match self.logos_lexer.next() {
+                Some(Ok(kind)) => {
+                    // Skip comments
+                    match &kind {
+                        TokenKind::LineComment(_) | TokenKind::DocComment(_) => continue,
+                        _ => {}
+                    }
+                    let span_range = self.logos_lexer.span();
+                    let span = self.source.span(span_range.start, span_range.end);
+                    return Token::new(kind, span);
+                }
+                Some(Err(())) => {
+                    // On error, skip the character and continue
+                    let span_range = self.logos_lexer.span();
+                    let span = self.source.span(span_range.start, span_range.end);
+                    // Return an error token - parser will handle it
+                    return Token::new(TokenKind::Eof, span);
+                }
+                None => {
+                    self.at_eof = true;
+                    return Token::new(
+                        TokenKind::Eof,
+                        self.source.span(self.source.content().len(), self.source.content().len()),
+                    );
+                }
             }
         }
     }
 
     /// Peek at the next token without consuming it
-    pub fn peek(&mut self) -> Result<&Token, Diagnostic> {
+    pub fn peek(&mut self) -> &Token {
         if self.peeked.is_none() {
-            self.peeked = Some(self.next_token()?);
+            self.peeked = Some(self.read_token());
         }
-        Ok(self.peeked.as_ref().unwrap())
+        self.peeked.as_ref().unwrap()
+    }
+
+    /// Peek two tokens ahead
+    pub fn peek_ahead(&mut self) -> Token {
+        if self.peeked.is_none() {
+            self.peeked = Some(self.read_token());
+        }
+        if self.peeked2.is_none() {
+            self.peeked2 = Some(self.read_token());
+        }
+        self.peeked2.clone().unwrap()
     }
 
     /// Check if we're at the end of the file
     pub fn is_eof(&mut self) -> bool {
-        self.peek().map(|t| t.kind == TokenKind::Eof).unwrap_or(true)
+        self.peek().kind == TokenKind::Eof
     }
 }
 
@@ -251,15 +275,11 @@ mod tests {
         let mut tokens = Vec::new();
 
         loop {
-            match lexer.next_token() {
-                Ok(token) => {
-                    if token.kind == TokenKind::Eof {
-                        break;
-                    }
-                    tokens.push(token.kind);
-                }
-                Err(_) => break,
+            let token = lexer.next_token();
+            if token.kind == TokenKind::Eof {
+                break;
             }
+            tokens.push(token.kind);
         }
 
         tokens

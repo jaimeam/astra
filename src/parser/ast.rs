@@ -395,11 +395,42 @@ pub enum BinaryOp {
     Or,
 }
 
+impl BinaryOp {
+    /// Get the string representation of this operator
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Mod => "%",
+            BinaryOp::Eq => "==",
+            BinaryOp::Ne => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Le => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Ge => ">=",
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+        }
+    }
+}
+
 /// Unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnaryOp {
     Neg,
     Not,
+}
+
+impl UnaryOp {
+    /// Get the string representation of this operator
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UnaryOp::Neg => "-",
+            UnaryOp::Not => "not ",
+        }
+    }
 }
 
 /// Match arm

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-mod error_codes;
+pub mod error_codes;
 pub use error_codes::*;
 
 /// A source location span
@@ -227,6 +227,18 @@ impl Diagnostic {
         }
     }
 
+    /// Create a new info diagnostic
+    pub fn info(code: impl Into<String>) -> DiagnosticBuilder {
+        DiagnosticBuilder {
+            code: code.into(),
+            severity: Severity::Info,
+            message: String::new(),
+            span: None,
+            notes: Vec::new(),
+            suggestions: Vec::new(),
+        }
+    }
+
     /// Check if this is an error
     pub fn is_error(&self) -> bool {
         matches!(self.severity, Severity::Error)
@@ -343,7 +355,7 @@ impl DiagnosticBuilder {
 }
 
 /// A collection of diagnostics
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DiagnosticBag {
     diagnostics: Vec<Diagnostic>,
 }
@@ -377,6 +389,14 @@ impl DiagnosticBag {
     /// Merge another bag into this one
     pub fn merge(&mut self, other: DiagnosticBag) {
         self.diagnostics.extend(other.diagnostics);
+    }
+}
+
+impl From<Diagnostic> for DiagnosticBag {
+    fn from(diagnostic: Diagnostic) -> Self {
+        let mut bag = DiagnosticBag::new();
+        bag.push(diagnostic);
+        bag
     }
 }
 

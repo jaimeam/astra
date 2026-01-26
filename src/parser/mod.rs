@@ -39,7 +39,7 @@ pub fn parse_file(path: &Path) -> Result<Module, DiagnosticBag> {
 pub fn parse_source(source: &str, path: &Path) -> Result<Module, DiagnosticBag> {
     let source_file = SourceFile::new(path.to_path_buf(), source.to_string());
     let lexer = Lexer::new(&source_file);
-    let mut parser = Parser::new(lexer, source_file);
+    let mut parser = Parser::new(lexer, source_file.clone());
     parser.parse_module()
 }
 
@@ -50,8 +50,20 @@ mod tests {
 
     #[test]
     fn test_parse_empty_module() {
-        let source = "module test";
+        let source = "module mymod\n";
         let result = parse_source(source, &PathBuf::from("test.astra"));
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_simple_function() {
+        let source = r#"module math
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+"#;
+        let result = parse_source(source, &PathBuf::from("test.astra"));
+        assert!(result.is_ok(), "Parse error: {:?}", result.err());
     }
 }
