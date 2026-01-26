@@ -1,14 +1,33 @@
 # Astra
 
-**Astra** is a programming language designed to be generated, maintained, tested, deployed, and executed by LLMs and agent systems with minimal ambiguity and maximum automated verification.
+**Astra** is a programming language designed for LLMs and AI agents to write, verify, and maintain code.
 
-## Vision
+> **Why not just use Python, JavaScript, or Rust?** See [Why Astra?](docs/why-astra.md) for the full rationale.
 
-Astra's north star is **fast, deterministic feedback**:
-- Compile/check-time diagnostics become an actionable "obligation list" for agents
-- Runtime behavior is sandboxable and capability-controlled
-- Formatting and project structure are canonical
-- Correctness is reinforced through types + effects + contracts + built-in testing
+## The Problem
+
+When LLMs generate code in existing languages, they face fundamental challenges:
+
+| Language | Problems for LLMs |
+|----------|-------------------|
+| **Python/JS** | Runtime-only errors, non-deterministic tests, hidden side effects |
+| **Rust** | Ownership complexity, human-oriented error messages |
+
+**The result**: LLM generates code → it fails → error is ambiguous → LLM guesses at fix → cycle repeats.
+
+## Astra's Solution
+
+Astra provides **fast, deterministic feedback loops** designed for machine consumption:
+
+- **Machine-readable diagnostics** with stable error codes and suggested fixes
+- **Explicit effects** - function signatures declare all capabilities (Net, Fs, Clock, etc.)
+- **Deterministic testing** - seeded randomness, mockable time, no flaky tests
+- **One canonical format** - no style choices, the formatter decides everything
+- **No null** - use `Option[T]` and exhaustive matching; compiler catches missing cases
+
+```
+LLM generates code → astra check → JSON errors with fix suggestions → LLM applies fixes → repeat until passing
+```
 
 ## Status
 
@@ -91,6 +110,7 @@ test "rejects zero amount" {
 
 ## Documentation
 
+- **[Why Astra?](docs/why-astra.md)** - The case for an LLM-native language
 - [Getting Started](docs/getting-started.md)
 - [Language Specification](docs/spec.md)
 - [Error Codes Reference](docs/errors.md)
