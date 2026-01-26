@@ -1,0 +1,25 @@
+# Astra Project Manifest
+# This file defines an Astra project's metadata and dependencies.
+
+[package]
+name = "astra-lang"
+version = "0.1.0"
+description = "The Astra programming language - an LLM/Agent-native language"
+authors = ["Astra Contributors"]
+license = "MIT OR Apache-2.0"
+
+[targets]
+# Default compilation target
+default = "interpreter"
+# Available: interpreter, wasm (future)
+
+[dependencies]
+# No external dependencies for the language itself yet
+
+[features]
+default = ["std"]
+std = []
+
+[build]
+# Build configuration
+incremental = true
