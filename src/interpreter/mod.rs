@@ -280,16 +280,17 @@ impl Interpreter {
 
     /// Evaluate a module
     pub fn eval_module(&mut self, module: &Module) -> Result<Value, RuntimeError> {
-        // First pass: collect all function definitions
+        // Collect all function definitions into the environment
         for item in &module.items {
             if let Item::FnDef(fn_def) = item {
                 let params: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
+                // Use a marker to indicate this needs the global env
                 let closure = Value::Closure {
                     params,
                     body: ClosureBody {
                         block: fn_def.body.clone(),
                     },
-                    env: self.env.clone(),
+                    env: Environment::new(), // Will use global env at call time
                 };
                 self.env.define(fn_def.name.clone(), closure);
             }
@@ -297,9 +298,10 @@ impl Interpreter {
 
         // Look for and run main function if it exists
         if let Some(main_fn) = self.env.lookup("main").cloned() {
-            if let Value::Closure { params, body, env } = main_fn {
+            if let Value::Closure { params, body, .. } = main_fn {
                 if params.is_empty() {
-                    let mut call_env = env.child();
+                    // Execute in a child of the global environment
+                    let call_env = self.env.child();
                     let old_env = std::mem::replace(&mut self.env, call_env);
                     let result = self.eval_block(&body.block);
                     self.env = old_env;
@@ -597,8 +599,17 @@ impl Interpreter {
                     return Err(RuntimeError::arity_mismatch(params.len(), args.len()));
                 }
 
-                // Create new environment with function's captured env as parent
-                let mut call_env = env.child();
+                // Determine parent environment:
+                // - For module-level functions (empty captured env), use current env
+                // - For closures (non-empty captured env), use captured env
+                let parent_env = if env.bindings.is_empty() && env.parent.is_none() {
+                    &self.env
+                } else {
+                    &env
+                };
+
+                // Create new environment with appropriate parent
+                let mut call_env = parent_env.child();
                 for (param, arg) in params.iter().zip(args) {
                     call_env.define(param.clone(), arg);
                 }
@@ -1117,5 +1128,206 @@ impl ClockCapability for FixedClock {
 
     fn sleep(&self, _millis: u64) {
         // No-op for fixed clock
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{Lexer, Parser, SourceFile};
+    use std::path::PathBuf;
+
+    fn parse_and_eval(source: &str) -> Result<Value, RuntimeError> {
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = Parser::new(lexer, source_file.clone());
+        let module = parser.parse_module().expect("parse failed");
+
+        let console = Box::new(MockConsole::new());
+        let capabilities = Capabilities {
+            console: Some(console),
+            ..Default::default()
+        };
+
+        let mut interpreter = Interpreter::with_capabilities(capabilities);
+        interpreter.eval_module(&module)
+    }
+
+    #[test]
+    fn test_simple_arithmetic() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  1 + 2 * 3
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(7)));
+    }
+
+    #[test]
+    fn test_if_expression() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  if true {
+    42
+  } else {
+    0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_function_call() {
+        let source = r#"
+module example
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() -> Int {
+  add(10, 20)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(30)));
+    }
+
+    #[test]
+    fn test_pattern_matching() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x = 5
+  match x {
+    0 => 100
+    5 => 200
+    _ => 300
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(200)));
+    }
+
+    #[test]
+    fn test_recursion() {
+        let source = r#"
+module example
+
+fn factorial(n: Int) -> Int {
+  if n <= 1 {
+    1
+  } else {
+    n * factorial(n - 1)
+  }
+}
+
+fn main() -> Int {
+  factorial(5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(120)));
+    }
+
+    #[test]
+    fn test_string_operations() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  "Hello" + " " + "World"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "Hello World"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_comparison() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  10 > 5 and 5 < 10
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_record_field_access() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let r = { x = 10, y = 20 }
+  r.x + r.y
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(30)));
+    }
+
+    #[test]
+    fn test_division_by_zero() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  10 / 0
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code, "E4003");
+    }
+
+    #[test]
+    fn test_console_effect() {
+        let source = r#"
+module example
+
+fn main() effects(Console) {
+  Console.println("test output")
+}
+"#;
+        // Use the helper which sets up mock console
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_nested_function_calls() {
+        let source = r#"
+module example
+
+fn double(x: Int) -> Int {
+  x * 2
+}
+
+fn add_one(x: Int) -> Int {
+  x + 1
+}
+
+fn main() -> Int {
+  double(add_one(5))
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(12)));
     }
 }
