@@ -2,6 +2,24 @@
 
 > This document tracks the implementation status and coordinates parallel development across agents.
 
+## Git Workflow
+
+**Main Branch**: `claude/setup-astra-foundation-Ig1nr`
+
+See [BRANCHING.md](BRANCHING.md) for full branching strategy.
+
+### Agent Branch Assignments
+
+| Agent | Suggested Branch Name | Task |
+|-------|----------------------|------|
+| typechecker-engineer | `claude/typechecker-inference-{id}` | Complete type inference |
+| effects-engineer | `claude/effects-checking-{id}` | Effect system integration |
+| parser-engineer | `claude/parser-contracts-{id}` | Add requires/ensures syntax |
+| stdlib-engineer | `claude/stdlib-integration-{id}` | Stdlib runtime integration |
+| docs-engineer | `claude/docs-getting-started-{id}` | Getting started guide |
+
+---
+
 ## Current Status (v0.1)
 
 ### Completed
