@@ -178,8 +178,6 @@ impl Default for TestRunner {
 
 /// Assertion helpers for tests
 pub mod assert {
-    use super::*;
-
     /// Assert that two values are equal
     pub fn assert_eq<T: PartialEq + std::fmt::Debug>(left: T, right: T) -> Result<(), String> {
         if left == right {
@@ -225,8 +223,6 @@ pub mod assert {
 
 /// Property testing support
 pub mod property {
-    use super::*;
-
     /// Generator for random values
     pub trait Generator<T> {
         fn generate(&self, rng: &mut dyn FnMut() -> u64) -> T;

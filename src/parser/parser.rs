@@ -937,6 +937,7 @@ impl<'a> Parser<'a> {
         std::mem::discriminant(&self.peek().kind) == std::mem::discriminant(&kind)
     }
 
+    #[allow(dead_code)]
     fn check_ident(&mut self, name: &str) -> bool {
         matches!(&self.peek().kind, TokenKind::Ident(n) if n == name)
     }

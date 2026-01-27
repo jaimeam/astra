@@ -1,6 +1,6 @@
 //! Lexer for the Astra programming language
 
-use crate::diagnostics::{Diagnostic, Span};
+use crate::diagnostics::Span;
 use crate::parser::span::SourceFile;
 use logos::Logos;
 

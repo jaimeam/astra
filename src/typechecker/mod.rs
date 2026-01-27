@@ -2,7 +2,7 @@
 //!
 //! Implements type checking, inference, and exhaustiveness checking.
 
-use crate::diagnostics::{Diagnostic, DiagnosticBag, Span};
+use crate::diagnostics::{Diagnostic, DiagnosticBag};
 use crate::parser::ast::*;
 use std::collections::HashMap;
 
@@ -128,7 +128,8 @@ pub struct TypeChecker {
     env: TypeEnv,
     /// Diagnostics collected during checking
     diagnostics: DiagnosticBag,
-    /// Next type variable ID
+    /// Next type variable ID (used in fresh_type_var)
+    #[allow(dead_code)]
     next_var: u32,
 }
 

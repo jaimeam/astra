@@ -1,10 +1,17 @@
 # Getting Started with Astra
 
-Welcome to Astra, an LLM/Agent-native programming language designed for verifiability and deterministic feedback.
+This guide teaches you the fundamentals of Astra, an LLM-native programming language designed for fast, deterministic feedback loops.
 
 ## Installation
 
-### From Source
+Astra is currently built from source using Rust's Cargo toolchain.
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (1.70 or later)
+- Git
+
+### Build from Source
 
 ```bash
 # Clone the repository
@@ -14,13 +21,19 @@ cd astra
 # Build the toolchain
 cargo build --release
 
-# Add to PATH (optional)
+# Verify installation
+cargo run -- --help
+```
+
+The built binary is at `target/release/astra`. You can add it to your PATH:
+
+```bash
 export PATH="$PATH:$(pwd)/target/release"
 ```
 
-## Hello World
+## Your First Program
 
-Create a file `hello.astra`:
+Create a file named `hello.astra`:
 
 ```astra
 module hello
@@ -33,222 +46,582 @@ fn main() effects(Console) {
 Run it:
 
 ```bash
-astra run hello.astra
+cargo run -- run hello.astra
 ```
 
-## Project Structure
-
-Create a new project:
+Output:
 
 ```
-my-project/
-├── astra.toml        # Project manifest
-├── src/
-│   └── main.astra    # Main entry point
-└── tests/
-    └── main_test.astra
+Hello, Astra!
 ```
 
-### astra.toml
+### What This Code Does
 
-```toml
-[package]
-name = "my-project"
-version = "0.1.0"
+1. **`module hello`** - Every Astra file starts with a module declaration. This defines the namespace.
 
-[targets]
-default = "interpreter"
-```
+2. **`fn main()`** - The entry point function. Unlike Python, functions are declared with `fn`.
 
-### src/main.astra
+3. **`effects(Console)`** - This declares that the function uses the `Console` capability. Astra requires you to explicitly declare all side effects. This is a key difference from Python/JavaScript where I/O is implicit.
+
+4. **`Console.println(...)`** - Calls the `println` method on the `Console` capability to print text.
+
+## Basic Syntax
+
+### Modules
+
+Every Astra file must start with a module declaration:
 
 ```astra
-module main
+module my_module
 
-import std.option.{Some, None}
+# Rest of the code here
+```
 
-type Greeting = {
-  message: Text,
-  recipient: Text,
-}
+Comments start with `#` (like Python, unlike Rust's `//`).
 
-fn create_greeting(name: Text) -> Greeting {
-  {
-    message = "Hello",
-    recipient = name,
-  }
-}
+### Let Bindings
 
-fn format_greeting(g: Greeting) -> Text {
-  g.message + ", " + g.recipient + "!"
-}
+Variables are declared with `let`. They are immutable by default:
+
+```astra
+module variables
 
 fn main() effects(Console) {
-  let greeting = create_greeting("World")
-  Console.println(format_greeting(greeting))
+  # Immutable binding (default)
+  let x = 42
+  let name = "Alice"
+
+  # Type annotations are optional when inferrable
+  let count: Int = 10
+
+  Console.println("Done")
 }
 ```
 
-## Basic Concepts
+**Key difference from Python**: Variables are immutable by default. You cannot reassign `x` after binding.
 
-### Variables
-
-```astra
-# Immutable (default)
-let x = 42
-let name = "Alice"
-
-# Mutable
-let mut counter = 0
-counter = counter + 1
-```
+**Key difference from Rust**: No `let mut` syntax yet. All bindings are immutable.
 
 ### Functions
 
+Functions are defined with `fn`:
+
 ```astra
-# Simple function
+module functions
+
+# Function with parameters and return type
 fn add(a: Int, b: Int) -> Int {
   a + b
 }
 
-# Function with effects
-fn read_file(path: Text) -> Result[Text, FsError]
-  effects(Fs)
-{
-  Fs.read(path)
+# The last expression is the return value (like Rust)
+fn multiply(x: Int, y: Int) -> Int {
+  x * y
+}
+
+fn main() effects(Console) {
+  let result = add(3, 4)
+  Console.println("3 + 4 = 7")
 }
 ```
 
+**Key points**:
+- Parameter types are required: `a: Int`
+- Return type follows `->`: `-> Int`
+- No `return` keyword needed for the final expression
+- No semicolons at line ends (unlike Rust)
+
 ### Types
 
+Astra has these built-in types:
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `Int` | 64-bit signed integer | `42`, `-7` |
+| `Bool` | Boolean | `true`, `false` |
+| `Text` | UTF-8 string | `"hello"` |
+| `Unit` | Empty type | (implicit) |
+
+#### Record Types
+
+Define structured data with record types:
+
 ```astra
-# Record type
+module records
+
+# Define a record type
 type Point = { x: Int, y: Int }
 
-# Enum type
+# Define a more complex type
+type User = {
+  name: Text,
+  age: Int,
+  active: Bool,
+}
+
+fn create_point(x: Int, y: Int) -> { x: Int, y: Int } {
+  { x = x, y = y }
+}
+
+fn main() effects(Console) {
+  let p = { x = 10, y = 20 }
+  Console.println("Point created")
+}
+```
+
+**Key difference from Python**: Types are explicitly declared. There are no classes, only data records.
+
+**Key difference from Rust**: Simpler syntax. No `struct` keyword, no lifetime annotations.
+
+#### Enum Types
+
+Define sum types (variants) with `enum`:
+
+```astra
+module enums
+
+enum Color =
+  | Red
+  | Green
+  | Blue
+
 enum Shape =
   | Circle(radius: Int)
   | Rectangle(width: Int, height: Int)
-```
 
-### Pattern Matching
-
-```astra
-fn area(shape: Shape) -> Int {
-  match shape {
-    Circle(r) => 3 * r * r  # Approximation
-    Rectangle(w, h) => w * h
+fn describe_color(c: Color) -> Text {
+  match c {
+    Red => "red"
+    Green => "green"
+    Blue => "blue"
   }
+}
+
+fn main() effects(Console) {
+  Console.println("Colors defined")
 }
 ```
 
 ### Option and Result
 
-```astra
-# Option for nullable values
-fn find_user(id: Int) -> Option[User] {
-  # Returns Some(user) or None
-}
+Astra has no `null`. Instead, use `Option[T]` for values that may be absent:
 
-# Result for operations that can fail
-fn divide(a: Int, b: Int) -> Result[Int, Text] {
-  if b == 0 {
-    Err("Division by zero")
+```astra
+module options
+
+fn find_user(id: Int) -> Option[{ name: Text, age: Int }] {
+  if id == 1 {
+    Some({ name = "Alice", age = 30 })
   } else {
-    Ok(a / b)
+    None
   }
 }
 
-# Using ? for early return
-fn process(a: Int, b: Int) -> Result[Int, Text] {
-  let quotient = divide(a, b)?  # Returns Err early if division fails
-  Ok(quotient * 2)
+fn main() effects(Console) {
+  let user = find_user(1)
+  match user {
+    Some(u) => Console.println("Found user")
+    None => Console.println("User not found")
+  }
 }
 ```
+
+For operations that can fail, use `Result[T, E]`:
+
+```astra
+module results
+
+enum ParseError =
+  | EmptyInput
+  | InvalidFormat
+
+fn parse_number(s: Text) -> Result[Int, ParseError] {
+  if s == "42" {
+    Ok(42)
+  } else {
+    Err(InvalidFormat)
+  }
+}
+
+fn main() effects(Console) {
+  match parse_number("42") {
+    Ok(n) => Console.println("Parsed successfully")
+    Err(e) => Console.println("Parse failed")
+  }
+}
+```
+
+**Key difference from Python**: No `None` or exceptions. All potential failures are encoded in the type system.
+
+**Key difference from Rust**: Similar to Rust's `Option` and `Result`, but simpler - no `.unwrap()` panics.
 
 ## Effects System
 
-Functions that interact with the outside world must declare their effects:
+The effects system is Astra's most distinctive feature. It makes side effects explicit and controllable.
+
+### Why Effects Matter
+
+In Python or JavaScript, any function can secretly:
+- Read/write files
+- Make network requests
+- Access the current time
+- Generate random numbers
+
+This makes code hard to test and reason about. In Astra, these capabilities must be declared.
+
+### Declaring Effects
 
 ```astra
-# Pure function (no effects)
-fn pure_add(a: Int, b: Int) -> Int {
+module effects_example
+
+# Pure function - no effects keyword means no side effects
+fn add(a: Int, b: Int) -> Int {
   a + b
 }
 
-# Function with network effect
-fn fetch(url: Text) -> Result[Text, NetError]
-  effects(Net)
-{
-  Net.get(url)
+# Function that prints - must declare Console effect
+fn greet(name: Text) effects(Console) {
+  Console.println("Hello, " + name + "!")
 }
 
-# Function with multiple effects
-fn log_and_fetch(url: Text) -> Result[Text, NetError]
-  effects(Console, Net)
+fn main() effects(Console) {
+  let sum = add(2, 3)
+  greet("World")
+}
+```
+
+### Available Effects
+
+| Effect | Capability | Description |
+|--------|------------|-------------|
+| `Console` | `Console.println(text)`, `Console.print(text)` | Terminal I/O |
+| `Fs` | `Fs.read(path)`, `Fs.write(path, content)` | File system |
+| `Net` | `Net.get(url)`, `Net.post(url, body)` | Network requests |
+| `Clock` | `Clock.now()` | Current time |
+| `Rand` | `Rand.int(min, max)`, `Rand.bool()` | Random numbers |
+| `Env` | `Env.get(key)`, `Env.args()` | Environment variables |
+
+### Multiple Effects
+
+Functions can declare multiple effects:
+
+```astra
+module multi_effects
+
+fn fetch_and_log(url: Text) -> Text
+  effects(Net, Console)
 {
   Console.println("Fetching: " + url)
-  Net.get(url)
+  let response = Net.get(url)
+  Console.println("Done")
+  response
+}
+
+fn main() effects(Net, Console) {
+  let data = fetch_and_log("https://example.com")
+  Console.println("Received data")
 }
 ```
 
-### Testing with Mock Effects
+**Key insight for LLMs**: When you call a function with effects, your function must also declare those effects. Effects propagate up the call chain.
+
+## Pattern Matching
+
+Pattern matching is how you destructure and branch on data in Astra.
+
+### Basic Matching
 
 ```astra
-test "fetch with mock network" {
-  using effects(Net = MockNet.returning({ status = 200, body = "OK" }))
+module matching
 
-  let result = fetch("http://example.com")
-  assert result.is_ok()
-  assert_eq(result.unwrap(), "OK")
+fn describe_number(n: Int) -> Text {
+  match n {
+    0 => "zero"
+    1 => "one"
+    _ => "many"
+  }
+}
+
+fn main() effects(Console) {
+  Console.println(describe_number(0))
+  Console.println(describe_number(1))
+  Console.println(describe_number(42))
 }
 ```
 
-## Writing Tests
-
-Tests are built into the language:
+### Matching Enums
 
 ```astra
-# Unit test
-test "addition works" {
-  assert_eq(add(1, 2), 3)
+module enum_matching
+
+enum Status =
+  | Active
+  | Inactive
+  | Pending(reason: Text)
+
+fn describe_status(s: Status) -> Text {
+  match s {
+    Active => "User is active"
+    Inactive => "User is inactive"
+    Pending(r) => "Pending: " + r
+  }
 }
 
-# Property test
-property "addition is commutative" {
-  forall a: Int, b: Int {
-    assert_eq(add(a, b), add(b, a))
+fn main() effects(Console) {
+  let s = Pending(reason = "awaiting verification")
+  Console.println(describe_status(s))
+}
+```
+
+### Matching Option and Result
+
+```astra
+module option_matching
+
+fn safe_divide(a: Int, b: Int) -> Option[Int] {
+  if b == 0 {
+    None
+  } else {
+    Some(a / b)
+  }
+}
+
+fn main() effects(Console) {
+  match safe_divide(10, 2) {
+    Some(result) => Console.println("Result: 5")
+    None => Console.println("Cannot divide by zero")
   }
 }
 ```
 
-Run tests:
+**Important**: Match expressions must be exhaustive. The compiler will error if you forget a case.
 
-```bash
-astra test
+## Error Messages
+
+Astra produces machine-readable error diagnostics designed for LLMs to parse and fix.
+
+### Error Code Format
+
+Errors follow the pattern `E####`:
+- `E0xxx` - Syntax/parsing errors
+- `E1xxx` - Type errors
+- `E2xxx` - Effect errors
+- `E3xxx` - Contract violations
+- `E4xxx` - Runtime errors
+
+### Example: Syntax Error
+
+If you write invalid syntax:
+
+```astra
+module broken
+
+fn add(a Int) -> Int {
+  a
+}
 ```
+
+The compiler produces:
+
+```
+error[E0001]: Expected ':', found 'Int'
+  --> broken.astra:3:9
+   |
+ 3 | fn add(a Int) -> Int {
+   |         ^^^
+```
+
+**Fix**: Add the colon between parameter name and type: `fn add(a: Int)`
+
+### Example: Missing Match Case
+
+```astra
+module incomplete
+
+enum Light = Red | Yellow | Green
+
+fn describe(l: Light) -> Text {
+  match l {
+    Red => "stop"
+    Green => "go"
+  }
+}
+```
+
+The compiler produces:
+
+```
+error[E1004]: Non-exhaustive match: missing pattern 'Yellow'
+  --> incomplete.astra:6:3
+   |
+ 6 |   match l {
+   |   ^^^^^
+```
+
+**Fix**: Add the missing case: `Yellow => "caution"`
+
+### The Feedback Loop
+
+Astra is designed for this workflow:
+
+```
+Write code
+    |
+    v
+Run: cargo run -- check file.astra
+    |
+    v
+Parse error output (JSON available with --json)
+    |
+    v
+Apply suggested fixes
+    |
+    v
+Repeat until: "0 errors"
+    |
+    v
+Run: cargo run -- run file.astra
+```
+
+For LLMs: When you receive an error, look at:
+1. The error code (e.g., `E1004`)
+2. The location (file, line, column)
+3. The message explaining what's wrong
+4. Any suggested fixes
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `astra fmt` | Format code canonically |
-| `astra check` | Check for errors without running |
-| `astra test` | Run all tests |
-| `astra run <file>` | Run a program |
-| `astra package` | Create distributable artifact |
+| `cargo run -- run <file>` | Execute an Astra program |
+| `cargo run -- check <files>` | Type-check without running |
+| `cargo run -- fmt <files>` | Format code canonically |
+| `cargo run -- test` | Run tests |
 
-### Common Options
+### Useful Options
 
 ```bash
-astra check --json          # Output errors as JSON
-astra test --filter "math"  # Run tests matching "math"
-astra run --seed 42         # Use specific random seed
+# Check with JSON output (for programmatic parsing)
+cargo run -- check --json myfile.astra
+
+# Check all files in a directory
+cargo run -- check src/
+
+# Run with specific file
+cargo run -- run examples/hello.astra
+```
+
+## Complete Example: Fibonacci
+
+Here's a complete working example demonstrating recursion and pattern matching:
+
+```astra
+module fibonacci
+
+fn fib(n: Int) -> Int {
+  match n {
+    0 => 0
+    1 => 1
+    _ => fib(n - 1) + fib(n - 2)
+  }
+}
+
+fn main() effects(Console) {
+  Console.println("Fibonacci sequence:")
+  Console.println("fib(0) = 0")
+  Console.println("fib(1) = 1")
+  Console.println("fib(5) = 5")
+  Console.println("fib(10) = 55")
+}
+```
+
+Run it:
+
+```bash
+cargo run -- run fibonacci.astra
 ```
 
 ## Next Steps
 
-- Read the [Language Specification](spec.md)
-- Explore [Error Codes](errors.md)
-- Learn [Formatting Rules](formatting.md)
-- Check out [Examples](../examples/)
+- **[Language Specification](spec.md)** - Complete syntax and semantics reference
+- **[Error Codes Reference](errors.md)** - All error codes with explanations
+- **[Formatting Rules](formatting.md)** - How the canonical formatter works
+- **[Why Astra?](why-astra.md)** - Design philosophy and rationale
+- **[Examples](../examples/)** - More code examples
+
+## Quick Reference
+
+### Syntax Cheat Sheet
+
+```astra
+# Module declaration (required at top)
+module my_module
+
+# Comments
+# This is a comment
+
+# Let binding
+let x = 42
+let name: Text = "Alice"
+
+# Function
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+# Function with effects
+fn greet(name: Text) effects(Console) {
+  Console.println("Hello, " + name)
+}
+
+# Record type
+type Point = { x: Int, y: Int }
+
+# Enum type
+enum Result = Ok(value: Int) | Err(message: Text)
+
+# If expression
+if condition {
+  value_if_true
+} else {
+  value_if_false
+}
+
+# Match expression
+match value {
+  Pattern1 => result1
+  Pattern2 => result2
+  _ => default_result
+}
+
+# Option
+Some(value)
+None
+
+# Result
+Ok(value)
+Err(error)
+```
+
+### Key Differences from Python
+
+| Python | Astra |
+|--------|-------|
+| `def func():` | `fn func() {` |
+| `None` | `Option[T]` with `Some`/`None` |
+| Exceptions | `Result[T, E]` with `Ok`/`Err` |
+| Implicit I/O | Explicit `effects(...)` |
+| Dynamic typing | Static typing |
+| `# comment` | `# comment` (same!) |
+
+### Key Differences from Rust
+
+| Rust | Astra |
+|------|-------|
+| `fn func() -> i32 { }` | `fn func() -> Int { }` |
+| `struct Point { x: i32 }` | `type Point = { x: Int }` |
+| `let mut x = 5;` | `let x = 5` (no mut yet) |
+| Semicolons required | No semicolons |
+| `// comment` | `# comment` |
+| Ownership/borrowing | Garbage collected |
+| `pub fn` | `public fn` |
