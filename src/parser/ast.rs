@@ -372,6 +372,32 @@ pub enum Expr {
     },
 }
 
+impl Expr {
+    /// Get the span of this expression
+    pub fn span(&self) -> &Span {
+        match self {
+            Expr::IntLit { span, .. }
+            | Expr::BoolLit { span, .. }
+            | Expr::TextLit { span, .. }
+            | Expr::UnitLit { span, .. }
+            | Expr::Ident { span, .. }
+            | Expr::QualifiedIdent { span, .. }
+            | Expr::Record { span, .. }
+            | Expr::FieldAccess { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::Unary { span, .. }
+            | Expr::Call { span, .. }
+            | Expr::MethodCall { span, .. }
+            | Expr::If { span, .. }
+            | Expr::Match { span, .. }
+            | Expr::Block { span, .. }
+            | Expr::Try { span, .. }
+            | Expr::TryElse { span, .. }
+            | Expr::Hole { span, .. } => span,
+        }
+    }
+}
+
 /// Binary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BinaryOp {

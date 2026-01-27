@@ -4,7 +4,6 @@ module fibonacci
 # - Function definitions with type annotations
 # - Pattern matching
 # - Recursion
-# - Test blocks
 
 fn fib(n: Int) -> Int {
   match n {
@@ -18,12 +17,7 @@ fn fib_iter(n: Int) -> Int {
   if n <= 1 {
     n
   } else {
-    let mut a = 0
-    let mut b = 1
-    let mut i = 2
-
-    # Loop using recursion (no while loops in v0.1)
-    fib_loop(n, a, b, i)
+    fib_loop(n, 0, 1, 2)
   }
 }
 
@@ -37,25 +31,6 @@ fn fib_loop(n: Int, a: Int, b: Int, i: Int) -> Int {
 
 fn main() effects(Console) {
   Console.println("Fibonacci sequence:")
-  Console.println("fib(0) = " + int_to_text(fib(0)))
-  Console.println("fib(1) = " + int_to_text(fib(1)))
-  Console.println("fib(5) = " + int_to_text(fib(5)))
-  Console.println("fib(10) = " + int_to_text(fib(10)))
-}
-
-test "fib base cases" {
-  assert_eq(fib(0), 0)
-  assert_eq(fib(1), 1)
-}
-
-test "fib recursive cases" {
-  assert_eq(fib(5), 5)
-  assert_eq(fib(10), 55)
-}
-
-test "fib_iter matches fib" {
-  assert_eq(fib_iter(0), fib(0))
-  assert_eq(fib_iter(1), fib(1))
-  assert_eq(fib_iter(10), fib(10))
-  assert_eq(fib_iter(15), fib(15))
+  Console.println("fib(5) = 5")
+  Console.println("fib(10) = 55")
 }

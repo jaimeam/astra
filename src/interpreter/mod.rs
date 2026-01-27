@@ -322,10 +322,16 @@ impl Interpreter {
 
             // Identifiers
             Expr::Ident { name, .. } => {
-                self.env
-                    .lookup(name)
-                    .cloned()
-                    .ok_or_else(|| RuntimeError::undefined_variable(name))
+                // Check for effect names first
+                match name.as_str() {
+                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => {
+                        Ok(Value::Text(name.clone()))
+                    }
+                    _ => self.env
+                        .lookup(name)
+                        .cloned()
+                        .ok_or_else(|| RuntimeError::undefined_variable(name))
+                }
             }
             Expr::QualifiedIdent { module, name, .. } => {
                 // For now, treat as effect call target

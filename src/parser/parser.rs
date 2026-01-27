@@ -242,7 +242,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let effects = if self.check_ident("effects") {
+        let effects = if self.check(TokenKind::Effects) {
             self.advance();
             self.expect(TokenKind::LParen)?;
             let mut effects = vec![self.expect_ident()?];
@@ -416,8 +416,22 @@ impl<'a> Parser<'a> {
             if self.check(TokenKind::Let) || self.check(TokenKind::Return) {
                 stmts.push(self.parse_stmt()?);
             } else {
-                expr = Some(Box::new(self.parse_expr()?));
-                break;
+                // Parse an expression
+                let e = self.parse_expr()?;
+
+                // If we're at the end of the block, this is the final expression
+                if self.check(TokenKind::RBrace) {
+                    expr = Some(Box::new(e));
+                    break;
+                } else {
+                    // Otherwise, this is an expression statement
+                    let span = e.span().clone();
+                    stmts.push(Stmt::Expr {
+                        id: NodeId::new(),
+                        span,
+                        expr: Box::new(e),
+                    });
+                }
             }
         }
 

@@ -390,6 +390,31 @@ impl DiagnosticBag {
     pub fn merge(&mut self, other: DiagnosticBag) {
         self.diagnostics.extend(other.diagnostics);
     }
+
+    /// Get the number of diagnostics
+    pub fn len(&self) -> usize {
+        self.diagnostics.len()
+    }
+
+    /// Check if the bag is empty
+    pub fn is_empty(&self) -> bool {
+        self.diagnostics.is_empty()
+    }
+
+    /// Format all diagnostics as JSON
+    pub fn to_json(&self) -> String {
+        let json_array: Vec<String> = self.diagnostics.iter().map(|d| d.to_json()).collect();
+        format!("[{}]", json_array.join(","))
+    }
+
+    /// Format all diagnostics as human-readable text
+    pub fn format_text(&self, source: &str) -> String {
+        self.diagnostics
+            .iter()
+            .map(|d| d.to_human_readable(source))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
 }
 
 impl From<Diagnostic> for DiagnosticBag {
