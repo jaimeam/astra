@@ -1,0 +1,25 @@
+module deterministic_tests
+
+fn generate_id() -> Int
+  effects(Rand)
+{
+  Rand.int(1000, 9999)
+}
+
+test "random is deterministic with seed" {
+  using effects(Rand = Rand.seeded(42))
+
+  let id1 = generate_id()
+  let id2 = generate_id()
+
+  # Same seed = same sequence every time
+  assert id1 == 5765
+  assert id2 == 3847
+}
+
+test "different seed = different values" {
+  using effects(Rand = Rand.seeded(99))
+
+  let id = generate_id()
+  assert id != 5765  # Different from seed 42
+}

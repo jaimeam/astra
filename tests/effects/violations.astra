@@ -1,0 +1,147 @@
+module test_effects_violations
+
+## This file contains intentional effect violations for testing error detection
+
+# ERROR: Missing effect declaration - using Console without declaring
+fn print_without_effect() -> Unit {
+  print("hello")
+}
+
+# ERROR: Missing effect declaration - using Fs without declaring
+fn read_without_effect() -> Text {
+  read_file("data.txt")
+}
+
+# ERROR: Missing effect declaration - using Net without declaring
+fn fetch_without_effect() -> Text {
+  http_get("https://example.com")
+}
+
+# ERROR: Missing effect declaration - using Rand without declaring
+fn random_without_effect() -> Int {
+  random_int(1, 100)
+}
+
+# ERROR: Missing effect declaration - using Clock without declaring
+fn time_without_effect() -> Int {
+  current_time_millis()
+}
+
+# ERROR: Missing effect declaration - using Env without declaring
+fn env_without_effect() -> Text {
+  get_env("PATH")
+}
+
+# ERROR: Caller doesn't declare callee's effects
+fn callee_with_console() -> Unit effects(Console) {
+  print("from callee")
+}
+
+fn caller_missing_effect() -> Unit {
+  callee_with_console()
+}
+
+# ERROR: Caller declares subset of callee's effects
+fn callee_with_multiple() -> Unit effects(Console, Fs) {
+  print("hello")
+  let content = read_file("file.txt")
+}
+
+fn caller_partial_effects() -> Unit effects(Console) {
+  callee_with_multiple()
+}
+
+# ERROR: Effect not provided in test
+test "console without mock" {
+  print("this should fail")
+}
+
+# ERROR: Wrong effect provided in test
+test "wrong effect mock" using effects(Fs = mock_fs) {
+  print("console not provided")
+}
+
+# ERROR: Pure function calling effectful function
+fn pure_calls_impure() -> Int {
+  print("side effect in pure function")
+  42
+}
+
+# ERROR: Effect in pure context (match arm)
+fn effect_in_match(x: Int) -> Int {
+  match x {
+    0 => {
+      print("zero")
+      0
+    },
+    n => n
+  }
+}
+
+# ERROR: Effect in pure lambda/closure used in pure context
+fn pure_map(list: List[Int]) -> List[Int] {
+  list.map(fn(x) {
+    print("processing")
+    x * 2
+  })
+}
+
+# ERROR: Effect escaping scope
+fn effect_escape() -> (Int) -> Unit {
+  fn(x: Int) {
+    print(int_to_text(x))
+  }
+}
+
+# ERROR: Calling effectful function in contract
+fn effectful_contract(x: Int) -> Int
+  requires {
+    print("checking precondition")
+    x > 0
+  }
+{
+  x * 2
+}
+
+# ERROR: Effect in type invariant
+type LoggedInt = Int
+  invariant {
+    print("checking invariant")
+    self >= 0
+  }
+
+# ERROR: Unhandled effect in higher-order function
+fn apply_pure(f: (Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+fn misuse_apply_pure() -> Int {
+  apply_pure(fn(x) {
+    print("effect leak")
+    x
+  }, 42)
+}
+
+# ERROR: Missing effect in recursive call chain
+fn recursive_effect(n: Int) -> Unit effects(Console) {
+  if n > 0 {
+    print(int_to_text(n))
+    helper_no_effect(n - 1)
+  }
+}
+
+fn helper_no_effect(n: Int) -> Unit {
+  recursive_effect(n)
+}
+
+# ERROR: Effect declared but not used (warning)
+fn unused_effect() -> Int effects(Console) {
+  42
+}
+
+# ERROR: Multiple conflicting effect handlers
+test "conflicting handlers"
+  using effects(Console = mock1, Console = mock2)
+{
+  print("which handler?")
+}

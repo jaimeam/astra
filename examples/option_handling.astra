@@ -1,0 +1,19 @@
+module option_example
+
+fn find_user(id: Int) -> Option[{ name: Text, age: Int }] {
+  if id == 1 then Some({ name = "Alice", age = 30 })
+  else if id == 2 then Some({ name = "Bob", age = 25 })
+  else None
+}
+
+fn greet_user(id: Int) -> Text {
+  match find_user(id) {
+    Some(user) => "Hello, " + user.name + "!"
+    None => "User not found"
+  }
+}
+
+test "finds existing user" {
+  assert find_user(1).is_some()
+  assert find_user(999).is_none()
+}

@@ -1,0 +1,131 @@
+module test_effects_declarations
+
+## Tests for correct effect declarations
+
+# Pure function - no effects needed
+fn pure_add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn pure_string() -> Text {
+  "hello"
+}
+
+# Single effect declaration
+fn with_console() -> Unit effects(Console) {
+  print("hello")
+}
+
+fn with_fs() -> Text effects(Fs) {
+  read_file("path.txt")
+}
+
+fn with_net() -> Text effects(Net) {
+  http_get("https://example.com")
+}
+
+fn with_clock() -> Int effects(Clock) {
+  current_time_millis()
+}
+
+fn with_rand() -> Int effects(Rand) {
+  random_int(1, 100)
+}
+
+fn with_env() -> Text effects(Env) {
+  get_env("PATH")
+}
+
+# Multiple effects
+fn console_and_fs() -> Unit effects(Console, Fs) {
+  let content = read_file("data.txt")
+  print(content)
+}
+
+fn net_and_console() -> Unit effects(Net, Console) {
+  let response = http_get("https://api.example.com")
+  print(response)
+}
+
+fn all_io_effects() -> Unit effects(Console, Fs, Net, Env) {
+  let path = get_env("DATA_PATH")
+  let content = read_file(path)
+  let response = http_post("https://api.example.com", content)
+  print(response)
+}
+
+# Effect propagation through function calls
+fn caller_of_console() -> Unit effects(Console) {
+  with_console()
+}
+
+fn nested_effect_calls() -> Unit effects(Console, Fs) {
+  console_and_fs()
+}
+
+# Effects in test blocks with injection
+test "console output" using effects(Console = mock_console) {
+  with_console()
+  assert(mock_console.output == "hello")
+}
+
+test "filesystem read" using effects(Fs = mock_fs) {
+  let content = with_fs()
+  assert(content == "mocked content")
+}
+
+test "network call" using effects(Net = mock_net) {
+  let response = with_net()
+  assert(response == "mocked response")
+}
+
+# Effects in property tests
+property "random is bounded" using effects(Rand = seeded_rand(42)) {
+  let value = random_int(1, 10)
+  assert(value >= 1 and value <= 10)
+}
+
+# Conditional effect usage
+fn conditional_print(should_print: Bool) -> Unit effects(Console) {
+  if should_print {
+    print("printed")
+  }
+}
+
+# Effects with contracts
+fn logged_divide(a: Int, b: Int) -> Int
+  effects(Console)
+  requires b != 0
+  ensures result == a / b
+{
+  print("dividing " + int_to_text(a) + " by " + int_to_text(b))
+  a / b
+}
+
+# Effect handlers (capability injection pattern)
+fn with_custom_handler(console: ConsoleCapability) -> Unit {
+  console.print("custom handler")
+}
+
+# Effect-polymorphic functions
+fn map_with_effect[T, U, E](
+  list: List[T],
+  f: (T) -> U effects(E)
+) -> List[U] effects(E) {
+  list.map(f)
+}
+
+# Higher-order functions with effects
+fn apply_effectful[T, U](
+  value: T,
+  f: (T) -> U effects(Console)
+) -> U effects(Console) {
+  f(value)
+}
+
+fn use_apply_effectful() -> Int effects(Console) {
+  apply_effectful(42, fn(x) {
+    print("processing " + int_to_text(x))
+    x * 2
+  })
+}

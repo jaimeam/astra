@@ -1,0 +1,114 @@
+module test_patterns
+
+# Wildcard pattern
+fn wildcard_match(x: Int) -> Text {
+  match x {
+    _ => "anything"
+  }
+}
+
+# Variable binding pattern
+fn variable_bind(x: Int) -> Int {
+  match x {
+    n => n * 2
+  }
+}
+
+# Integer literal patterns
+fn int_literal_match(x: Int) -> Text {
+  match x {
+    0 => "zero",
+    1 => "one",
+    _ => "other"
+  }
+}
+
+# Boolean literal patterns
+fn bool_literal_match(b: Bool) -> Text {
+  match b {
+    true => "yes",
+    false => "no"
+  }
+}
+
+# Text literal patterns
+fn text_literal_match(s: Text) -> Int {
+  match s {
+    "hello" => 1,
+    "world" => 2,
+    _ => 0
+  }
+}
+
+# Enum variant patterns
+enum Color = Red | Green | Blue
+
+fn enum_match(c: Color) -> Text {
+  match c {
+    Red => "red",
+    Green => "green",
+    Blue => "blue"
+  }
+}
+
+# Enum with data
+enum Shape = Circle(radius: Int) | Rectangle(width: Int, height: Int)
+
+fn enum_data_match(s: Shape) -> Int {
+  match s {
+    Circle(r) => r * r,
+    Rectangle(w, h) => w * h
+  }
+}
+
+# Option pattern matching
+fn option_match(opt: Option[Int]) -> Int {
+  match opt {
+    Some(x) => x,
+    None => 0
+  }
+}
+
+# Result pattern matching
+fn result_match(res: Result[Int, Text]) -> Int {
+  match res {
+    Ok(value) => value,
+    Err(msg) => 0
+  }
+}
+
+# Record patterns
+fn record_match(point: {x: Int, y: Int}) -> Int {
+  match point {
+    {x, y} => x + y
+  }
+}
+
+# Record pattern with field binding
+fn record_field_bind(point: {x: Int, y: Int}) -> Int {
+  match point {
+    {x = a, y = b} => a * b
+  }
+}
+
+# Nested patterns
+enum Tree[T] = Leaf(value: T) | Node(left: Tree[T], right: Tree[T])
+
+fn nested_pattern(tree: Tree[Int]) -> Int {
+  match tree {
+    Leaf(v) => v,
+    Node(Leaf(l), Leaf(r)) => l + r,
+    Node(left, right) => 0
+  }
+}
+
+# Multiple patterns in let binding
+fn let_pattern() -> Int {
+  let {x, y} = {x = 10, y = 20}
+  x + y
+}
+
+# Pattern in function parameter (destructuring)
+fn destructure_param({x, y}: {x: Int, y: Int}) -> Int {
+  x + y
+}

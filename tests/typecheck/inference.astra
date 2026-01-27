@@ -1,0 +1,150 @@
+module test_typecheck_inference
+
+# Local variable type inference from literals
+fn infer_int_literal() -> Int {
+  let x = 42
+  x
+}
+
+fn infer_bool_literal() -> Bool {
+  let b = true
+  b
+}
+
+fn infer_text_literal() -> Text {
+  let s = "hello"
+  s
+}
+
+# Inference from arithmetic expressions
+fn infer_from_arithmetic() -> Int {
+  let sum = 1 + 2
+  let product = 3 * 4
+  sum + product
+}
+
+# Inference from comparison
+fn infer_from_comparison() -> Bool {
+  let less = 1 < 2
+  let greater = 3 > 2
+  less and greater
+}
+
+# Inference from logical expressions
+fn infer_from_logic() -> Bool {
+  let a = true
+  let b = false
+  let result = a and b
+  result
+}
+
+# Inference from function calls
+fn helper() -> Int {
+  100
+}
+
+fn infer_from_call() -> Int {
+  let value = helper()
+  value * 2
+}
+
+# Inference through chains
+fn chain_inference() -> Int {
+  let a = 1
+  let b = a + 1
+  let c = b + 1
+  c
+}
+
+# Inference in if expressions
+fn infer_in_if() -> Int {
+  let cond = true
+  let result = if cond { 1 } else { 2 }
+  result
+}
+
+# Inference from Option
+fn infer_option() -> Option[Int] {
+  let opt = Some(42)
+  opt
+}
+
+fn infer_option_none() -> Option[Int] {
+  let opt: Option[Int] = None
+  opt
+}
+
+# Inference from Result
+fn infer_result_ok() -> Result[Int, Text] {
+  let res = Ok(42)
+  res
+}
+
+fn infer_result_err() -> Result[Int, Text] {
+  let res: Result[Int, Text] = Err("error")
+  res
+}
+
+# Inference in record creation
+fn infer_record() -> {x: Int, y: Int} {
+  let point = {x = 10, y = 20}
+  point
+}
+
+# Inference in match
+enum Status = Active | Inactive
+
+fn infer_in_match(s: Status) -> Text {
+  let msg = match s {
+    Active => "on",
+    Inactive => "off"
+  }
+  msg
+}
+
+# Inference with nested expressions
+fn nested_inference() -> Int {
+  let outer = {
+    let inner = 5
+    inner * 2
+  }
+  outer + 1
+}
+
+# Inference in lambda/closure
+fn infer_lambda() -> Int {
+  let double = fn(x: Int) { x * 2 }
+  double(21)
+}
+
+# Multiple inferred bindings
+fn multi_inference() -> Int {
+  let a = 1
+  let b = 2
+  let c = a + b
+  let d = c * 2
+  let e = d - 1
+  e
+}
+
+# Inference with method chains
+fn method_chain_inference(list: List[Int]) -> List[Int] {
+  let filtered = list.filter(fn(x) { x > 0 })
+  let mapped = filtered.map(fn(x) { x * 2 })
+  mapped
+}
+
+# Inference preserves types through operations
+fn preserve_type() -> Bool {
+  let x = 5
+  let y = 10
+  let comparison = x < y
+  let negated = not comparison
+  negated
+}
+
+# Bidirectional inference from context
+fn bidirectional() -> Option[Int] {
+  let result: Option[Int] = if true { Some(1) } else { None }
+  result
+}

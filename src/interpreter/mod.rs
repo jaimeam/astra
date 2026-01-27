@@ -3,6 +3,101 @@
 //! Executes Astra code with capability-controlled effects.
 
 use std::collections::HashMap;
+use std::fmt;
+
+use crate::parser::ast::*;
+
+/// Runtime error with error code and message
+#[derive(Debug, Clone)]
+pub struct RuntimeError {
+    /// Error code (E4xxx series for runtime errors)
+    pub code: &'static str,
+    /// Human-readable error message
+    pub message: String,
+}
+
+impl RuntimeError {
+    /// Create a new runtime error
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Undefined variable error
+    pub fn undefined_variable(name: &str) -> Self {
+        Self::new("E4001", format!("undefined variable: {}", name))
+    }
+
+    /// Type mismatch error
+    pub fn type_mismatch(expected: &str, got: &str) -> Self {
+        Self::new("E4002", format!("type mismatch: expected {}, got {}", expected, got))
+    }
+
+    /// Division by zero error
+    pub fn division_by_zero() -> Self {
+        Self::new("E4003", "division by zero")
+    }
+
+    /// Capability not available error
+    pub fn capability_not_available(cap: &str) -> Self {
+        Self::new("E4004", format!("capability not available: {}", cap))
+    }
+
+    /// Unknown function error
+    pub fn unknown_function(name: &str) -> Self {
+        Self::new("E4005", format!("unknown function: {}", name))
+    }
+
+    /// Unknown method error
+    pub fn unknown_method(receiver: &str, method: &str) -> Self {
+        Self::new("E4006", format!("unknown method: {}.{}", receiver, method))
+    }
+
+    /// Pattern match failure error
+    pub fn match_failure() -> Self {
+        Self::new("E4007", "no pattern matched")
+    }
+
+    /// Invalid field access error
+    pub fn invalid_field_access(field: &str) -> Self {
+        Self::new("E4008", format!("invalid field access: {}", field))
+    }
+
+    /// Not callable error
+    pub fn not_callable() -> Self {
+        Self::new("E4009", "value is not callable")
+    }
+
+    /// Arity mismatch error
+    pub fn arity_mismatch(expected: usize, got: usize) -> Self {
+        Self::new("E4010", format!("expected {} arguments, got {}", expected, got))
+    }
+
+    /// Unwrap None error
+    pub fn unwrap_none() -> Self {
+        Self::new("E4011", "tried to unwrap None")
+    }
+
+    /// Unwrap Err error
+    pub fn unwrap_err(msg: &str) -> Self {
+        Self::new("E4012", format!("tried to unwrap Err: {}", msg))
+    }
+
+    /// Hole encountered error
+    pub fn hole_encountered() -> Self {
+        Self::new("E4013", "encountered incomplete code (hole)")
+    }
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for RuntimeError {}
 
 /// Runtime value
 #[derive(Debug, Clone)]
@@ -38,11 +133,11 @@ pub enum Value {
     Err(Box<Value>),
 }
 
-/// Closure body - placeholder for now
+/// Closure body containing the AST block
 #[derive(Debug, Clone)]
 pub struct ClosureBody {
-    // Will hold AST reference
-    _placeholder: (),
+    /// The block to execute when called
+    pub block: Block,
 }
 
 /// Execution environment
@@ -183,8 +278,737 @@ impl Interpreter {
         }
     }
 
-    // Placeholder for evaluation methods
-    // These will be implemented when the AST and type system are complete
+    /// Evaluate a module
+    pub fn eval_module(&mut self, module: &Module) -> Result<Value, RuntimeError> {
+        // First pass: collect all function definitions
+        for item in &module.items {
+            if let Item::FnDef(fn_def) = item {
+                let params: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
+                let closure = Value::Closure {
+                    params,
+                    body: ClosureBody {
+                        block: fn_def.body.clone(),
+                    },
+                    env: self.env.clone(),
+                };
+                self.env.define(fn_def.name.clone(), closure);
+            }
+        }
+
+        // Look for and run main function if it exists
+        if let Some(main_fn) = self.env.lookup("main").cloned() {
+            if let Value::Closure { params, body, env } = main_fn {
+                if params.is_empty() {
+                    let mut call_env = env.child();
+                    let old_env = std::mem::replace(&mut self.env, call_env);
+                    let result = self.eval_block(&body.block);
+                    self.env = old_env;
+                    return result;
+                }
+            }
+        }
+
+        Ok(Value::Unit)
+    }
+
+    /// Evaluate an expression
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
+        match expr {
+            // Literals
+            Expr::IntLit { value, .. } => Ok(Value::Int(*value)),
+            Expr::BoolLit { value, .. } => Ok(Value::Bool(*value)),
+            Expr::TextLit { value, .. } => Ok(Value::Text(value.clone())),
+            Expr::UnitLit { .. } => Ok(Value::Unit),
+
+            // Identifiers
+            Expr::Ident { name, .. } => {
+                self.env
+                    .lookup(name)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::undefined_variable(name))
+            }
+            Expr::QualifiedIdent { module, name, .. } => {
+                // For now, treat as effect call target
+                Ok(Value::Text(format!("{}.{}", module, name)))
+            }
+
+            // Binary operations
+            Expr::Binary { op, left, right, .. } => {
+                let left_val = self.eval_expr(left)?;
+                let right_val = self.eval_expr(right)?;
+                self.eval_binary_op(*op, &left_val, &right_val)
+            }
+
+            // Unary operations
+            Expr::Unary { op, expr, .. } => {
+                let val = self.eval_expr(expr)?;
+                self.eval_unary_op(*op, &val)
+            }
+
+            // Function calls
+            Expr::Call { func, args, .. } => {
+                let func_val = self.eval_expr(func)?;
+                let mut arg_vals = Vec::new();
+                for arg in args {
+                    arg_vals.push(self.eval_expr(arg)?);
+                }
+                self.call_function(func_val, arg_vals)
+            }
+
+            // Method calls (for effects)
+            Expr::MethodCall { receiver, method, args, .. } => {
+                let recv = self.eval_expr(receiver)?;
+                let mut arg_vals = Vec::new();
+                for arg in args {
+                    arg_vals.push(self.eval_expr(arg)?);
+                }
+                self.call_method(&recv, method, arg_vals)
+            }
+
+            // If expression
+            Expr::If { cond, then_branch, else_branch, .. } => {
+                let cond_val = self.eval_expr(cond)?;
+                match cond_val {
+                    Value::Bool(true) => self.eval_block(then_branch),
+                    Value::Bool(false) => {
+                        if let Some(else_expr) = else_branch {
+                            self.eval_expr(else_expr)
+                        } else {
+                            Ok(Value::Unit)
+                        }
+                    }
+                    _ => Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond_val))),
+                }
+            }
+
+            // Match expression
+            Expr::Match { expr, arms, .. } => {
+                let val = self.eval_expr(expr)?;
+                for arm in arms {
+                    if let Some(bindings) = match_pattern(&arm.pattern, &val) {
+                        // Create new environment with pattern bindings
+                        let mut match_env = self.env.child();
+                        for (name, value) in bindings {
+                            match_env.define(name, value);
+                        }
+                        let old_env = std::mem::replace(&mut self.env, match_env);
+                        let result = self.eval_expr(&arm.body);
+                        self.env = old_env;
+                        return result;
+                    }
+                }
+                Err(RuntimeError::match_failure())
+            }
+
+            // Block expression
+            Expr::Block { block, .. } => self.eval_block(block),
+
+            // Try expression (unwrap Option/Result, propagate None/Err)
+            Expr::Try { expr, .. } => {
+                let val = self.eval_expr(expr)?;
+                match val {
+                    Value::Some(inner) => Ok(*inner),
+                    Value::None => Err(RuntimeError::unwrap_none()),
+                    Value::Ok(inner) => Ok(*inner),
+                    Value::Err(inner) => {
+                        let msg = match *inner {
+                            Value::Text(s) => s,
+                            _ => "error".to_string(),
+                        };
+                        Err(RuntimeError::unwrap_err(&msg))
+                    }
+                    other => Ok(other), // Pass through non-Option/Result values
+                }
+            }
+
+            // TryElse expression (unwrap or use default)
+            Expr::TryElse { expr, else_expr, .. } => {
+                let val = self.eval_expr(expr)?;
+                match val {
+                    Value::Some(inner) => Ok(*inner),
+                    Value::None => self.eval_expr(else_expr),
+                    Value::Ok(inner) => Ok(*inner),
+                    Value::Err(_) => self.eval_expr(else_expr),
+                    other => Ok(other),
+                }
+            }
+
+            // Record construction
+            Expr::Record { fields, .. } => {
+                let mut field_values = HashMap::new();
+                for (name, value_expr) in fields {
+                    let value = self.eval_expr(value_expr)?;
+                    field_values.insert(name.clone(), value);
+                }
+                Ok(Value::Record(field_values))
+            }
+
+            // Field access
+            Expr::FieldAccess { expr, field, .. } => {
+                let val = self.eval_expr(expr)?;
+                match val {
+                    Value::Record(fields) => {
+                        fields
+                            .get(field)
+                            .cloned()
+                            .ok_or_else(|| RuntimeError::invalid_field_access(field))
+                    }
+                    _ => Err(RuntimeError::type_mismatch("Record", &format!("{:?}", val))),
+                }
+            }
+
+            // Hole (incomplete code)
+            Expr::Hole { .. } => Err(RuntimeError::hole_encountered()),
+        }
+    }
+
+    /// Evaluate a statement
+    pub fn eval_stmt(&mut self, stmt: &Stmt) -> Result<(), RuntimeError> {
+        match stmt {
+            Stmt::Let { name, value, .. } => {
+                let val = self.eval_expr(value)?;
+                self.env.define(name.clone(), val);
+                Ok(())
+            }
+            Stmt::Assign { target, value, .. } => {
+                let val = self.eval_expr(value)?;
+                match target.as_ref() {
+                    Expr::Ident { name, .. } => {
+                        if !self.env.update(name, val) {
+                            return Err(RuntimeError::undefined_variable(name));
+                        }
+                        Ok(())
+                    }
+                    _ => Err(RuntimeError::new("E4014", "invalid assignment target")),
+                }
+            }
+            Stmt::Expr { expr, .. } => {
+                self.eval_expr(expr)?;
+                Ok(())
+            }
+            Stmt::Return { value, .. } => {
+                // Return is handled by early exit in eval_block
+                // For now, evaluate the value if present
+                if let Some(val_expr) = value {
+                    let _val = self.eval_expr(val_expr)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Evaluate a block
+    pub fn eval_block(&mut self, block: &Block) -> Result<Value, RuntimeError> {
+        // Create a new scope for the block
+        let old_env = self.env.clone();
+        self.env = self.env.child();
+
+        // Execute all statements
+        for stmt in &block.stmts {
+            // Handle return statements
+            if let Stmt::Return { value, .. } = stmt {
+                let result = if let Some(val_expr) = value {
+                    self.eval_expr(val_expr)?
+                } else {
+                    Value::Unit
+                };
+                self.env = old_env;
+                return Ok(result);
+            }
+            self.eval_stmt(stmt)?;
+        }
+
+        // Evaluate trailing expression or return Unit
+        let result = if let Some(expr) = &block.expr {
+            self.eval_expr(expr)?
+        } else {
+            Value::Unit
+        };
+
+        self.env = old_env;
+        Ok(result)
+    }
+
+    /// Evaluate a binary operation
+    fn eval_binary_op(&self, op: BinaryOp, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
+        match (op, left, right) {
+            // Integer arithmetic
+            (BinaryOp::Add, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (BinaryOp::Sub, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+            (BinaryOp::Mul, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+            (BinaryOp::Div, Value::Int(_), Value::Int(0)) => Err(RuntimeError::division_by_zero()),
+            (BinaryOp::Div, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+            (BinaryOp::Mod, Value::Int(_), Value::Int(0)) => Err(RuntimeError::division_by_zero()),
+            (BinaryOp::Mod, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
+
+            // String concatenation
+            (BinaryOp::Add, Value::Text(a), Value::Text(b)) => Ok(Value::Text(format!("{}{}", a, b))),
+
+            // Integer comparison
+            (BinaryOp::Eq, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a == b)),
+            (BinaryOp::Ne, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a != b)),
+            (BinaryOp::Lt, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+            (BinaryOp::Le, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+            (BinaryOp::Gt, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+            (BinaryOp::Ge, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+
+            // Boolean comparison
+            (BinaryOp::Eq, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a == b)),
+            (BinaryOp::Ne, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a != b)),
+
+            // String comparison
+            (BinaryOp::Eq, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a == b)),
+            (BinaryOp::Ne, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a != b)),
+
+            // Logical operations
+            (BinaryOp::And, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a && *b)),
+            (BinaryOp::Or, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
+
+            _ => Err(RuntimeError::type_mismatch(
+                &format!("compatible types for {:?}", op),
+                &format!("{:?} and {:?}", left, right),
+            )),
+        }
+    }
+
+    /// Evaluate a unary operation
+    fn eval_unary_op(&self, op: UnaryOp, val: &Value) -> Result<Value, RuntimeError> {
+        match (op, val) {
+            (UnaryOp::Neg, Value::Int(n)) => Ok(Value::Int(-n)),
+            (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+            _ => Err(RuntimeError::type_mismatch(
+                &format!("valid type for {:?}", op),
+                &format!("{:?}", val),
+            )),
+        }
+    }
+
+    /// Call a function value with arguments
+    fn call_function(&mut self, func: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        match func {
+            Value::Closure { params, body, env } => {
+                if params.len() != args.len() {
+                    return Err(RuntimeError::arity_mismatch(params.len(), args.len()));
+                }
+
+                // Create new environment with function's captured env as parent
+                let mut call_env = env.child();
+                for (param, arg) in params.iter().zip(args) {
+                    call_env.define(param.clone(), arg);
+                }
+
+                // Execute the body
+                let old_env = std::mem::replace(&mut self.env, call_env);
+                let result = self.eval_block(&body.block);
+                self.env = old_env;
+                result
+            }
+            _ => Err(RuntimeError::not_callable()),
+        }
+    }
+
+    /// Call a method on a receiver (for effects like Console.println)
+    fn call_method(&mut self, receiver: &Value, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        // Check if receiver is an effect identifier
+        match receiver {
+            Value::Text(name) if name == "Console.println" || name.starts_with("Console") => {
+                self.call_console_method(method, args)
+            }
+            Value::Text(name) if name.starts_with("Fs") => {
+                self.call_fs_method(method, args)
+            }
+            Value::Text(name) if name.starts_with("Net") => {
+                self.call_net_method(method, args)
+            }
+            Value::Text(name) if name.starts_with("Clock") => {
+                self.call_clock_method(method, args)
+            }
+            Value::Text(name) if name.starts_with("Rand") => {
+                self.call_rand_method(method, args)
+            }
+            Value::Text(name) if name.starts_with("Env") => {
+                self.call_env_method(method, args)
+            }
+            // For direct calls like Console.println()
+            _ => {
+                // Try to interpret receiver as effect name
+                if let Value::Text(ref s) = receiver {
+                    if s == "Console" {
+                        return self.call_console_method(method, args);
+                    }
+                }
+                // Check if this is an Option/Result method
+                self.call_value_method(receiver, method, args)
+            }
+        }
+    }
+
+    /// Call a Console effect method
+    fn call_console_method(&mut self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let console = self.capabilities.console.as_ref()
+            .ok_or_else(|| RuntimeError::capability_not_available("Console"))?;
+
+        match method {
+            "print" => {
+                if let Some(Value::Text(text)) = args.first() {
+                    console.print(text);
+                    Ok(Value::Unit)
+                } else if let Some(val) = args.first() {
+                    console.print(&format_value(val));
+                    Ok(Value::Unit)
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, args.len()))
+                }
+            }
+            "println" => {
+                if let Some(Value::Text(text)) = args.first() {
+                    console.println(text);
+                    Ok(Value::Unit)
+                } else if let Some(val) = args.first() {
+                    console.println(&format_value(val));
+                    Ok(Value::Unit)
+                } else {
+                    console.println("");
+                    Ok(Value::Unit)
+                }
+            }
+            "read_line" => {
+                let line = console.read_line();
+                match line {
+                    Some(s) => Ok(Value::Some(Box::new(Value::Text(s)))),
+                    None => Ok(Value::None),
+                }
+            }
+            _ => Err(RuntimeError::unknown_method("Console", method)),
+        }
+    }
+
+    /// Call a Fs effect method
+    fn call_fs_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let fs = self.capabilities.fs.as_ref()
+            .ok_or_else(|| RuntimeError::capability_not_available("Fs"))?;
+
+        match method {
+            "read" => {
+                if let Some(Value::Text(path)) = args.first() {
+                    match fs.read(path) {
+                        Ok(content) => Ok(Value::Ok(Box::new(Value::Text(content)))),
+                        Err(e) => Ok(Value::Err(Box::new(Value::Text(e)))),
+                    }
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            "write" => {
+                if args.len() == 2 {
+                    if let (Some(Value::Text(path)), Some(Value::Text(content))) = (args.get(0), args.get(1)) {
+                        match fs.write(path, content) {
+                            Ok(()) => Ok(Value::Ok(Box::new(Value::Unit))),
+                            Err(e) => Ok(Value::Err(Box::new(Value::Text(e)))),
+                        }
+                    } else {
+                        Err(RuntimeError::type_mismatch("(Text, Text)", "other"))
+                    }
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            "exists" => {
+                if let Some(Value::Text(path)) = args.first() {
+                    Ok(Value::Bool(fs.exists(path)))
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            _ => Err(RuntimeError::unknown_method("Fs", method)),
+        }
+    }
+
+    /// Call a Net effect method
+    fn call_net_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let net = self.capabilities.net.as_ref()
+            .ok_or_else(|| RuntimeError::capability_not_available("Net"))?;
+
+        match method {
+            "get" => {
+                if let Some(Value::Text(url)) = args.first() {
+                    match net.get(url) {
+                        Ok(val) => Ok(Value::Ok(Box::new(val))),
+                        Err(e) => Ok(Value::Err(Box::new(Value::Text(e)))),
+                    }
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            "post" => {
+                if args.len() == 2 {
+                    if let (Some(Value::Text(url)), Some(Value::Text(body))) = (args.get(0), args.get(1)) {
+                        match net.post(url, body) {
+                            Ok(val) => Ok(Value::Ok(Box::new(val))),
+                            Err(e) => Ok(Value::Err(Box::new(Value::Text(e)))),
+                        }
+                    } else {
+                        Err(RuntimeError::type_mismatch("(Text, Text)", "other"))
+                    }
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            _ => Err(RuntimeError::unknown_method("Net", method)),
+        }
+    }
+
+    /// Call a Clock effect method
+    fn call_clock_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let clock = self.capabilities.clock.as_ref()
+            .ok_or_else(|| RuntimeError::capability_not_available("Clock"))?;
+
+        match method {
+            "now" => Ok(Value::Int(clock.now())),
+            "sleep" => {
+                if let Some(Value::Int(millis)) = args.first() {
+                    clock.sleep(*millis as u64);
+                    Ok(Value::Unit)
+                } else {
+                    Err(RuntimeError::type_mismatch("Int", "other"))
+                }
+            }
+            _ => Err(RuntimeError::unknown_method("Clock", method)),
+        }
+    }
+
+    /// Call a Rand effect method
+    fn call_rand_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let rand = self.capabilities.rand.as_ref()
+            .ok_or_else(|| RuntimeError::capability_not_available("Rand"))?;
+
+        match method {
+            "int" => {
+                if args.len() == 2 {
+                    if let (Some(Value::Int(min)), Some(Value::Int(max))) = (args.get(0), args.get(1)) {
+                        Ok(Value::Int(rand.int(*min, *max)))
+                    } else {
+                        Err(RuntimeError::type_mismatch("(Int, Int)", "other"))
+                    }
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            "bool" => Ok(Value::Bool(rand.bool())),
+            "float" => {
+                // Return as int for now since we don't have floats
+                let f = rand.float();
+                Ok(Value::Int((f * 1000000.0) as i64))
+            }
+            _ => Err(RuntimeError::unknown_method("Rand", method)),
+        }
+    }
+
+    /// Call an Env effect method
+    fn call_env_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let env_cap = self.capabilities.env.as_ref()
+            .ok_or_else(|| RuntimeError::capability_not_available("Env"))?;
+
+        match method {
+            "get" => {
+                if let Some(Value::Text(name)) = args.first() {
+                    match env_cap.get(name) {
+                        Some(val) => Ok(Value::Some(Box::new(Value::Text(val)))),
+                        None => Ok(Value::None),
+                    }
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            "args" => {
+                let args_vec: Vec<Value> = env_cap.args().into_iter().map(Value::Text).collect();
+                // Return as a record with numbered fields for now
+                let mut record = HashMap::new();
+                for (i, arg) in args_vec.into_iter().enumerate() {
+                    record.insert(i.to_string(), arg);
+                }
+                Ok(Value::Record(record))
+            }
+            _ => Err(RuntimeError::unknown_method("Env", method)),
+        }
+    }
+
+    /// Call a method on a value (for Option/Result operations)
+    fn call_value_method(&self, receiver: &Value, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        match (receiver, method) {
+            // Option methods
+            (Value::Some(inner), "unwrap") => Ok((**inner).clone()),
+            (Value::None, "unwrap") => Err(RuntimeError::unwrap_none()),
+            (Value::Some(_), "is_some") => Ok(Value::Bool(true)),
+            (Value::None, "is_some") => Ok(Value::Bool(false)),
+            (Value::Some(_), "is_none") => Ok(Value::Bool(false)),
+            (Value::None, "is_none") => Ok(Value::Bool(true)),
+
+            // Result methods
+            (Value::Ok(inner), "unwrap") => Ok((**inner).clone()),
+            (Value::Err(e), "unwrap") => {
+                let msg = match &**e {
+                    Value::Text(s) => s.clone(),
+                    _ => "error".to_string(),
+                };
+                Err(RuntimeError::unwrap_err(&msg))
+            }
+            (Value::Ok(_), "is_ok") => Ok(Value::Bool(true)),
+            (Value::Err(_), "is_ok") => Ok(Value::Bool(false)),
+            (Value::Ok(_), "is_err") => Ok(Value::Bool(false)),
+            (Value::Err(_), "is_err") => Ok(Value::Bool(true)),
+
+            // unwrap_or for Option/Result
+            (Value::Some(inner), "unwrap_or") => Ok((**inner).clone()),
+            (Value::None, "unwrap_or") => {
+                args.into_iter().next().ok_or_else(|| RuntimeError::arity_mismatch(1, 0))
+            }
+            (Value::Ok(inner), "unwrap_or") => Ok((**inner).clone()),
+            (Value::Err(_), "unwrap_or") => {
+                args.into_iter().next().ok_or_else(|| RuntimeError::arity_mismatch(1, 0))
+            }
+
+            _ => Err(RuntimeError::unknown_method(&format!("{:?}", receiver), method)),
+        }
+    }
+}
+
+/// Match a pattern against a value, returning bindings if successful
+pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
+    match pattern {
+        // Wildcard matches anything
+        Pattern::Wildcard { .. } => Some(vec![]),
+
+        // Identifier binds the value
+        Pattern::Ident { name, .. } => Some(vec![(name.clone(), value.clone())]),
+
+        // Literal patterns
+        Pattern::IntLit { value: pat_val, .. } => {
+            if let Value::Int(v) = value {
+                if v == pat_val {
+                    return Some(vec![]);
+                }
+            }
+            None
+        }
+        Pattern::BoolLit { value: pat_val, .. } => {
+            if let Value::Bool(v) = value {
+                if v == pat_val {
+                    return Some(vec![]);
+                }
+            }
+            None
+        }
+        Pattern::TextLit { value: pat_val, .. } => {
+            if let Value::Text(v) = value {
+                if v == pat_val {
+                    return Some(vec![]);
+                }
+            }
+            None
+        }
+
+        // Record pattern
+        Pattern::Record { fields, .. } => {
+            if let Value::Record(val_fields) = value {
+                let mut bindings = Vec::new();
+                for (name, pat) in fields {
+                    if let Some(field_val) = val_fields.get(name) {
+                        if let Some(sub_bindings) = match_pattern(pat, field_val) {
+                            bindings.extend(sub_bindings);
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                Some(bindings)
+            } else {
+                None
+            }
+        }
+
+        // Variant pattern (for enums, Some/None, Ok/Err)
+        Pattern::Variant { name, data, .. } => {
+            match (name.as_str(), value) {
+                // Option::Some
+                ("Some", Value::Some(inner)) => {
+                    if let Some(data_pat) = data {
+                        match_pattern(data_pat, inner)
+                    } else {
+                        Some(vec![])
+                    }
+                }
+                // Option::None
+                ("None", Value::None) => {
+                    if data.is_none() {
+                        Some(vec![])
+                    } else {
+                        None
+                    }
+                }
+                // Result::Ok
+                ("Ok", Value::Ok(inner)) => {
+                    if let Some(data_pat) = data {
+                        match_pattern(data_pat, inner)
+                    } else {
+                        Some(vec![])
+                    }
+                }
+                // Result::Err
+                ("Err", Value::Err(inner)) => {
+                    if let Some(data_pat) = data {
+                        match_pattern(data_pat, inner)
+                    } else {
+                        Some(vec![])
+                    }
+                }
+                // Generic variant
+                (pat_name, Value::Variant { name: var_name, data: var_data }) => {
+                    if pat_name == var_name {
+                        match (data, var_data) {
+                            (None, None) => Some(vec![]),
+                            (Some(data_pat), Some(var_val)) => match_pattern(data_pat, var_val),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Format a value for display
+fn format_value(value: &Value) -> String {
+    match value {
+        Value::Unit => "()".to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Text(s) => s.clone(),
+        Value::Record(fields) => {
+            let field_strs: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, format_value(v)))
+                .collect();
+            format!("{{ {} }}", field_strs.join(", "))
+        }
+        Value::Variant { name, data } => {
+            if let Some(d) = data {
+                format!("{}({})", name, format_value(d))
+            } else {
+                name.clone()
+            }
+        }
+        Value::Closure { .. } => "<closure>".to_string(),
+        Value::Some(inner) => format!("Some({})", format_value(inner)),
+        Value::None => "None".to_string(),
+        Value::Ok(inner) => format!("Ok({})", format_value(inner)),
+        Value::Err(inner) => format!("Err({})", format_value(inner)),
+    }
 }
 
 impl Default for Interpreter {

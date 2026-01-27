@@ -1,0 +1,10 @@
+module std.core
+
+# Core type aliases and utilities
+type Unit = ()
+
+# Identity function
+fn identity[T](x: T) -> T { x }
+
+# Constant function
+fn const[T, U](x: T, _: U) -> T { x }

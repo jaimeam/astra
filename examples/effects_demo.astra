@@ -1,0 +1,21 @@
+module effects_demo
+
+# Function declares what effects it uses
+fn fetch_and_log(url: Text) -> Result[Text, Text]
+  effects(Net, Console)
+{
+  Console.println("Fetching: " + url)
+  let response = Net.get(url)?
+  Console.println("Got response")
+  Ok(response)
+}
+
+# Pure function - no effects keyword
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+# Test can mock effects for determinism
+test "pure function" {
+  assert add(2, 3) == 5
+}

@@ -1,0 +1,139 @@
+module test_types
+
+# Basic built-in types
+fn int_type(x: Int) -> Int {
+  x
+}
+
+fn bool_type(b: Bool) -> Bool {
+  b
+}
+
+fn text_type(s: Text) -> Text {
+  s
+}
+
+fn unit_type() -> Unit {
+  # Empty function returning unit
+}
+
+# Generic type arguments
+fn option_type(opt: Option[Int]) -> Option[Int] {
+  opt
+}
+
+fn result_type(res: Result[Int, Text]) -> Result[Int, Text] {
+  res
+}
+
+fn list_type(items: List[Int]) -> List[Int] {
+  items
+}
+
+# Nested generic types
+fn nested_generics(opt: Option[List[Int]]) -> Option[List[Int]] {
+  opt
+}
+
+fn multiple_nested(res: Result[Option[Int], List[Text]]) -> Result[Option[Int], List[Text]] {
+  res
+}
+
+# Record types (inline)
+fn inline_record(point: {x: Int, y: Int}) -> {x: Int, y: Int} {
+  point
+}
+
+fn complex_record(data: {name: Text, age: Int, active: Bool}) -> Text {
+  data.name
+}
+
+# Record with generic field
+fn record_generic(pair: {first: Option[Int], second: Option[Int]}) -> Int {
+  0
+}
+
+# Type alias definitions
+type Point = {x: Int, y: Int}
+
+fn type_alias_use(p: Point) -> Int {
+  p.x + p.y
+}
+
+# Generic type alias
+type Pair[A, B] = {first: A, second: B}
+
+fn generic_alias(pair: Pair[Int, Text]) -> Int {
+  pair.first
+}
+
+# Type with invariant
+type PositiveInt = Int
+  invariant self > 0
+
+fn positive_use(n: PositiveInt) -> Int {
+  n
+}
+
+type NonEmptyText = Text
+  invariant self.length() > 0
+
+fn non_empty_use(s: NonEmptyText) -> Text {
+  s
+}
+
+# Function types
+type IntTransform = (Int) -> Int
+
+fn apply_transform(f: (Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+fn multi_param_fn(f: (Int, Int) -> Int, a: Int, b: Int) -> Int {
+  f(a, b)
+}
+
+# Function type with effects
+type EffectfulFn = (Int) -> Int effects(Console)
+
+# Enum type definitions
+enum Direction = North | South | East | West
+
+fn direction_use(d: Direction) -> Text {
+  match d {
+    North => "north",
+    South => "south",
+    East => "east",
+    West => "west"
+  }
+}
+
+# Generic enum
+enum Maybe[T] = Just(value: T) | Nothing
+
+fn maybe_use(m: Maybe[Int]) -> Int {
+  match m {
+    Just(v) => v,
+    Nothing => 0
+  }
+}
+
+# Complex enum with multiple type parameters
+enum Either[L, R] = Left(value: L) | Right(value: R)
+
+fn either_use(e: Either[Int, Text]) -> Text {
+  match e {
+    Left(n) => "number",
+    Right(s) => s
+  }
+}
+
+# Recursive type via enum
+enum LinkedList[T] = Cons(head: T, tail: LinkedList[T]) | Nil
+
+fn list_length(list: LinkedList[Int]) -> Int {
+  match list {
+    Nil => 0,
+    Cons(h, t) => 1 + list_length(t)
+  }
+}

@@ -1,0 +1,135 @@
+module test_expressions
+
+# Basic arithmetic expressions
+fn arithmetic() -> Int {
+  1 + 2 * 3 - 4 / 2
+}
+
+# Arithmetic with modulo
+fn modulo(a: Int, b: Int) -> Int {
+  a % b + (a - b) * 2
+}
+
+# Boolean expressions with and/or
+fn logic(a: Bool, b: Bool) -> Bool {
+  a and b or not a
+}
+
+# Negation
+fn negation(x: Bool) -> Bool {
+  not x
+}
+
+# Comparison operators
+fn compare_lt(x: Int) -> Bool {
+  x < 10
+}
+
+fn compare_gt(x: Int) -> Bool {
+  x > 0
+}
+
+fn compare_lte(x: Int) -> Bool {
+  x <= 100
+}
+
+fn compare_gte(x: Int) -> Bool {
+  x >= 1
+}
+
+fn compare_eq(a: Int, b: Int) -> Bool {
+  a == b
+}
+
+fn compare_neq(a: Int, b: Int) -> Bool {
+  a != b
+}
+
+# Combined comparisons with logic
+fn in_range(x: Int) -> Bool {
+  x > 0 and x <= 100
+}
+
+# Parenthesized expressions
+fn parens(a: Int, b: Int) -> Int {
+  (a + b) * (a - b)
+}
+
+# Nested parentheses
+fn nested_parens(x: Int) -> Int {
+  ((x + 1) * 2) + ((x - 1) * 3)
+}
+
+# Method call on value
+fn method_example(text: Text) -> Int {
+  text.length()
+}
+
+# Chained method calls
+fn chain_methods(list: List[Int]) -> List[Int] {
+  list.filter(fn(x) { x > 0 }).map(fn(x) { x * 2 })
+}
+
+# Field access
+fn field_access(point: {x: Int, y: Int}) -> Int {
+  point.x + point.y
+}
+
+# Function call expression
+fn call_example() -> Int {
+  arithmetic()
+}
+
+# Block expressions
+fn block_expr() -> Int {
+  let a = 1
+  let b = 2
+  a + b
+}
+
+# Nested blocks
+fn nested_blocks() -> Int {
+  let outer = {
+    let inner = 5
+    inner * 2
+  }
+  outer + 1
+}
+
+# If expression
+fn if_simple(x: Int) -> Int {
+  if x > 0 { x } else { -x }
+}
+
+# If with else-if chain
+fn if_chain(x: Int) -> Text {
+  if x < 0 {
+    "negative"
+  } else if x == 0 {
+    "zero"
+  } else {
+    "positive"
+  }
+}
+
+# Literal expressions
+fn int_literal() -> Int {
+  42
+}
+
+fn bool_true() -> Bool {
+  true
+}
+
+fn bool_false() -> Bool {
+  false
+}
+
+fn text_literal() -> Text {
+  "hello world"
+}
+
+# Text with escape sequences
+fn text_escapes() -> Text {
+  "line1\nline2\ttabbed\"quoted\""
+}

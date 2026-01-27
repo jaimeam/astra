@@ -1,0 +1,146 @@
+module test_typecheck_basic
+
+# Basic type annotations work correctly
+fn annotated_int() -> Int {
+  42
+}
+
+fn annotated_bool() -> Bool {
+  true
+}
+
+fn annotated_text() -> Text {
+  "hello"
+}
+
+# Parameter types
+fn identity_int(x: Int) -> Int {
+  x
+}
+
+fn identity_bool(b: Bool) -> Bool {
+  b
+}
+
+fn identity_text(s: Text) -> Text {
+  s
+}
+
+# Multiple parameters with different types
+fn multi_params(a: Int, b: Bool, c: Text) -> Int {
+  if b { a } else { 0 }
+}
+
+# Arithmetic produces Int
+fn arith_returns_int(a: Int, b: Int) -> Int {
+  a + b * 2 - 1
+}
+
+# Comparisons produce Bool
+fn compare_returns_bool(a: Int, b: Int) -> Bool {
+  a < b
+}
+
+# Logical operations produce Bool
+fn logic_returns_bool(a: Bool, b: Bool) -> Bool {
+  a and b or not a
+}
+
+# If expression type matches branches
+fn if_branch_types(cond: Bool) -> Int {
+  if cond { 1 } else { 2 }
+}
+
+# Block expression type is last expression
+fn block_type() -> Int {
+  let x = 1
+  let y = 2
+  x + y
+}
+
+# Match expression type
+enum Color = Red | Green | Blue
+
+fn match_type(c: Color) -> Int {
+  match c {
+    Red => 1,
+    Green => 2,
+    Blue => 3
+  }
+}
+
+# Option type checking
+fn option_some() -> Option[Int] {
+  Some(42)
+}
+
+fn option_none() -> Option[Int] {
+  None
+}
+
+fn option_map(opt: Option[Int]) -> Option[Int] {
+  match opt {
+    Some(x) => Some(x * 2),
+    None => None
+  }
+}
+
+# Result type checking
+fn result_ok() -> Result[Int, Text] {
+  Ok(42)
+}
+
+fn result_err() -> Result[Int, Text] {
+  Err("error message")
+}
+
+fn result_map(res: Result[Int, Text]) -> Result[Int, Text] {
+  match res {
+    Ok(x) => Ok(x * 2),
+    Err(e) => Err(e)
+  }
+}
+
+# Record type checking
+fn record_create() -> {x: Int, y: Int} {
+  {x = 10, y = 20}
+}
+
+fn record_access(point: {x: Int, y: Int}) -> Int {
+  point.x
+}
+
+# Let binding types
+fn let_binding() -> Int {
+  let a: Int = 10
+  let b: Bool = true
+  let c: Text = "test"
+  a
+}
+
+# Function calls type check
+fn caller() -> Int {
+  identity_int(42)
+}
+
+fn nested_calls() -> Int {
+  identity_int(identity_int(42))
+}
+
+# Method calls type check
+fn method_call_types(text: Text) -> Int {
+  text.length()
+}
+
+# Unit type
+fn returns_unit() -> Unit {
+  let x = 1
+}
+
+fn unit_in_if(cond: Bool) -> Unit {
+  if cond {
+    let x = 1
+  } else {
+    let y = 2
+  }
+}

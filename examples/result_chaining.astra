@@ -1,0 +1,28 @@
+module result_chaining
+
+enum ParseError =
+  | EmptyInput
+  | InvalidFormat(reason: Text)
+
+fn parse_int(s: Text) -> Result[Int, ParseError] {
+  if s == "" then Err(EmptyInput)
+  else if s == "42" then Ok(42)
+  else Err(InvalidFormat(reason = "Not a valid number"))
+}
+
+fn double_parsed(s: Text) -> Result[Int, ParseError] {
+  let n = parse_int(s)?
+  Ok(n * 2)
+}
+
+test "success case" {
+  match double_parsed("42") {
+    Ok(n) => assert n == 84
+    Err(_) => assert false
+  }
+}
+
+test "error propagation" {
+  assert double_parsed("").is_err()
+  assert double_parsed("abc").is_err()
+}

@@ -1,0 +1,31 @@
+module std.option
+
+# Option is a built-in enum: Some(value) | None
+
+fn is_some[T](opt: Option[T]) -> Bool {
+  match opt {
+    Some(_) => true
+    None => false
+  }
+}
+
+fn is_none[T](opt: Option[T]) -> Bool {
+  match opt {
+    Some(_) => false
+    None => true
+  }
+}
+
+fn unwrap_or[T](opt: Option[T], default: T) -> T {
+  match opt {
+    Some(v) => v
+    None => default
+  }
+}
+
+fn map[T, U](opt: Option[T], f: (T) -> U) -> Option[U] {
+  match opt {
+    Some(v) => Some(f(v))
+    None => None
+  }
+}

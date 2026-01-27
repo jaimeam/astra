@@ -1,0 +1,206 @@
+module test_runtime_arithmetic
+
+# Basic addition
+fn add_simple() -> Int {
+  1 + 2
+}
+
+test "add simple" {
+  assert_eq(add_simple(), 3)
+}
+
+# Basic subtraction
+fn sub_simple() -> Int {
+  5 - 3
+}
+
+test "sub simple" {
+  assert_eq(sub_simple(), 2)
+}
+
+# Basic multiplication
+fn mul_simple() -> Int {
+  4 * 5
+}
+
+test "mul simple" {
+  assert_eq(mul_simple(), 20)
+}
+
+# Basic division
+fn div_simple() -> Int {
+  10 / 2
+}
+
+test "div simple" {
+  assert_eq(div_simple(), 5)
+}
+
+# Modulo
+fn mod_simple() -> Int {
+  7 % 3
+}
+
+test "mod simple" {
+  assert_eq(mod_simple(), 1)
+}
+
+# Operator precedence
+fn precedence_mul_add() -> Int {
+  2 + 3 * 4
+}
+
+test "precedence mul add" {
+  assert_eq(precedence_mul_add(), 14)
+}
+
+fn precedence_mul_sub() -> Int {
+  10 - 2 * 3
+}
+
+test "precedence mul sub" {
+  assert_eq(precedence_mul_sub(), 4)
+}
+
+fn precedence_div_add() -> Int {
+  1 + 10 / 2
+}
+
+test "precedence div add" {
+  assert_eq(precedence_div_add(), 6)
+}
+
+# Parentheses override precedence
+fn parens_override() -> Int {
+  (2 + 3) * 4
+}
+
+test "parens override" {
+  assert_eq(parens_override(), 20)
+}
+
+# Multiple operations
+fn multi_ops() -> Int {
+  1 + 2 * 3 - 4 / 2 + 5 % 3
+}
+
+test "multi ops" {
+  # 1 + 6 - 2 + 2 = 7
+  assert_eq(multi_ops(), 7)
+}
+
+# Nested parentheses
+fn nested_parens() -> Int {
+  ((1 + 2) * (3 + 4)) - 5
+}
+
+test "nested parens" {
+  # (3 * 7) - 5 = 21 - 5 = 16
+  assert_eq(nested_parens(), 16)
+}
+
+# Negative results
+fn negative_result() -> Int {
+  3 - 10
+}
+
+test "negative result" {
+  assert_eq(negative_result(), -7)
+}
+
+# Zero operations
+fn zero_add() -> Int {
+  0 + 5
+}
+
+fn zero_mul() -> Int {
+  0 * 100
+}
+
+test "zero operations" {
+  assert_eq(zero_add(), 5)
+  assert_eq(zero_mul(), 0)
+}
+
+# Large numbers
+fn large_numbers() -> Int {
+  1000000 * 1000
+}
+
+test "large numbers" {
+  assert_eq(large_numbers(), 1000000000)
+}
+
+# Integer division truncates
+fn int_div_truncate() -> Int {
+  7 / 2
+}
+
+test "int div truncates" {
+  assert_eq(int_div_truncate(), 3)
+}
+
+fn int_div_negative() -> Int {
+  -7 / 2
+}
+
+test "int div negative" {
+  assert_eq(int_div_negative(), -3)
+}
+
+# Modulo with various cases
+fn mod_larger_divisor() -> Int {
+  3 % 5
+}
+
+test "mod larger divisor" {
+  assert_eq(mod_larger_divisor(), 3)
+}
+
+fn mod_exact() -> Int {
+  10 % 5
+}
+
+test "mod exact" {
+  assert_eq(mod_exact(), 0)
+}
+
+# Chained additions
+fn chained_add() -> Int {
+  1 + 2 + 3 + 4 + 5
+}
+
+test "chained add" {
+  assert_eq(chained_add(), 15)
+}
+
+# Chained multiplications
+fn chained_mul() -> Int {
+  2 * 3 * 4
+}
+
+test "chained mul" {
+  assert_eq(chained_mul(), 24)
+}
+
+# Mixed with variables
+fn with_variables(a: Int, b: Int) -> Int {
+  a * a + b * b
+}
+
+test "with variables" {
+  assert_eq(with_variables(3, 4), 25)
+}
+
+# Expression as function argument
+fn double(x: Int) -> Int {
+  x * 2
+}
+
+fn expr_as_arg() -> Int {
+  double(3 + 4)
+}
+
+test "expr as arg" {
+  assert_eq(expr_as_arg(), 14)
+}

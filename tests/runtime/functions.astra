@@ -1,0 +1,222 @@
+module test_runtime_functions
+
+# Simple function call
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+test "simple call" {
+  assert_eq(add(2, 3), 5)
+}
+
+# No argument function
+fn constant() -> Int {
+  42
+}
+
+test "no args" {
+  assert_eq(constant(), 42)
+}
+
+# Single argument
+fn double(x: Int) -> Int {
+  x * 2
+}
+
+test "single arg" {
+  assert_eq(double(5), 10)
+}
+
+# Many arguments
+fn sum5(a: Int, b: Int, c: Int, d: Int, e: Int) -> Int {
+  a + b + c + d + e
+}
+
+test "many args" {
+  assert_eq(sum5(1, 2, 3, 4, 5), 15)
+}
+
+# Nested function calls
+fn nested_calls() -> Int {
+  add(double(2), double(3))
+}
+
+test "nested calls" {
+  assert_eq(nested_calls(), 10)
+}
+
+# Recursive function - factorial
+fn factorial(n: Int) -> Int {
+  if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+test "factorial 0" {
+  assert_eq(factorial(0), 1)
+}
+
+test "factorial 1" {
+  assert_eq(factorial(1), 1)
+}
+
+test "factorial 5" {
+  assert_eq(factorial(5), 120)
+}
+
+# Recursive function - fibonacci
+fn fib(n: Int) -> Int {
+  if n <= 1 {
+    n
+  } else {
+    fib(n - 1) + fib(n - 2)
+  }
+}
+
+test "fibonacci" {
+  assert_eq(fib(0), 0)
+  assert_eq(fib(1), 1)
+  assert_eq(fib(2), 1)
+  assert_eq(fib(10), 55)
+}
+
+# Mutually recursive functions
+fn is_even(n: Int) -> Bool {
+  if n == 0 { true } else { is_odd(n - 1) }
+}
+
+fn is_odd(n: Int) -> Bool {
+  if n == 0 { false } else { is_even(n - 1) }
+}
+
+test "mutual recursion" {
+  assert_eq(is_even(4), true)
+  assert_eq(is_even(5), false)
+  assert_eq(is_odd(4), false)
+  assert_eq(is_odd(5), true)
+}
+
+# Function returning function result
+fn apply_twice(f: (Int) -> Int, x: Int) -> Int {
+  f(f(x))
+}
+
+test "apply twice" {
+  assert_eq(apply_twice(double, 3), 12)
+}
+
+# Lambda/anonymous functions
+fn use_lambda() -> Int {
+  let square = fn(x: Int) { x * x }
+  square(5)
+}
+
+test "lambda" {
+  assert_eq(use_lambda(), 25)
+}
+
+# Lambda passed as argument
+fn apply(f: (Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+test "lambda as arg" {
+  assert_eq(apply(fn(x) { x + 10 }, 5), 15)
+}
+
+# Closure capturing variables
+fn make_adder(n: Int) -> (Int) -> Int {
+  fn(x: Int) { x + n }
+}
+
+test "closure" {
+  let add5 = make_adder(5)
+  assert_eq(add5(10), 15)
+}
+
+# Function with local helper
+fn sum_range(start: Int, end: Int) -> Int {
+  fn helper(current: Int, acc: Int) -> Int {
+    if current > end {
+      acc
+    } else {
+      helper(current + 1, acc + current)
+    }
+  }
+  helper(start, 0)
+}
+
+test "local helper" {
+  assert_eq(sum_range(1, 10), 55)
+}
+
+# Multiple return paths
+fn abs(x: Int) -> Int {
+  if x < 0 {
+    return -x
+  }
+  x
+}
+
+test "abs" {
+  assert_eq(abs(5), 5)
+  assert_eq(abs(-5), 5)
+  assert_eq(abs(0), 0)
+}
+
+# Early return
+fn find_first_positive(a: Int, b: Int, c: Int) -> Option[Int] {
+  if a > 0 { return Some(a) }
+  if b > 0 { return Some(b) }
+  if c > 0 { return Some(c) }
+  None
+}
+
+test "early return" {
+  assert_eq(find_first_positive(-1, 2, 3), Some(2))
+  assert_eq(find_first_positive(-1, -2, -3), None)
+}
+
+# Function with contracts
+fn safe_divide(a: Int, b: Int) -> Int
+  requires b != 0
+{
+  a / b
+}
+
+test "contracts" {
+  assert_eq(safe_divide(10, 2), 5)
+}
+
+# Generic function
+fn identity[T](x: T) -> T {
+  x
+}
+
+test "generic identity" {
+  assert_eq(identity(42), 42)
+  assert_eq(identity(true), true)
+  assert_eq(identity("hello"), "hello")
+}
+
+# Method-style calls
+fn method_chain(list: List[Int]) -> Int {
+  list.filter(fn(x) { x > 0 })
+      .map(fn(x) { x * 2 })
+      .fold(0, fn(acc, x) { acc + x })
+}
+
+test "method chain" {
+  assert_eq(method_chain([1, -2, 3, -4, 5]), 18)
+}
+
+# Partial application (if supported)
+fn multiply(a: Int, b: Int) -> Int {
+  a * b
+}
+
+fn triple(x: Int) -> Int {
+  multiply(3, x)
+}
+
+test "partial like" {
+  assert_eq(triple(4), 12)
+}

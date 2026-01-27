@@ -1,0 +1,237 @@
+module test_runtime_control_flow
+
+# Simple if-else
+fn simple_if(x: Int) -> Int {
+  if x > 0 { 1 } else { -1 }
+}
+
+test "simple if positive" {
+  assert_eq(simple_if(5), 1)
+}
+
+test "simple if negative" {
+  assert_eq(simple_if(-5), -1)
+}
+
+test "simple if zero" {
+  assert_eq(simple_if(0), -1)
+}
+
+# If without else (returns Unit)
+fn if_no_else(x: Int) -> Unit {
+  if x > 0 {
+    let y = x * 2
+  }
+}
+
+# Chained if-else-if
+fn classify(x: Int) -> Text {
+  if x < 0 {
+    "negative"
+  } else if x == 0 {
+    "zero"
+  } else {
+    "positive"
+  }
+}
+
+test "classify negative" {
+  assert_eq(classify(-10), "negative")
+}
+
+test "classify zero" {
+  assert_eq(classify(0), "zero")
+}
+
+test "classify positive" {
+  assert_eq(classify(10), "positive")
+}
+
+# Nested if
+fn nested_if(x: Int, y: Int) -> Text {
+  if x > 0 {
+    if y > 0 {
+      "both positive"
+    } else {
+      "x positive y not"
+    }
+  } else {
+    if y > 0 {
+      "x not positive y positive"
+    } else {
+      "both not positive"
+    }
+  }
+}
+
+test "nested if cases" {
+  assert_eq(nested_if(1, 1), "both positive")
+  assert_eq(nested_if(1, -1), "x positive y not")
+  assert_eq(nested_if(-1, 1), "x not positive y positive")
+  assert_eq(nested_if(-1, -1), "both not positive")
+}
+
+# If with complex condition
+fn complex_condition(a: Int, b: Int, c: Bool) -> Int {
+  if a > 0 and b > 0 or c {
+    1
+  } else {
+    0
+  }
+}
+
+test "complex condition" {
+  assert_eq(complex_condition(1, 1, false), 1)
+  assert_eq(complex_condition(-1, -1, true), 1)
+  assert_eq(complex_condition(-1, -1, false), 0)
+}
+
+# Simple match on enum
+enum Color = Red | Green | Blue
+
+fn color_to_int(c: Color) -> Int {
+  match c {
+    Red => 0,
+    Green => 1,
+    Blue => 2
+  }
+}
+
+test "match enum" {
+  assert_eq(color_to_int(Red), 0)
+  assert_eq(color_to_int(Green), 1)
+  assert_eq(color_to_int(Blue), 2)
+}
+
+# Match with data extraction
+enum Shape = Circle(radius: Int) | Rectangle(width: Int, height: Int)
+
+fn area(s: Shape) -> Int {
+  match s {
+    Circle(r) => r * r * 3,
+    Rectangle(w, h) => w * h
+  }
+}
+
+test "match with data" {
+  assert_eq(area(Circle(10)), 300)
+  assert_eq(area(Rectangle(4, 5)), 20)
+}
+
+# Match on Option
+fn unwrap_or_default(opt: Option[Int]) -> Int {
+  match opt {
+    Some(x) => x,
+    None => 0
+  }
+}
+
+test "match option some" {
+  assert_eq(unwrap_or_default(Some(42)), 42)
+}
+
+test "match option none" {
+  assert_eq(unwrap_or_default(None), 0)
+}
+
+# Match on Result
+fn result_to_int(res: Result[Int, Text]) -> Int {
+  match res {
+    Ok(n) => n,
+    Err(msg) => -1
+  }
+}
+
+test "match result ok" {
+  assert_eq(result_to_int(Ok(100)), 100)
+}
+
+test "match result err" {
+  assert_eq(result_to_int(Err("error")), -1)
+}
+
+# Match with literal patterns
+fn match_literal(x: Int) -> Text {
+  match x {
+    0 => "zero",
+    1 => "one",
+    2 => "two",
+    _ => "many"
+  }
+}
+
+test "match literal" {
+  assert_eq(match_literal(0), "zero")
+  assert_eq(match_literal(1), "one")
+  assert_eq(match_literal(2), "two")
+  assert_eq(match_literal(100), "many")
+}
+
+# Match with guards (if supported)
+fn match_range(x: Int) -> Text {
+  match x {
+    n if n < 0 => "negative",
+    0 => "zero",
+    n if n <= 10 => "small",
+    _ => "large"
+  }
+}
+
+# Nested match
+fn nested_match(opt: Option[Result[Int, Text]]) -> Int {
+  match opt {
+    Some(inner) => match inner {
+      Ok(n) => n,
+      Err(msg) => -1
+    },
+    None => 0
+  }
+}
+
+test "nested match" {
+  assert_eq(nested_match(Some(Ok(42))), 42)
+  assert_eq(nested_match(Some(Err("e"))), -1)
+  assert_eq(nested_match(None), 0)
+}
+
+# Match on record
+fn match_record(point: {x: Int, y: Int}) -> Int {
+  match point {
+    {x, y} => x + y
+  }
+}
+
+test "match record" {
+  assert_eq(match_record({x = 3, y = 4}), 7)
+}
+
+# Short-circuit evaluation
+fn short_circuit_and(a: Bool, b: Bool) -> Bool {
+  a and b
+}
+
+fn short_circuit_or(a: Bool, b: Bool) -> Bool {
+  a or b
+}
+
+test "short circuit" {
+  assert_eq(short_circuit_and(false, true), false)
+  assert_eq(short_circuit_or(true, false), true)
+}
+
+# Control flow in blocks
+fn block_control() -> Int {
+  let result = {
+    let x = 5
+    if x > 3 {
+      x * 2
+    } else {
+      x
+    }
+  }
+  result + 1
+}
+
+test "block control" {
+  assert_eq(block_control(), 11)
+}

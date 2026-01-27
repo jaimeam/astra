@@ -1,0 +1,38 @@
+module std.result
+
+# Result is a built-in enum: Ok(value) | Err(error)
+
+fn is_ok[T, E](res: Result[T, E]) -> Bool {
+  match res {
+    Ok(_) => true
+    Err(_) => false
+  }
+}
+
+fn is_err[T, E](res: Result[T, E]) -> Bool {
+  match res {
+    Ok(_) => false
+    Err(_) => true
+  }
+}
+
+fn unwrap_or[T, E](res: Result[T, E], default: T) -> T {
+  match res {
+    Ok(v) => v
+    Err(_) => default
+  }
+}
+
+fn map[T, U, E](res: Result[T, E], f: (T) -> U) -> Result[U, E] {
+  match res {
+    Ok(v) => Ok(f(v))
+    Err(e) => Err(e)
+  }
+}
+
+fn map_err[T, E, F](res: Result[T, E], f: (E) -> F) -> Result[T, F] {
+  match res {
+    Ok(v) => Ok(v)
+    Err(e) => Err(f(e))
+  }
+}

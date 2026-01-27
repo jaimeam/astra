@@ -1,0 +1,148 @@
+module test_typecheck_errors
+
+## This file contains intentional type errors for testing error detection
+
+# ERROR: Type mismatch in return - returning Text instead of Int
+fn return_wrong_type() -> Int {
+  "not an int"
+}
+
+# ERROR: Type mismatch in arithmetic - Bool in arithmetic
+fn bool_in_arithmetic(b: Bool) -> Int {
+  b + 1
+}
+
+# ERROR: Type mismatch in comparison - comparing Int to Text
+fn compare_different_types(x: Int, s: Text) -> Bool {
+  x == s
+}
+
+# ERROR: Type mismatch in logical expression - Int in boolean context
+fn int_in_logic(x: Int) -> Bool {
+  x and true
+}
+
+# ERROR: Wrong argument type in function call
+fn takes_int(x: Int) -> Int {
+  x
+}
+
+fn wrong_arg_type() -> Int {
+  takes_int("string")
+}
+
+# ERROR: Too few arguments
+fn takes_two(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn too_few_args() -> Int {
+  takes_two(1)
+}
+
+# ERROR: Too many arguments
+fn takes_one(x: Int) -> Int {
+  x
+}
+
+fn too_many_args() -> Int {
+  takes_one(1, 2)
+}
+
+# ERROR: Undefined variable
+fn undefined_var() -> Int {
+  undefined_name
+}
+
+# ERROR: Undefined function
+fn undefined_func() -> Int {
+  nonexistent_function()
+}
+
+# ERROR: Wrong type in let binding
+fn wrong_binding_type() -> Int {
+  let x: Int = "string"
+  x
+}
+
+# ERROR: If branches have different types
+fn mismatched_if_branches(cond: Bool) -> Int {
+  if cond { 1 } else { "two" }
+}
+
+# ERROR: Match arms have different types
+enum Color = Red | Blue
+
+fn mismatched_match_arms(c: Color) -> Int {
+  match c {
+    Red => 1,
+    Blue => "blue"
+  }
+}
+
+# ERROR: Non-exhaustive match
+fn non_exhaustive_match(c: Color) -> Int {
+  match c {
+    Red => 1
+  }
+}
+
+# ERROR: Field access on non-record type
+fn field_on_int(x: Int) -> Int {
+  x.field
+}
+
+# ERROR: Unknown field in record
+fn unknown_field(point: {x: Int, y: Int}) -> Int {
+  point.z
+}
+
+# ERROR: Option/Result without proper handling
+fn option_as_int(opt: Option[Int]) -> Int {
+  opt
+}
+
+# ERROR: Method on wrong type
+fn wrong_method(x: Int) -> Int {
+  x.length()
+}
+
+# ERROR: Wrong generic type argument
+fn wrong_generic() -> Option[Int] {
+  Some("string")
+}
+
+# ERROR: Record literal with wrong field types
+fn wrong_record_fields() -> {x: Int, y: Int} {
+  {x = "wrong", y = "types"}
+}
+
+# ERROR: Record literal with missing fields
+fn missing_record_fields() -> {x: Int, y: Int} {
+  {x = 1}
+}
+
+# ERROR: Enum variant with wrong argument type
+enum Status = Active(count: Int) | Inactive
+
+fn wrong_enum_arg() -> Status {
+  Active("not an int")
+}
+
+# ERROR: Using private function from another module (simulated)
+fn private_access() -> Int {
+  other_module.private_fn()
+}
+
+# ERROR: Assigning to immutable variable
+fn immutable_assign() -> Int {
+  let x = 1
+  x = 2
+  x
+}
+
+# ERROR: Mutating immutable record
+fn mutate_immutable(point: {x: Int, y: Int}) -> Int {
+  point.x = 10
+  point.x
+}
