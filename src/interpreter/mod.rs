@@ -14,6 +14,8 @@ pub struct RuntimeError {
     pub code: &'static str,
     /// Human-readable error message
     pub message: String,
+    /// Early return value (for ? operator propagation)
+    pub early_return: Option<Box<Value>>,
 }
 
 impl RuntimeError {
@@ -22,7 +24,27 @@ impl RuntimeError {
         Self {
             code,
             message: message.into(),
+            early_return: None,
         }
+    }
+
+    /// Create an early return (for ? operator)
+    pub fn early_return(value: Value) -> Self {
+        Self {
+            code: "EARLY_RETURN",
+            message: String::new(),
+            early_return: Some(Box::new(value)),
+        }
+    }
+
+    /// Check if this is an early return
+    pub fn is_early_return(&self) -> bool {
+        self.early_return.is_some()
+    }
+
+    /// Get the early return value
+    pub fn get_early_return(self) -> Option<Value> {
+        self.early_return.map(|v| *v)
     }
 
     /// Undefined variable error
@@ -340,7 +362,13 @@ impl Interpreter {
                     let old_env = std::mem::replace(&mut self.env, call_env);
                     let result = self.eval_block(&body.block);
                     self.env = old_env;
-                    return result;
+                    // Handle early returns from ? operator
+                    return match result {
+                        Err(e) if e.is_early_return() => {
+                            Ok(e.get_early_return().unwrap())
+                        }
+                        other => other,
+                    };
                 }
             }
         }
@@ -514,15 +542,9 @@ impl Interpreter {
                 let val = self.eval_expr(expr)?;
                 match val {
                     Value::Some(inner) => Ok(*inner),
-                    Value::None => Err(RuntimeError::unwrap_none()),
+                    Value::None => Err(RuntimeError::early_return(Value::None)),
                     Value::Ok(inner) => Ok(*inner),
-                    Value::Err(inner) => {
-                        let msg = match *inner {
-                            Value::Text(s) => s,
-                            _ => "error".to_string(),
-                        };
-                        Err(RuntimeError::unwrap_err(&msg))
-                    }
+                    Value::Err(inner) => Err(RuntimeError::early_return(Value::Err(inner))),
                     other => Ok(other), // Pass through non-Option/Result values
                 }
             }
@@ -716,7 +738,14 @@ impl Interpreter {
                 let old_env = std::mem::replace(&mut self.env, call_env);
                 let result = self.eval_block(&body.block);
                 self.env = old_env;
-                result
+
+                // Handle early returns from ? operator
+                match result {
+                    Err(e) if e.is_early_return() => {
+                        Ok(e.get_early_return().unwrap())
+                    }
+                    other => other,
+                }
             }
             _ => Err(RuntimeError::not_callable()),
         }
@@ -1491,5 +1520,80 @@ fn main() -> Text {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Text(s) if s == "oops"));
+    }
+
+    #[test]
+    fn test_try_operator_option_some() {
+        let source = r#"
+module example
+
+fn get() -> Option[Int] {
+  Some(21)
+}
+
+fn double() -> Option[Int] {
+  let x = get()?
+  Some(x * 2)
+}
+
+fn main() -> Int {
+  match double() {
+    Some(n) => n
+    None => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_try_operator_option_none() {
+        let source = r#"
+module example
+
+fn get() -> Option[Int] {
+  None
+}
+
+fn double() -> Option[Int] {
+  let x = get()?
+  Some(x * 2)
+}
+
+fn main() -> Int {
+  match double() {
+    Some(n) => n
+    None => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(0)));
+    }
+
+    #[test]
+    fn test_try_operator_result() {
+        let source = r#"
+module example
+
+fn parse(ok: Bool) -> Result[Int, Text] {
+  if ok { Ok(21) } else { Err("error") }
+}
+
+fn double(ok: Bool) -> Result[Int, Text] {
+  let x = parse(ok)?
+  Ok(x * 2)
+}
+
+fn main() -> Int {
+  match double(true) {
+    Ok(n) => n
+    Err(e) => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
     }
 }

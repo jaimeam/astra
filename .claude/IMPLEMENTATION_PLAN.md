@@ -12,7 +12,7 @@
 | **Machine-readable diagnostics with fix suggestions** | LLMs can parse errors and apply fixes automatically | 🟡 Has codes, needs suggestions |
 | **Explicit effects with enforcement** | LLMs see exactly what functions can do | 🔴 Not enforced yet |
 | **Deterministic testing** | Tests never flake, LLMs trust results | 🟡 Basic tests work |
-| **No null (Option/Result)** | Type system catches missing cases | 🔴 Runtime incomplete |
+| **No null (Option/Result)** | Type system catches missing cases | ✅ Runtime works |
 | **Exhaustive match checking** | Compiler catches forgotten cases | 🔴 Not implemented |
 | **One canonical format** | No style choices to make | 🔴 Placeholder only |
 
@@ -26,7 +26,7 @@
 
 | # | Task | Impact | Status | Est. Time |
 |---|------|--------|--------|-----------|
-| **C1** | Option/Result runtime (Some/None/Ok/Err) | Unlocks null-free programming | ⬜ Ready | 2h |
+| **C1** | Option/Result runtime (Some/None/Ok/Err) | Unlocks null-free programming | ✅ Done | 2h |
 | **C2** | Exhaustive match checking | Compiler catches missing cases | ⬜ Ready | 3h |
 | **C3** | Error suggestions in diagnostics | LLMs can auto-apply fixes | ⬜ Ready | 4h |
 | **C4** | Effect checking enforcement | Verify effects match declarations | ⬜ Ready | 4h |
@@ -246,6 +246,7 @@ cargo run -- check --json file.astra     # JSON diagnostics
 |------|-------|-----------------|
 | 2026-01-26 | setup | Initial project structure, parser, interpreter |
 | 2026-01-27 | claude | Test blocks, assert builtin, examples fixed, plan updated |
+| 2026-01-27 | claude | C1: Option/Result runtime (Some/None/Ok/Err) |
 
 ---
 
