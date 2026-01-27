@@ -1,21 +1,31 @@
 module effects_demo
 
-# Function declares what effects it uses
-fn fetch_and_log(url: Text) -> Result[Text, Text]
-  effects(Net, Console)
-{
-  Console.println("Fetching: " + url)
-  let response = Net.get(url)?
-  Console.println("Got response")
-  Ok(response)
-}
+# Demonstrates the effects system
 
-# Pure function - no effects keyword
+# Pure function - no effects keyword means no side effects
 fn add(a: Int, b: Int) -> Int {
   a + b
 }
 
-# Test can mock effects for determinism
-test "pure function" {
-  assert add(2, 3) == 5
+# Function that prints - must declare Console effect
+fn greet(name: Text) effects(Console) {
+  Console.println("Hello, " + name + "!")
+}
+
+# Functions can declare multiple effects
+fn log_sum(a: Int, b: Int) -> Int effects(Console) {
+  let result = add(a, b)
+  Console.println("Computing sum...")
+  result
+}
+
+fn main() effects(Console) {
+  # Pure function can be called anywhere
+  let sum = add(2, 3)
+
+  # Effectful functions propagate effects to callers
+  greet("Astra")
+
+  let logged_result = log_sum(10, 20)
+  Console.println("Done!")
 }
