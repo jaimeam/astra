@@ -36,7 +36,7 @@
 
 | # | Task | Impact | Status | Est. Time |
 |---|------|--------|--------|-----------|
-| **H1** | `?` operator for Option/Result | Clean error propagation | ⬜ Ready | 1h |
+| **H1** | `?` operator for Option/Result | Clean error propagation | ✅ Done | 1h |
 | **H2** | `requires`/`ensures` parsing | Contract syntax | ⬜ Ready | 2h |
 | **H3** | Contract runtime checks | Precondition/postcondition enforcement | ⬜ Ready | 2h |
 | **H4** | Basic formatter implementation | One canonical format | ⬜ Ready | 4h |
@@ -247,6 +247,7 @@ cargo run -- check --json file.astra     # JSON diagnostics
 | 2026-01-26 | setup | Initial project structure, parser, interpreter |
 | 2026-01-27 | claude | Test blocks, assert builtin, examples fixed, plan updated |
 | 2026-01-27 | claude | C1: Option/Result runtime (Some/None/Ok/Err) |
+| 2026-01-27 | claude | H1: ? operator for Option/Result |
 
 ---
 
