@@ -1,32 +1,34 @@
 module result_chaining
 
-# Demonstrates error handling pattern
-# (Full Result type support coming soon)
+# Demonstrates Result type for error handling
+# Operations that can fail return Result[T, E]
 
-fn parse_int(s: Text) -> Int {
-  # Returns -1 as error sentinel for demo purposes
-  if s == "42" {
-    42
+fn parse_int(s: Text) -> Result[Int, Text] {
+  if s == "" {
+    Err("empty input")
   } else {
-    if s == "100" {
-      100
+    if s == "42" {
+      Ok(42)
     } else {
-      -1
+      if s == "100" {
+        Ok(100)
+      } else {
+        Err("invalid format")
+      }
     }
   }
 }
 
 fn describe_parse(s: Text) -> Text {
-  let result = parse_int(s)
-  if result == -1 {
-    "Error: could not parse '" + s + "'"
-  } else {
-    "Success: parsed number"
+  match parse_int(s) {
+    Ok(n) => "Success: parsed number"
+    Err(msg) => "Error: " + msg
   }
 }
 
 fn main() effects(Console) {
   Console.println(describe_parse("42"))
   Console.println(describe_parse("100"))
+  Console.println(describe_parse(""))
   Console.println(describe_parse("abc"))
 }

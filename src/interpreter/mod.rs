@@ -364,6 +364,11 @@ impl Interpreter {
                     "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => {
                         Ok(Value::Text(name.clone()))
                     }
+                    // Option/Result constructors
+                    "None" => Ok(Value::None),
+                    "Some" => Ok(Value::Variant { name: "Some".to_string(), data: None }),
+                    "Ok" => Ok(Value::Variant { name: "Ok".to_string(), data: None }),
+                    "Err" => Ok(Value::Variant { name: "Err".to_string(), data: None }),
                     _ => self.env
                         .lookup(name)
                         .cloned()
@@ -421,6 +426,28 @@ impl Interpreter {
                                     format!("assertion failed: {:?} != {:?}", left, right),
                                 ))
                             };
+                        }
+                        // Option/Result constructors
+                        "Some" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return Ok(Value::Some(Box::new(val)));
+                        }
+                        "Ok" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return Ok(Value::Ok(Box::new(val)));
+                        }
+                        "Err" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return Ok(Value::Err(Box::new(val)));
                         }
                         _ => {}
                     }
@@ -1400,5 +1427,69 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(12)));
+    }
+
+    #[test]
+    fn test_option_some() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  match Some(42) {
+    Some(n) => n
+    None => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_option_none() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  match None {
+    Some(n) => n
+    None => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(0)));
+    }
+
+    #[test]
+    fn test_result_ok() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  match Ok(42) {
+    Ok(n) => n
+    Err(e) => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_result_err() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  match Err("oops") {
+    Ok(n) => "ok"
+    Err(e) => e
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(s) if s == "oops"));
     }
 }

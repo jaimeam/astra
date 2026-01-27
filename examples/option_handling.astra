@@ -1,26 +1,26 @@
 module option_example
 
-# Demonstrates conditional logic for handling nullable-like values
-# (Full Option type support coming soon)
+# Demonstrates Option type for handling values that may be absent
+# No null in Astra - use Option[T] instead!
 
-fn find_user_name(id: Int) -> Text {
+type User = { name: Text, age: Int }
+
+fn find_user(id: Int) -> Option[User] {
   if id == 1 {
-    "Alice"
+    Some({ name = "Alice", age = 30 })
   } else {
     if id == 2 {
-      "Bob"
+      Some({ name = "Bob", age = 25 })
     } else {
-      ""
+      None
     }
   }
 }
 
 fn greet_user(id: Int) -> Text {
-  let name = find_user_name(id)
-  if name == "" {
-    "User not found"
-  } else {
-    "Hello, " + name + "!"
+  match find_user(id) {
+    Some(user) => "Hello, " + user.name + "!"
+    None => "User not found"
   }
 }
 
