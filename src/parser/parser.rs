@@ -629,6 +629,17 @@ impl<'a> Parser<'a> {
                         field: name,
                     };
                 }
+            } else if self.check(TokenKind::QuestionElse) {
+                let start_span = self.expr_span(&expr);
+                self.advance();
+                let else_expr = self.parse_expr()?;
+                let end_span = self.expr_span(&else_expr);
+                expr = Expr::TryElse {
+                    id: NodeId::new(),
+                    span: start_span.merge(&end_span),
+                    expr: Box::new(expr),
+                    else_expr: Box::new(else_expr),
+                };
             } else if self.check(TokenKind::Question) {
                 let start_span = self.expr_span(&expr);
                 self.advance();
