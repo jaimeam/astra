@@ -3,223 +3,231 @@
 > This document tracks the implementation status and coordinates parallel development across agents.
 > **Last updated**: 2026-01-27
 
-## Git Workflow
+## Vision Alignment Check
 
-**Main Branch**: `claude/setup-astra-foundation-Ig1nr`
+**Astra's Core Value Proposition**: An LLM-native language with fast, deterministic feedback loops.
 
-See [BRANCHING.md](BRANCHING.md) for full branching strategy.
-
----
-
-## Current Status (v0.1)
-
-### Completed ✅
-- [x] Project structure and Cargo.toml
-- [x] Lexer with Logos
-- [x] Recursive descent parser with AST
-- [x] Basic formatter (canonical output)
-- [x] Diagnostics system with JSON output and stable error codes
-- [x] Effect system data structures
-- [x] Basic type checker scaffolding
-- [x] Interpreter with full expression evaluation
-- [x] CLI wired up (run, check, test commands work)
-- [x] Standard library modules defined
-- [x] CI workflow
-- [x] 32+ unit tests, 4 golden tests
-- [x] Parser supports expression statements
-- [x] **Test block parsing and execution** (NEW)
-- [x] **assert/assert_eq builtins** (NEW)
-- [x] **All 7 examples pass check and run** (NEW)
-
-### Current Capabilities
-```bash
-cargo run -- run examples/hello.astra     # ✅ Works
-cargo run -- check examples/*.astra       # ✅ Works
-cargo run -- test                         # ✅ Works (runs test blocks)
-cargo run -- fmt                          # 🟡 Placeholder
-```
+| Differentiator | Why It Matters for LLMs | Status |
+|----------------|------------------------|--------|
+| **Machine-readable diagnostics with fix suggestions** | LLMs can parse errors and apply fixes automatically | 🟡 Has codes, needs suggestions |
+| **Explicit effects with enforcement** | LLMs see exactly what functions can do | 🔴 Not enforced yet |
+| **Deterministic testing** | Tests never flake, LLMs trust results | 🟡 Basic tests work |
+| **No null (Option/Result)** | Type system catches missing cases | 🔴 Runtime incomplete |
+| **Exhaustive match checking** | Compiler catches forgotten cases | 🔴 Not implemented |
+| **One canonical format** | No style choices to make | 🔴 Placeholder only |
 
 ---
 
-## Incremental Task Queue
+## Priority Queue: LLM-Differentiating Features First
 
-> Pick the next unclaimed task from this list. Mark it [IN PROGRESS] with your session date.
-> Complete one task fully (with tests) before starting another.
+> **Rule**: Always prioritize features that make Astra better for LLMs than existing languages.
 
-### Tier 1: Quick Wins (< 1 hour each)
+### 🔴 Critical Path (Enables the "LLM → check → fix → repeat" loop)
 
-| # | Task | Status | Files | Notes |
-|---|------|--------|-------|-------|
-| 1.1 | Add `print` builtin (no newline) | ⬜ Ready | interpreter | Like println but no \n |
-| 1.2 | Add `len` builtin for Text | ⬜ Ready | interpreter | `len("hello")` → 5 |
-| 1.3 | Add string `+` concatenation | ✅ Done | interpreter | Already works |
-| 1.4 | Add `to_text` builtin for Int | ⬜ Ready | interpreter | `to_text(42)` → "42" |
-| 1.5 | Add negation `-x` for Int | ⬜ Ready | interpreter | Unary minus |
-| 1.6 | Support `else if` without braces | ⬜ Ready | parser | `if x {} else if y {}` |
+| # | Task | Impact | Status | Est. Time |
+|---|------|--------|--------|-----------|
+| **C1** | Option/Result runtime (Some/None/Ok/Err) | Unlocks null-free programming | ⬜ Ready | 2h |
+| **C2** | Exhaustive match checking | Compiler catches missing cases | ⬜ Ready | 3h |
+| **C3** | Error suggestions in diagnostics | LLMs can auto-apply fixes | ⬜ Ready | 4h |
+| **C4** | Effect checking enforcement | Verify effects match declarations | ⬜ Ready | 4h |
+| **C5** | Deterministic test effects (`using effects()`) | Inject mocked Clock/Rand | ⬜ Ready | 3h |
 
-### Tier 2: Small Features (1-2 hours each)
+### 🟡 High Value (Improves LLM experience significantly)
 
-| # | Task | Status | Files | Notes |
-|---|------|--------|-------|-------|
-| 2.1 | Option builtins (Some/None) | ⬜ Ready | interpreter | Runtime support for Option type |
-| 2.2 | Result builtins (Ok/Err) | ⬜ Ready | interpreter | Runtime support for Result type |
-| 2.3 | `?` operator for Option | ⬜ Ready | interpreter | Early return on None |
-| 2.4 | `?` operator for Result | ⬜ Ready | interpreter | Early return on Err |
-| 2.5 | Property test execution | ⬜ Ready | cli, interpreter | Run `property` blocks |
-| 2.6 | List literal syntax `[1, 2, 3]` | ⬜ Ready | parser, interpreter | Array creation |
-| 2.7 | Basic List operations | ⬜ Ready | interpreter | len, get, push |
+| # | Task | Impact | Status | Est. Time |
+|---|------|--------|--------|-----------|
+| **H1** | `?` operator for Option/Result | Clean error propagation | ⬜ Ready | 1h |
+| **H2** | `requires`/`ensures` parsing | Contract syntax | ⬜ Ready | 2h |
+| **H3** | Contract runtime checks | Precondition/postcondition enforcement | ⬜ Ready | 2h |
+| **H4** | Basic formatter implementation | One canonical format | ⬜ Ready | 4h |
+| **H5** | Type inference for let bindings | Less boilerplate | ⬜ Ready | 3h |
 
-### Tier 3: Medium Features (2-4 hours each)
+### 🟢 Nice to Have (General language features)
 
-| # | Task | Status | Files | Notes |
-|---|------|--------|-------|-------|
-| 3.1 | Type inference for let bindings | ⬜ Ready | typechecker | Infer types from expressions |
-| 3.2 | Function signature type checking | ⬜ Ready | typechecker | Validate arg/return types |
-| 3.3 | Effect checking in functions | ⬜ Ready | effects, typechecker | Verify declared vs used |
-| 3.4 | `requires` clause parsing | ⬜ Ready | parser | Precondition syntax |
-| 3.5 | `ensures` clause parsing | ⬜ Ready | parser | Postcondition syntax |
-| 3.6 | Contract runtime checks | ⬜ Ready | interpreter | Execute requires/ensures |
-| 3.7 | `if X then Y else Z` syntax | ⬜ Ready | parser | Alternative to braces |
-| 3.8 | Exhaustive match checking | ⬜ Ready | typechecker | Warn on non-exhaustive |
-
-### Tier 4: Larger Features (4+ hours each)
-
-| # | Task | Status | Files | Notes |
-|---|------|--------|-------|-------|
-| 4.1 | Full type inference algorithm | ⬜ Ready | typechecker | Hindley-Milner style |
-| 4.2 | Generic type instantiation | ⬜ Ready | typechecker | `Option[Int]` etc |
-| 4.3 | Module imports | ⬜ Ready | parser, interpreter | Cross-file imports |
-| 4.4 | Map[K,V] type | ⬜ Ready | stdlib, interpreter | Hash map support |
-| 4.5 | Property test generators | ⬜ Ready | testing | Int, Bool, Text generators |
-| 4.6 | Property test shrinking | ⬜ Ready | testing | Minimize failing cases |
+| # | Task | Impact | Status | Est. Time |
+|---|------|--------|--------|-----------|
+| **N1** | List literal syntax `[1, 2, 3]` | Convenience | ⬜ Ready | 2h |
+| **N2** | `print` builtin (no newline) | Convenience | ⬜ Ready | 30m |
+| **N3** | `len` and `to_text` builtins | Convenience | ⬜ Ready | 30m |
+| **N4** | `if X then Y else Z` syntax | Alternative syntax | ⬜ Ready | 1h |
 
 ---
 
-## Detailed Task Specifications
+## Detailed Specifications: Critical Path
 
-### Task 2.1: Option Builtins (Some/None)
+### C1: Option/Result Runtime (Some/None/Ok/Err)
 
-**Goal**: Make `Some(x)` and `None` work at runtime
+**Why it matters**: Null-free programming is useless if the runtime doesn't support Option/Result.
 
-**Current state**: Parser handles Option types, but interpreter doesn't recognize `Some`/`None`
+**Current state**: Parser/typechecker know about Option, but interpreter doesn't recognize `Some`/`None`/`Ok`/`Err`.
 
 **Implementation**:
-1. In `interpreter/mod.rs`, handle `Some` and `None` as special identifiers in `Expr::Ident`
-2. Handle `Some(x)` as a call that wraps value in `Value::Some`
-3. Add pattern matching for `Some(x)` and `None` patterns
+```rust
+// In interpreter/mod.rs, Expr::Ident handling:
+"Some" => return Ok(Value::BuiltinConstructor("Some")),
+"None" => return Ok(Value::None),
+"Ok" => return Ok(Value::BuiltinConstructor("Ok")),
+"Err" => return Ok(Value::BuiltinConstructor("Err")),
+
+// In Expr::Call handling:
+Value::BuiltinConstructor("Some") => {
+    if args.len() != 1 {
+        return Err(RuntimeError::arity_mismatch(1, args.len()));
+    }
+    Ok(Value::Some(Box::new(args.remove(0))))
+}
+```
 
 **Test case**:
 ```astra
-fn maybe_double(x: Int) -> Option[Int] {
-  if x > 0 { Some(x * 2) } else { None }
-}
-
-test "option works" {
-  match maybe_double(5) {
-    Some(n) => assert n == 10
+test "option construction" {
+  let x = Some(42)
+  let y = None
+  match x {
+    Some(n) => assert n == 42
     None => assert false
   }
 }
 ```
 
 **Files**: `src/interpreter/mod.rs`
-**Estimated time**: 1-2 hours
 
 ---
 
-### Task 2.3: `?` Operator for Option
+### C2: Exhaustive Match Checking
 
-**Goal**: `value?` returns early with `None` if value is `None`
+**Why it matters**: This is THE killer feature. The compiler catches forgotten cases.
 
-**Current state**: Parser has `Expr::Try`, interpreter doesn't handle it
+**Example error**:
+```
+error[E1004]: Non-exhaustive match: missing pattern `None`
+  --> app.astra:15:3
+   |
+15 |   match user {
+   |   ^^^^^
+   |
+   = suggestion: Add case `None => ???`
+```
 
 **Implementation**:
-1. In `eval_expr` for `Expr::Try`:
-   - Evaluate inner expression
-   - If `Value::None`, return `Value::None` from current function
-   - If `Value::Some(x)`, unwrap to `x`
-   - Otherwise, error
+1. In typechecker, collect all enum variants for the matched type
+2. Track which patterns are covered
+3. Report missing patterns with suggestions
 
-**Test case**:
-```astra
-fn get_doubled(opt: Option[Int]) -> Option[Int] {
-  let x = opt?
-  Some(x * 2)
-}
+**Files**: `src/typechecker/mod.rs`, `src/diagnostics/mod.rs`
 
-test "? propagates None" {
-  assert get_doubled(None) == None
-  assert get_doubled(Some(5)) == Some(10)
+---
+
+### C3: Error Suggestions in Diagnostics
+
+**Why it matters**: LLMs can parse suggestions and apply them automatically.
+
+**Current state**: Diagnostics have codes and messages, but no `suggestions` field.
+
+**Target format**:
+```json
+{
+  "code": "E1004",
+  "message": "Non-exhaustive match: missing pattern `None`",
+  "span": {"file": "app.astra", "line": 15, "col": 3},
+  "suggestions": [{
+    "title": "Add missing case",
+    "edits": [
+      {"line": 18, "col": 0, "insert": "    None => ???\n"}
+    ]
+  }]
 }
 ```
 
-**Files**: `src/interpreter/mod.rs`
-**Estimated time**: 1 hour
+**Implementation**:
+1. Add `suggestions: Vec<Suggestion>` to `Diagnostic`
+2. Add `Suggestion { title: String, edits: Vec<Edit> }`
+3. Add `Edit { line: u32, col: u32, insert: Option<String>, delete: Option<Span> }`
+4. Update error generators to include suggestions
+
+**Files**: `src/diagnostics/mod.rs`, all error sites
 
 ---
 
-### Task 3.4: `requires` Clause Parsing
+### C4: Effect Checking Enforcement
 
-**Goal**: Parse function preconditions
+**Why it matters**: Function signatures declare all capabilities—this must be enforced.
+
+**Example error**:
+```
+error[E2001]: Effect `Console` used but not declared
+  --> app.astra:5:3
+   |
+ 5 |   Console.println("hello")
+   |   ^^^^^^^^^^^^^^^
+   |
+   = function `greet` must declare `effects(Console)` or remove this call
+```
+
+**Implementation**:
+1. During type checking, track which effects are used in function body
+2. Compare against declared effects
+3. Report mismatches with suggestions
+
+**Files**: `src/effects/mod.rs`, `src/typechecker/mod.rs`
+
+---
+
+### C5: Deterministic Test Effects
+
+**Why it matters**: Tests that involve randomness or time can be made deterministic.
 
 **Syntax**:
 ```astra
-fn divide(a: Int, b: Int) -> Int
-  requires b != 0
-{
-  a / b
+test "random is reproducible" using effects(Rand = Rand.seeded(42)) {
+  let x = Rand.int(1, 100)
+  assert x == 67  # Always 67 with seed 42
+}
+
+test "time is fixed" using effects(Clock = Clock.fixed(1000)) {
+  let now = Clock.now()
+  assert now == 1000
 }
 ```
 
-**Current state**: Lexer has `Requires` token, AST has `requires: Vec<Expr>` in FnDef
-
 **Implementation**:
-1. In `parse_fn_def`, after return type and effects:
-   - While `check(TokenKind::Requires)`:
-     - Consume `requires`
-     - Parse expression
-     - Add to requires vec
+1. Parse `using effects(...)` clause in test blocks
+2. Create interpreter with injected capabilities
+3. Provide `Rand.seeded(seed)` and `Clock.fixed(time)` constructors
 
-**Test case**: Parse and verify AST contains requires clause
-
-**Files**: `src/parser/parser.rs`
-**Estimated time**: 1-2 hours
+**Files**: `src/parser/parser.rs`, `src/cli/mod.rs`, `src/interpreter/mod.rs`
 
 ---
 
-## Phase Roadmap
+## Current Status Snapshot
 
-```
-Phase 1: Core Language (Current)
-├── Interpreter ✅
-├── Test runner ✅
-├── Option/Result builtins ⬜ (Next priority)
-└── Basic type checking ⬜
+### Completed ✅
+- [x] Lexer with Logos
+- [x] Recursive descent parser with AST
+- [x] Diagnostics system with JSON output and stable error codes
+- [x] Effect system data structures
+- [x] Interpreter with full expression evaluation
+- [x] CLI (run, check, test commands)
+- [x] Test block parsing and execution
+- [x] assert/assert_eq builtins
+- [x] All 7 examples pass check and run
+- [x] 32+ unit tests, 4 golden tests
 
-Phase 2: Type Safety
-├── Full type inference ⬜
-├── Effect checking ⬜
-├── Contract checking ⬜
-└── Exhaustive matching ⬜
+### In Progress 🟡
+- [ ] Option/Result runtime (C1) - **Recommended next**
+- [ ] Basic type checking
 
-Phase 3: Standard Library
-├── List operations ⬜
-├── Map type ⬜
-├── Text utilities ⬜
-└── Module imports ⬜
-
-Phase 4: Tooling
-├── Property testing ⬜
-├── Better error messages ⬜
-├── IDE support (LSP) ⬜
-└── Package system ⬜
-```
+### Not Started 🔴
+- [ ] Exhaustive match checking (C2)
+- [ ] Error suggestions (C3)
+- [ ] Effect enforcement (C4)
+- [ ] Deterministic test effects (C5)
+- [ ] Formatter implementation
 
 ---
 
-## Quick Reference
+## Working Commands
 
-### Working Commands
 ```bash
 cargo build                              # Build
 cargo test                               # Run all tests (32+)
@@ -227,9 +235,45 @@ cargo run -- run examples/hello.astra    # Run a program
 cargo run -- check examples/             # Check syntax
 cargo run -- test                        # Run test blocks
 cargo run -- test "filter"               # Run matching tests
+cargo run -- check --json file.astra     # JSON diagnostics
 ```
 
-### File Locations
+---
+
+## Session Log
+
+| Date | Agent | Tasks Completed |
+|------|-------|-----------------|
+| 2026-01-26 | setup | Initial project structure, parser, interpreter |
+| 2026-01-27 | claude | Test blocks, assert builtin, examples fixed, plan updated |
+
+---
+
+## For Next Agent
+
+**Recommended task**: **C1 (Option/Result runtime)**
+
+This is the highest-impact task because:
+1. It's a prerequisite for C2 (exhaustive match checking)
+2. It enables the "no null" value proposition
+3. The examples are already written to use Option/Result
+4. It's self-contained (~2 hours)
+
+**After C1, prioritize**:
+- C2 (exhaustive matching) - the killer feature for LLMs
+- C3 (error suggestions) - enables automatic fix application
+
+**Avoid getting distracted by**:
+- Nice-to-have syntax features (N1-N4)
+- Performance optimizations
+- Advanced type system features
+
+The goal is to make Astra demonstrably better for LLMs than Python/JS/Rust as quickly as possible.
+
+---
+
+## Appendix: File Locations
+
 | Component | File | Tests |
 |-----------|------|-------|
 | Lexer | `src/parser/lexer.rs` | In-file |
@@ -240,46 +284,3 @@ cargo run -- test "filter"               # Run matching tests
 | Interpreter | `src/interpreter/mod.rs` | In-file (11+) |
 | CLI | `src/cli/mod.rs` | Integration |
 | Diagnostics | `src/diagnostics/mod.rs` | In-file |
-
-### Adding a New Builtin Function
-1. Edit `src/interpreter/mod.rs`
-2. Find `Expr::Call` handler (around line 357)
-3. Add case in the builtin check:
-```rust
-"my_func" => {
-    // implementation
-}
-```
-4. Add test in the `#[cfg(test)]` section
-
-### Adding New Syntax
-1. Add token to `src/parser/lexer.rs` if needed
-2. Add AST node to `src/parser/ast.rs` if needed
-3. Add parsing in `src/parser/parser.rs`
-4. Add golden test in `tests/syntax/`
-5. Add evaluation in `src/interpreter/mod.rs`
-
----
-
-## Session Log
-
-| Date | Agent | Tasks Completed |
-|------|-------|-----------------|
-| 2026-01-26 | setup | Initial project structure, parser, interpreter |
-| 2026-01-27 | claude | Test blocks, assert builtin, examples fixed |
-
----
-
-## Notes for Next Agent
-
-**Recommended next task**: Task 2.1 (Option builtins) - This unblocks many other features and the examples are already written to use Option.
-
-**Things that work well**:
-- The parser is solid and handles most syntax
-- The interpreter evaluates expressions correctly
-- Test runner works end-to-end
-
-**Known limitations**:
-- No module imports yet (single-file only)
-- Type checker is scaffolding only
-- Some examples simplified to avoid unimplemented features
