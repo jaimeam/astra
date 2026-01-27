@@ -140,6 +140,35 @@ pub struct ClosureBody {
     pub block: Block,
 }
 
+/// Compare two values for equality
+fn values_equal(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Unit, Value::Unit) => true,
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Text(a), Value::Text(b)) => a == b,
+        (Value::None, Value::None) => true,
+        (Value::Some(a), Value::Some(b)) => values_equal(a, b),
+        (Value::Ok(a), Value::Ok(b)) => values_equal(a, b),
+        (Value::Err(a), Value::Err(b)) => values_equal(a, b),
+        (Value::Variant { name: n1, data: d1 }, Value::Variant { name: n2, data: d2 }) => {
+            n1 == n2 && match (d1, d2) {
+                (None, None) => true,
+                (Some(a), Some(b)) => values_equal(a, b),
+                _ => false,
+            }
+        }
+        (Value::Record(r1), Value::Record(r2)) => {
+            r1.len() == r2.len() && r1.iter().all(|(k, v)| {
+                r2.get(k).map_or(false, |v2| values_equal(v, v2))
+            })
+        }
+        // Closures are never equal
+        (Value::Closure { .. }, Value::Closure { .. }) => false,
+        _ => false,
+    }
+}
+
 /// Execution environment
 #[derive(Debug, Clone, Default)]
 pub struct Environment {
@@ -278,13 +307,12 @@ impl Interpreter {
         }
     }
 
-    /// Evaluate a module
-    pub fn eval_module(&mut self, module: &Module) -> Result<Value, RuntimeError> {
+    /// Load a module's definitions without running main
+    pub fn load_module(&mut self, module: &Module) -> Result<(), RuntimeError> {
         // Collect all function definitions into the environment
         for item in &module.items {
             if let Item::FnDef(fn_def) = item {
                 let params: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
-                // Use a marker to indicate this needs the global env
                 let closure = Value::Closure {
                     params,
                     body: ClosureBody {
@@ -295,6 +323,13 @@ impl Interpreter {
                 self.env.define(fn_def.name.clone(), closure);
             }
         }
+        Ok(())
+    }
+
+    /// Evaluate a module
+    pub fn eval_module(&mut self, module: &Module) -> Result<Value, RuntimeError> {
+        // Load the module definitions
+        self.load_module(module)?;
 
         // Look for and run main function if it exists
         if let Some(main_fn) = self.env.lookup("main").cloned() {
@@ -355,6 +390,42 @@ impl Interpreter {
 
             // Function calls
             Expr::Call { func, args, .. } => {
+                // Check for builtin functions first
+                if let Expr::Ident { name, .. } = func.as_ref() {
+                    match name.as_str() {
+                        "assert" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let cond = self.eval_expr(&args[0])?;
+                            return match cond {
+                                Value::Bool(true) => Ok(Value::Unit),
+                                Value::Bool(false) => Err(RuntimeError::new(
+                                    "E4020",
+                                    "assertion failed",
+                                )),
+                                _ => Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond))),
+                            };
+                        }
+                        "assert_eq" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let left = self.eval_expr(&args[0])?;
+                            let right = self.eval_expr(&args[1])?;
+                            return if values_equal(&left, &right) {
+                                Ok(Value::Unit)
+                            } else {
+                                Err(RuntimeError::new(
+                                    "E4021",
+                                    format!("assertion failed: {:?} != {:?}", left, right),
+                                ))
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+
                 let func_val = self.eval_expr(func)?;
                 let mut arg_vals = Vec::new();
                 for arg in args {

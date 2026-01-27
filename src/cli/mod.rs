@@ -185,19 +185,116 @@ fn walkdir(path: &PathBuf) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn run_test(
     filter: Option<&str>,
-    seed: Option<u64>,
+    _seed: Option<u64>,
     _json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(f) = filter {
-        println!("Running tests matching '{}'...", f);
-    } else {
-        println!("Running all tests...");
+    use crate::parser::ast::Item;
+
+    // Find all .astra files in current directory
+    let current_dir = std::env::current_dir()?;
+    let files = walkdir(&current_dir)?;
+    let astra_files: Vec<_> = files
+        .into_iter()
+        .filter(|p| p.extension().map_or(false, |ext| ext == "astra"))
+        .collect();
+
+    let mut total_tests = 0;
+    let mut passed = 0;
+    let mut failed = 0;
+
+    for path in astra_files {
+        let source = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+
+        let source_file = SourceFile::new(path.clone(), source.clone());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = AstraParser::new(lexer, source_file.clone());
+
+        let module = match parser.parse_module() {
+            Ok(m) => m,
+            Err(e) => {
+                let bag = DiagnosticBag::from(e);
+                eprintln!("Parse error in {:?}:\n{}", path, bag.format_text(&source));
+                continue;
+            }
+        };
+
+        // Find and run all test blocks
+        for item in &module.items {
+            if let Item::Test(test) = item {
+                // Apply filter if specified
+                if let Some(f) = filter {
+                    if !test.name.contains(f) {
+                        continue;
+                    }
+                }
+
+                total_tests += 1;
+
+                // Run the test
+                let console = Box::new(TestConsole::new());
+                let capabilities = Capabilities {
+                    console: Some(console),
+                    ..Default::default()
+                };
+
+                let mut interpreter = Interpreter::with_capabilities(capabilities);
+                // Load the module functions first
+                if let Err(e) = interpreter.load_module(&module) {
+                    eprintln!("  FAIL: {} - {}", test.name, e);
+                    failed += 1;
+                    continue;
+                }
+
+                // Run the test block
+                match interpreter.eval_block(&test.body) {
+                    Ok(_) => {
+                        println!("  PASS: {}", test.name);
+                        passed += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("  FAIL: {} - {}", test.name, e);
+                        failed += 1;
+                    }
+                }
+            }
+        }
     }
-    if let Some(s) = seed {
-        println!("Using seed: {}", s);
+
+    println!("\n{} tests: {} passed, {} failed", total_tests, passed, failed);
+
+    if failed > 0 {
+        std::process::exit(1);
     }
-    // TODO: Implement test runner
+
     Ok(())
+}
+
+/// Test console that captures output
+struct TestConsole {
+    output: std::cell::RefCell<Vec<String>>,
+}
+
+impl TestConsole {
+    fn new() -> Self {
+        Self {
+            output: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl ConsoleCapability for TestConsole {
+    fn print(&self, text: &str) {
+        self.output.borrow_mut().push(text.to_string());
+    }
+
+    fn println(&self, text: &str) {
+        self.output.borrow_mut().push(format!("{}\n", text));
+    }
+
+    fn read_line(&self) -> Option<String> {
+        None
+    }
 }
 
 fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {

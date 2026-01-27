@@ -709,6 +709,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
+            TokenKind::Assert => self.parse_assert_expr(),
             TokenKind::Hole => {
                 self.advance();
                 Ok(Expr::Hole {
@@ -782,6 +783,25 @@ impl<'a> Parser<'a> {
             cond,
             then_branch,
             else_branch,
+        })
+    }
+
+    fn parse_assert_expr(&mut self) -> Result<Expr, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::Assert)?;
+        let arg = self.parse_expr()?;
+        let end_span = arg.span().clone();
+
+        // Parse assert as a call to the builtin assert function
+        Ok(Expr::Call {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            func: Box::new(Expr::Ident {
+                id: NodeId::new(),
+                span: start_span.clone(),
+                name: "assert".to_string(),
+            }),
+            args: vec![arg],
         })
     }
 
