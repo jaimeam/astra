@@ -2,9 +2,9 @@
 //!
 //! Implements type checking, inference, and exhaustiveness checking.
 
-use crate::diagnostics::{Diagnostic, DiagnosticBag, Edit, Span, Suggestion};
+use crate::diagnostics::{Diagnostic, DiagnosticBag, Edit, Note, Span, Suggestion};
 use crate::parser::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Built-in types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +131,12 @@ pub struct TypeChecker {
     /// Next type variable ID (used in fresh_type_var)
     #[allow(dead_code)]
     next_var: u32,
+    /// Effects declared on the current function being checked
+    declared_effects: HashSet<String>,
+    /// Effects used in the current function body
+    used_effects: HashSet<String>,
+    /// Name of the current function being checked (for error messages)
+    current_function: Option<String>,
 }
 
 impl TypeChecker {
@@ -140,6 +146,9 @@ impl TypeChecker {
             env: TypeEnv::new(),
             diagnostics: DiagnosticBag::new(),
             next_var: 0,
+            declared_effects: HashSet::new(),
+            used_effects: HashSet::new(),
+            current_function: None,
         }
     }
 
@@ -192,6 +201,11 @@ impl TypeChecker {
     fn check_fndef(&mut self, def: &FnDef) {
         let mut fn_env = self.env.child();
 
+        // Set up effect tracking for this function
+        self.current_function = Some(def.name.clone());
+        self.declared_effects = def.effects.iter().cloned().collect();
+        self.used_effects.clear();
+
         // Add parameters to environment
         for param in &def.params {
             let ty = self.resolve_type_expr(&param.ty);
@@ -200,6 +214,14 @@ impl TypeChecker {
 
         // Check body
         let _body_type = self.check_block(&def.body, &mut fn_env);
+
+        // Check effect violations: used effects that weren't declared
+        self.check_effect_violations(&def.span);
+
+        // Clean up
+        self.current_function = None;
+        self.declared_effects.clear();
+        self.used_effects.clear();
 
         // TODO: check return type matches
     }
@@ -369,6 +391,31 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                span,
+                ..
+            } => {
+                // Check if receiver is an effect (Console, Fs, Net, etc.)
+                if let Expr::Ident { name, .. } = receiver.as_ref() {
+                    if Self::is_effect_name(name) {
+                        self.record_effect_usage(name, span);
+                    }
+                }
+
+                // Type check receiver and arguments
+                self.check_expr(receiver, env);
+                for arg in args {
+                    self.check_expr(arg, env);
+                }
+
+                // Return type depends on the method - for now, return Unknown
+                // TODO: implement proper method return type inference
+                let _ = method; // suppress unused warning
+                Type::Unknown
+            }
             Expr::Record { fields, .. } => {
                 let field_types: Vec<_> = fields
                     .iter()
@@ -449,6 +496,64 @@ impl TypeChecker {
         }
         actual == expected
     }
+
+    // ==================== Effect Checking ====================
+
+    /// Check if a name is a built-in effect
+    fn is_effect_name(name: &str) -> bool {
+        matches!(name, "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env")
+    }
+
+    /// Record that an effect is being used in the current function
+    fn record_effect_usage(&mut self, effect_name: &str, _span: &Span) {
+        if self.current_function.is_some() {
+            self.used_effects.insert(effect_name.to_string());
+        }
+    }
+
+    /// Check for effect violations after checking a function body
+    fn check_effect_violations(&mut self, fn_span: &Span) {
+        // Find effects that were used but not declared
+        let violations: Vec<String> = self
+            .used_effects
+            .iter()
+            .filter(|effect| !self.declared_effects.contains(*effect))
+            .cloned()
+            .collect();
+
+        if violations.is_empty() {
+            return;
+        }
+
+        let fn_name = self.current_function.clone().unwrap_or_default();
+
+        for effect in &violations {
+            let suggestion_text = if self.declared_effects.is_empty() {
+                format!("effects({})", effect)
+            } else {
+                let mut all_effects: Vec<_> = self.declared_effects.iter().cloned().collect();
+                all_effects.push(effect.clone());
+                all_effects.sort();
+                format!("effects({})", all_effects.join(", "))
+            };
+
+            self.diagnostics.push(
+                Diagnostic::error(crate::diagnostics::error_codes::effects::EFFECT_NOT_DECLARED)
+                    .message(format!(
+                        "Effect `{}` used but not declared in function `{}`",
+                        effect, fn_name
+                    ))
+                    .span(fn_span.clone())
+                    .note(Note::new(format!(
+                        "Function `{}` must declare `{}` or remove the effectful call",
+                        fn_name, suggestion_text
+                    )))
+                    .build(),
+            );
+        }
+    }
+
+    // ==================== Exhaustiveness Checking ====================
 
     /// Check if a match expression is exhaustive
     fn check_match_exhaustiveness(

@@ -10,7 +10,7 @@
 | Differentiator | Why It Matters for LLMs | Status |
 |----------------|------------------------|--------|
 | **Machine-readable diagnostics with fix suggestions** | LLMs can parse errors and apply fixes automatically | 🟡 Has codes, needs suggestions |
-| **Explicit effects with enforcement** | LLMs see exactly what functions can do | 🔴 Not enforced yet |
+| **Explicit effects with enforcement** | LLMs see exactly what functions can do | ✅ Enforced for method calls |
 | **Deterministic testing** | Tests never flake, LLMs trust results | 🟡 Basic tests work |
 | **No null (Option/Result)** | Type system catches missing cases | ✅ Runtime works |
 | **Exhaustive match checking** | Compiler catches forgotten cases | ✅ Option/Result/Bool done |
@@ -29,7 +29,7 @@
 | **C1** | Option/Result runtime (Some/None/Ok/Err) | Unlocks null-free programming | ✅ Done | 2h |
 | **C2** | Exhaustive match checking | Compiler catches missing cases | ✅ Done | 3h |
 | **C3** | Error suggestions in diagnostics | LLMs can auto-apply fixes | ⬜ Ready | 4h |
-| **C4** | Effect checking enforcement | Verify effects match declarations | ⬜ Ready | 4h |
+| **C4** | Effect checking enforcement | Verify effects match declarations | ✅ Done | 4h |
 | **C5** | Deterministic test effects (`using effects()`) | Inject mocked Clock/Rand | ⬜ Ready | 3h |
 
 ### 🟡 High Value (Improves LLM experience significantly)
@@ -216,6 +216,7 @@ test "time is fixed" using effects(Clock = Clock.fixed(1000)) {
 - [x] ? operator for Option/Result (H1)
 - [x] Exhaustive match checking (C2) for Option/Result/Bool
 - [x] Type checker integration with `check` command
+- [x] Effect enforcement (C4) - detects undeclared effects in method calls
 
 ### In Progress 🟡
 - [ ] Error suggestions for more error types (C3 partial - exhaustive match has suggestions)
@@ -223,7 +224,6 @@ test "time is fixed" using effects(Clock = Clock.fixed(1000)) {
 
 ### Not Started 🔴
 - [ ] Error suggestions for all error types (C3)
-- [ ] Effect enforcement (C4)
 - [ ] Deterministic test effects (C5)
 - [ ] Formatter implementation
 
@@ -253,33 +253,34 @@ cargo run -- check --json file.astra     # JSON diagnostics
 | 2026-01-27 | claude | H1: ? operator for Option/Result |
 | 2026-01-28 | claude | C2: Exhaustive match checking for Option/Result/Bool |
 | 2026-01-28 | claude | Type checker now runs during `check` command |
+| 2026-01-28 | claude | C4: Effect checking enforcement for method calls |
 
 ---
 
 ## For Next Agent
 
-**Recommended task**: **C3 (Error suggestions in diagnostics)** or **C4 (Effect checking enforcement)**
+**Recommended task**: **C5 (Deterministic test effects)** or **C3 (Error suggestions)**
 
-C3 is recommended because:
-1. The diagnostics system already has `Suggestion` and `Edit` types
-2. Exhaustive match checking already adds suggestions (partial C3)
-3. Extending suggestions to other error types will make Astra more LLM-friendly
-4. It's incremental work on existing infrastructure
+C5 is recommended because:
+1. Tests with `using effects(...)` allow deterministic testing of effectful code
+2. This is unique to Astra - tests never flake
+3. Enables testing random/time-dependent code reliably
 
-C4 is recommended because:
-1. Effect declarations exist but aren't enforced
-2. This is a key differentiator for LLMs - knowing exactly what a function can do
-3. The effects module already has the data structures
+C3 is less urgent because:
+1. LLMs are already good at parsing human-readable errors (see discussion in session)
+2. The JSON format helps tooling more than LLMs directly
+3. Exhaustive match checking already has suggestions as an example
 
 **Recent changes (2026-01-28)**:
 - C2 (exhaustive match) is now complete for Option/Result/Bool
 - Type checker is now integrated into `check` command
-- JSON output includes suggestions with edits
+- C4 (effect enforcement) detects undeclared effects in method calls (e.g., Console.println)
 
 **Files modified**:
-- `src/typechecker/mod.rs` - added exhaustiveness checking
+- `src/typechecker/mod.rs` - exhaustiveness checking + effect enforcement
 - `src/cli/mod.rs` - integrated type checker into check command
 - `tests/typecheck/exhaustive_match.astra` - test file for exhaustiveness
+- `tests/effects/enforcement.astra` - test file for effect enforcement
 
 **Avoid getting distracted by**:
 - Nice-to-have syntax features (N1-N4)

@@ -1,0 +1,23 @@
+module test_effect_enforcement
+
+## Tests for effect checking enforcement
+
+# ERROR E2001: Effect `Console` used but not declared
+fn undeclared_console() -> Unit {
+  Console.println("hello")
+}
+
+# ERROR E2001: Effect `Console` used when only Fs is declared
+fn wrong_effect_declared() -> Unit effects(Fs) {
+  Console.println("oops")
+}
+
+# OK: Console effect is properly declared
+fn declared_console() -> Unit effects(Console) {
+  Console.println("hello")
+}
+
+# OK: Pure function with no effects
+fn pure_function(x: Int) -> Int {
+  x + 1
+}
