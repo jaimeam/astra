@@ -1,7 +1,7 @@
 # Astra Implementation Plan
 
 > This document tracks the implementation status and coordinates parallel development across agents.
-> **Last updated**: 2026-01-27
+> **Last updated**: 2026-01-28
 
 ## Vision Alignment Check
 
@@ -13,7 +13,7 @@
 | **Explicit effects with enforcement** | LLMs see exactly what functions can do | 🔴 Not enforced yet |
 | **Deterministic testing** | Tests never flake, LLMs trust results | 🟡 Basic tests work |
 | **No null (Option/Result)** | Type system catches missing cases | ✅ Runtime works |
-| **Exhaustive match checking** | Compiler catches forgotten cases | 🔴 Not implemented |
+| **Exhaustive match checking** | Compiler catches forgotten cases | ✅ Option/Result/Bool done |
 | **One canonical format** | No style choices to make | 🔴 Placeholder only |
 
 ---
@@ -27,7 +27,7 @@
 | # | Task | Impact | Status | Est. Time |
 |---|------|--------|--------|-----------|
 | **C1** | Option/Result runtime (Some/None/Ok/Err) | Unlocks null-free programming | ✅ Done | 2h |
-| **C2** | Exhaustive match checking | Compiler catches missing cases | ⬜ Ready | 3h |
+| **C2** | Exhaustive match checking | Compiler catches missing cases | ✅ Done | 3h |
 | **C3** | Error suggestions in diagnostics | LLMs can auto-apply fixes | ⬜ Ready | 4h |
 | **C4** | Effect checking enforcement | Verify effects match declarations | ⬜ Ready | 4h |
 | **C5** | Deterministic test effects (`using effects()`) | Inject mocked Clock/Rand | ⬜ Ready | 3h |
@@ -211,15 +211,18 @@ test "time is fixed" using effects(Clock = Clock.fixed(1000)) {
 - [x] Test block parsing and execution
 - [x] assert/assert_eq builtins
 - [x] All 7 examples pass check and run
-- [x] 32+ unit tests, 4 golden tests
+- [x] 48 unit tests, 4 golden tests
+- [x] Option/Result runtime (C1) - Some/None/Ok/Err constructors
+- [x] ? operator for Option/Result (H1)
+- [x] Exhaustive match checking (C2) for Option/Result/Bool
+- [x] Type checker integration with `check` command
 
 ### In Progress 🟡
-- [ ] Option/Result runtime (C1) - **Recommended next**
-- [ ] Basic type checking
+- [ ] Error suggestions for more error types (C3 partial - exhaustive match has suggestions)
+- [ ] Basic type inference
 
 ### Not Started 🔴
-- [ ] Exhaustive match checking (C2)
-- [ ] Error suggestions (C3)
+- [ ] Error suggestions for all error types (C3)
 - [ ] Effect enforcement (C4)
 - [ ] Deterministic test effects (C5)
 - [ ] Formatter implementation
@@ -248,22 +251,35 @@ cargo run -- check --json file.astra     # JSON diagnostics
 | 2026-01-27 | claude | Test blocks, assert builtin, examples fixed, plan updated |
 | 2026-01-27 | claude | C1: Option/Result runtime (Some/None/Ok/Err) |
 | 2026-01-27 | claude | H1: ? operator for Option/Result |
+| 2026-01-28 | claude | C2: Exhaustive match checking for Option/Result/Bool |
+| 2026-01-28 | claude | Type checker now runs during `check` command |
 
 ---
 
 ## For Next Agent
 
-**Recommended task**: **C1 (Option/Result runtime)**
+**Recommended task**: **C3 (Error suggestions in diagnostics)** or **C4 (Effect checking enforcement)**
 
-This is the highest-impact task because:
-1. It's a prerequisite for C2 (exhaustive match checking)
-2. It enables the "no null" value proposition
-3. The examples are already written to use Option/Result
-4. It's self-contained (~2 hours)
+C3 is recommended because:
+1. The diagnostics system already has `Suggestion` and `Edit` types
+2. Exhaustive match checking already adds suggestions (partial C3)
+3. Extending suggestions to other error types will make Astra more LLM-friendly
+4. It's incremental work on existing infrastructure
 
-**After C1, prioritize**:
-- C2 (exhaustive matching) - the killer feature for LLMs
-- C3 (error suggestions) - enables automatic fix application
+C4 is recommended because:
+1. Effect declarations exist but aren't enforced
+2. This is a key differentiator for LLMs - knowing exactly what a function can do
+3. The effects module already has the data structures
+
+**Recent changes (2026-01-28)**:
+- C2 (exhaustive match) is now complete for Option/Result/Bool
+- Type checker is now integrated into `check` command
+- JSON output includes suggestions with edits
+
+**Files modified**:
+- `src/typechecker/mod.rs` - added exhaustiveness checking
+- `src/cli/mod.rs` - integrated type checker into check command
+- `tests/typecheck/exhaustive_match.astra` - test file for exhaustiveness
 
 **Avoid getting distracted by**:
 - Nice-to-have syntax features (N1-N4)

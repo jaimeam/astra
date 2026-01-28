@@ -10,6 +10,7 @@ use crate::interpreter::{
     Capabilities, ConsoleCapability, EnvCapability, Interpreter,
 };
 use crate::parser::{Lexer, Parser as AstraParser, SourceFile};
+use crate::typechecker::TypeChecker;
 
 /// Astra - An LLM/Agent-native programming language
 #[derive(Parser, Debug)]
@@ -152,16 +153,27 @@ fn check_file(path: &PathBuf, json: bool) -> Result<usize, Box<dyn std::error::E
     let lexer = Lexer::new(&source_file);
     let mut parser = AstraParser::new(lexer, source_file.clone());
     match parser.parse_module() {
-        Ok(_module) => {
-            // TODO: Add type checking here
-            Ok(0)
+        Ok(module) => {
+            // Run type checking
+            let mut typechecker = TypeChecker::new();
+            match typechecker.check_module(&module) {
+                Ok(()) => Ok(0),
+                Err(bag) => {
+                    if json {
+                        println!("{}", bag.to_json());
+                    } else {
+                        eprintln!("Type error in {:?}:\n{}", path, bag.format_text(&source));
+                    }
+                    Ok(bag.len())
+                }
+            }
         }
         Err(e) => {
             let bag = DiagnosticBag::from(e);
             if json {
                 println!("{}", bag.to_json());
             } else {
-                eprintln!("Error in {:?}:\n{}", path, bag.format_text(&source));
+                eprintln!("Parse error in {:?}:\n{}", path, bag.format_text(&source));
             }
             Ok(bag.len())
         }

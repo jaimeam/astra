@@ -1,0 +1,76 @@
+module test_exhaustive_match
+
+## Tests for exhaustive match checking
+
+# ERROR E1004: Non-exhaustive match: missing pattern None
+fn option_missing_none(opt: Option[Int]) -> Int {
+  match opt {
+    Some(_) => 42
+  }
+}
+
+# ERROR E1004: Non-exhaustive match: missing pattern Some(_)
+fn option_missing_some(opt: Option[Int]) -> Int {
+  match opt {
+    None => 0
+  }
+}
+
+# ERROR E1004: Non-exhaustive match: missing pattern Err(_)
+fn result_missing_err(res: Result[Int, Text]) -> Int {
+  match res {
+    Ok(_) => 42
+  }
+}
+
+# ERROR E1004: Non-exhaustive match: missing pattern Ok(_)
+fn result_missing_ok(res: Result[Int, Text]) -> Int {
+  match res {
+    Err(_) => 0
+  }
+}
+
+# OK: Exhaustive Option match
+fn option_complete(opt: Option[Int]) -> Int {
+  match opt {
+    Some(_) => 42,
+    None => 0
+  }
+}
+
+# OK: Exhaustive Result match
+fn result_complete(res: Result[Int, Text]) -> Int {
+  match res {
+    Ok(_) => 42,
+    Err(_) => -1
+  }
+}
+
+# OK: Wildcard covers all
+fn option_with_wildcard(opt: Option[Int]) -> Int {
+  match opt {
+    _ => 0
+  }
+}
+
+# OK: Identifier binding covers all
+fn option_with_binding(opt: Option[Int]) -> Int {
+  match opt {
+    x => 42
+  }
+}
+
+# ERROR E1004: Non-exhaustive match: missing pattern false
+fn bool_missing_false(b: Bool) -> Int {
+  match b {
+    true => 1
+  }
+}
+
+# OK: Exhaustive bool match
+fn bool_complete(b: Bool) -> Int {
+  match b {
+    true => 1,
+    false => 0
+  }
+}

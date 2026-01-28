@@ -2,7 +2,7 @@
 //!
 //! Implements type checking, inference, and exhaustiveness checking.
 
-use crate::diagnostics::{Diagnostic, DiagnosticBag};
+use crate::diagnostics::{Diagnostic, DiagnosticBag, Edit, Span, Suggestion};
 use crate::parser::ast::*;
 use std::collections::HashMap;
 
@@ -332,15 +332,28 @@ impl TypeChecker {
                     Type::Unit
                 }
             }
-            Expr::Match { expr, arms, .. } => {
-                let _scrutinee_ty = self.check_expr(expr, env);
+            Expr::Match { expr, arms, span, .. } => {
+                let scrutinee_ty = self.check_expr(expr, env);
 
-                // TODO: exhaustiveness checking
+                // Collect patterns for exhaustiveness checking
+                let patterns: Vec<&Pattern> = arms.iter().map(|arm| &arm.pattern).collect();
+
+                // Check exhaustiveness
+                self.check_match_exhaustiveness(&scrutinee_ty, &patterns, span);
 
                 if arms.is_empty() {
                     Type::Unit
                 } else {
-                    self.check_expr(&arms[0].body, env)
+                    // Type check all arm bodies (not just the first)
+                    let mut result_ty = Type::Unknown;
+                    for arm in arms {
+                        let arm_ty = self.check_expr(&arm.body, env);
+                        if result_ty == Type::Unknown {
+                            result_ty = arm_ty;
+                        }
+                        // TODO: check all arms have compatible types
+                    }
+                    result_ty
                 }
             }
             Expr::Call { func, args, .. } => {
@@ -437,6 +450,161 @@ impl TypeChecker {
         actual == expected
     }
 
+    /// Check if a match expression is exhaustive
+    fn check_match_exhaustiveness(
+        &mut self,
+        scrutinee_ty: &Type,
+        patterns: &[&Pattern],
+        match_span: &Span,
+    ) {
+        // Check if any pattern is a wildcard or catch-all identifier
+        for pattern in patterns {
+            if self.pattern_is_catch_all(pattern) {
+                return; // Wildcard/identifier covers everything
+            }
+        }
+
+        // Collect missing variants based on the scrutinee type
+        let missing = self.find_missing_patterns(scrutinee_ty, patterns);
+
+        if !missing.is_empty() {
+            let missing_str = missing.join(", ");
+            let suggestion_text = missing
+                .iter()
+                .map(|m| format!("    {} => ???", m))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            self.diagnostics.push(
+                Diagnostic::error(crate::diagnostics::error_codes::types::NON_EXHAUSTIVE_MATCH)
+                    .message(format!(
+                        "Non-exhaustive match: missing pattern{}{}",
+                        if missing.len() == 1 { " " } else { "s " },
+                        missing_str
+                    ))
+                    .span(match_span.clone())
+                    .suggestion(
+                        Suggestion::new("Add missing case(s)")
+                            .with_edit(Edit::new(match_span.clone(), suggestion_text)),
+                    )
+                    .build(),
+            );
+        }
+    }
+
+    /// Check if a pattern is a catch-all (wildcard or simple identifier binding)
+    fn pattern_is_catch_all(&self, pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Wildcard { .. } => true,
+            // Simple identifier binding catches everything
+            Pattern::Ident { .. } => true,
+            _ => false,
+        }
+    }
+
+    /// Find missing patterns for a given type
+    fn find_missing_patterns(&self, ty: &Type, patterns: &[&Pattern]) -> Vec<String> {
+        match ty {
+            Type::Option(_) => self.find_missing_option_patterns(patterns),
+            Type::Result(_, _) => self.find_missing_result_patterns(patterns),
+            Type::Bool => self.find_missing_bool_patterns(patterns),
+            _ => vec![], // Unknown type or we don't track exhaustiveness for it
+        }
+    }
+
+    /// Find missing Option patterns (Some/None)
+    fn find_missing_option_patterns(&self, patterns: &[&Pattern]) -> Vec<String> {
+        let mut has_some = false;
+        let mut has_none = false;
+
+        for pattern in patterns {
+            match pattern {
+                Pattern::Variant { name, .. } => {
+                    match name.as_str() {
+                        "Some" => has_some = true,
+                        "None" => has_none = true,
+                        _ => {}
+                    }
+                }
+                Pattern::Wildcard { .. } | Pattern::Ident { .. } => {
+                    // Catch-all pattern covers both
+                    has_some = true;
+                    has_none = true;
+                }
+                _ => {}
+            }
+        }
+
+        let mut missing = Vec::new();
+        if !has_some {
+            missing.push("Some(_)".to_string());
+        }
+        if !has_none {
+            missing.push("None".to_string());
+        }
+        missing
+    }
+
+    /// Find missing Result patterns (Ok/Err)
+    fn find_missing_result_patterns(&self, patterns: &[&Pattern]) -> Vec<String> {
+        let mut has_ok = false;
+        let mut has_err = false;
+
+        for pattern in patterns {
+            match pattern {
+                Pattern::Variant { name, .. } => {
+                    match name.as_str() {
+                        "Ok" => has_ok = true,
+                        "Err" => has_err = true,
+                        _ => {}
+                    }
+                }
+                Pattern::Wildcard { .. } | Pattern::Ident { .. } => {
+                    // Catch-all pattern covers both
+                    has_ok = true;
+                    has_err = true;
+                }
+                _ => {}
+            }
+        }
+
+        let mut missing = Vec::new();
+        if !has_ok {
+            missing.push("Ok(_)".to_string());
+        }
+        if !has_err {
+            missing.push("Err(_)".to_string());
+        }
+        missing
+    }
+
+    /// Find missing Bool patterns (true/false)
+    fn find_missing_bool_patterns(&self, patterns: &[&Pattern]) -> Vec<String> {
+        let mut has_true = false;
+        let mut has_false = false;
+
+        for pattern in patterns {
+            match pattern {
+                Pattern::BoolLit { value: true, .. } => has_true = true,
+                Pattern::BoolLit { value: false, .. } => has_false = true,
+                Pattern::Wildcard { .. } | Pattern::Ident { .. } => {
+                    has_true = true;
+                    has_false = true;
+                }
+                _ => {}
+            }
+        }
+
+        let mut missing = Vec::new();
+        if !has_true {
+            missing.push("true".to_string());
+        }
+        if !has_false {
+            missing.push("false".to_string());
+        }
+        missing
+    }
+
     fn _fresh_var(&mut self) -> Type {
         let id = TypeVarId(self.next_var);
         self.next_var += 1;
@@ -462,6 +630,11 @@ pub fn check_exhaustiveness(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn dummy_span() -> Span {
+        Span::new(PathBuf::from("test.astra"), 0, 0, 1, 1, 1, 1)
+    }
 
     #[test]
     fn test_type_env() {
@@ -482,5 +655,173 @@ mod tests {
 
         assert_eq!(child.lookup("x"), Some(&Type::Int));
         assert_eq!(child.lookup("y"), Some(&Type::Bool));
+    }
+
+    #[test]
+    fn test_option_exhaustive_both_cases() {
+        let checker = TypeChecker::new();
+        let some_pat = Pattern::Variant {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "Some".to_string(),
+            data: Some(Box::new(Pattern::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "x".to_string(),
+            })),
+        };
+        let none_pat = Pattern::Variant {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "None".to_string(),
+            data: None,
+        };
+        let patterns: Vec<&Pattern> = vec![&some_pat, &none_pat];
+        let missing = checker.find_missing_option_patterns(&patterns);
+        assert!(missing.is_empty(), "Expected no missing patterns");
+    }
+
+    #[test]
+    fn test_option_missing_none() {
+        let checker = TypeChecker::new();
+        let some_pat = Pattern::Variant {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "Some".to_string(),
+            data: Some(Box::new(Pattern::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "x".to_string(),
+            })),
+        };
+        let patterns: Vec<&Pattern> = vec![&some_pat];
+        let missing = checker.find_missing_option_patterns(&patterns);
+        assert_eq!(missing, vec!["None"]);
+    }
+
+    #[test]
+    fn test_option_missing_some() {
+        let checker = TypeChecker::new();
+        let none_pat = Pattern::Variant {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "None".to_string(),
+            data: None,
+        };
+        let patterns: Vec<&Pattern> = vec![&none_pat];
+        let missing = checker.find_missing_option_patterns(&patterns);
+        assert_eq!(missing, vec!["Some(_)"]);
+    }
+
+    #[test]
+    fn test_option_wildcard_covers_all() {
+        let checker = TypeChecker::new();
+        let wildcard = Pattern::Wildcard {
+            id: NodeId::new(),
+            span: dummy_span(),
+        };
+        let patterns: Vec<&Pattern> = vec![&wildcard];
+        let missing = checker.find_missing_option_patterns(&patterns);
+        assert!(missing.is_empty(), "Wildcard should cover all cases");
+    }
+
+    #[test]
+    fn test_result_exhaustive() {
+        let checker = TypeChecker::new();
+        let ok_pat = Pattern::Variant {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "Ok".to_string(),
+            data: Some(Box::new(Pattern::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "x".to_string(),
+            })),
+        };
+        let err_pat = Pattern::Variant {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "Err".to_string(),
+            data: Some(Box::new(Pattern::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "e".to_string(),
+            })),
+        };
+        let patterns: Vec<&Pattern> = vec![&ok_pat, &err_pat];
+        let missing = checker.find_missing_result_patterns(&patterns);
+        assert!(missing.is_empty(), "Expected no missing patterns");
+    }
+
+    #[test]
+    fn test_result_missing_err() {
+        let checker = TypeChecker::new();
+        let ok_pat = Pattern::Variant {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "Ok".to_string(),
+            data: Some(Box::new(Pattern::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "x".to_string(),
+            })),
+        };
+        let patterns: Vec<&Pattern> = vec![&ok_pat];
+        let missing = checker.find_missing_result_patterns(&patterns);
+        assert_eq!(missing, vec!["Err(_)"]);
+    }
+
+    #[test]
+    fn test_bool_exhaustive() {
+        let checker = TypeChecker::new();
+        let true_pat = Pattern::BoolLit {
+            id: NodeId::new(),
+            span: dummy_span(),
+            value: true,
+        };
+        let false_pat = Pattern::BoolLit {
+            id: NodeId::new(),
+            span: dummy_span(),
+            value: false,
+        };
+        let patterns: Vec<&Pattern> = vec![&true_pat, &false_pat];
+        let missing = checker.find_missing_bool_patterns(&patterns);
+        assert!(missing.is_empty(), "Expected no missing patterns");
+    }
+
+    #[test]
+    fn test_bool_missing_false() {
+        let checker = TypeChecker::new();
+        let true_pat = Pattern::BoolLit {
+            id: NodeId::new(),
+            span: dummy_span(),
+            value: true,
+        };
+        let patterns: Vec<&Pattern> = vec![&true_pat];
+        let missing = checker.find_missing_bool_patterns(&patterns);
+        assert_eq!(missing, vec!["false"]);
+    }
+
+    #[test]
+    fn test_ident_pattern_catches_all() {
+        let checker = TypeChecker::new();
+        let ident_pat = Pattern::Ident {
+            id: NodeId::new(),
+            span: dummy_span(),
+            name: "x".to_string(),
+        };
+        let patterns: Vec<&Pattern> = vec![&ident_pat];
+
+        // For Option
+        let missing = checker.find_missing_option_patterns(&patterns);
+        assert!(missing.is_empty(), "Ident should cover all Option cases");
+
+        // For Result
+        let missing = checker.find_missing_result_patterns(&patterns);
+        assert!(missing.is_empty(), "Ident should cover all Result cases");
+
+        // For Bool
+        let missing = checker.find_missing_bool_patterns(&patterns);
+        assert!(missing.is_empty(), "Ident should cover all Bool cases");
     }
 }
