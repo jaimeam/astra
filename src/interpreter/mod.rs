@@ -1596,4 +1596,93 @@ fn main() -> Int {
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(42)));
     }
+
+    #[test]
+    fn test_seeded_rand_deterministic() {
+        // Two runs with the same seed should produce the same results
+        let rand1 = SeededRand::new(42);
+        let rand2 = SeededRand::new(42);
+
+        let a1 = rand1.int(1, 100);
+        let a2 = rand2.int(1, 100);
+        assert_eq!(a1, a2);
+
+        let b1 = rand1.int(1, 1000);
+        let b2 = rand2.int(1, 1000);
+        assert_eq!(b1, b2);
+
+        let c1 = rand1.bool();
+        let c2 = rand2.bool();
+        assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn test_fixed_clock() {
+        let clock = FixedClock::new(1700000000);
+        assert_eq!(clock.now(), 1700000000);
+        clock.sleep(5000); // no-op
+        assert_eq!(clock.now(), 1700000000);
+    }
+
+    #[test]
+    fn test_deterministic_rand_in_program() {
+        let source = r#"
+module example
+
+fn main() effects(Rand) {
+  Rand.int(1, 100)
+}
+"#;
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = Parser::new(lexer, source_file.clone());
+        let module = parser.parse_module().expect("parse failed");
+
+        // Run twice with same seed, should get same result
+        let caps1 = Capabilities {
+            rand: Some(Box::new(SeededRand::new(42))),
+            console: Some(Box::new(MockConsole::new())),
+            ..Default::default()
+        };
+        let mut interp1 = Interpreter::with_capabilities(caps1);
+        let result1 = interp1.eval_module(&module).unwrap();
+
+        let caps2 = Capabilities {
+            rand: Some(Box::new(SeededRand::new(42))),
+            console: Some(Box::new(MockConsole::new())),
+            ..Default::default()
+        };
+        let mut interp2 = Interpreter::with_capabilities(caps2);
+        let result2 = interp2.eval_module(&module).unwrap();
+
+        match (&result1, &result2) {
+            (Value::Int(a), Value::Int(b)) => assert_eq!(a, b),
+            _ => panic!("expected Int results"),
+        }
+    }
+
+    #[test]
+    fn test_fixed_clock_in_program() {
+        let source = r#"
+module example
+
+fn main() effects(Clock) {
+  Clock.now()
+}
+"#;
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = Parser::new(lexer, source_file.clone());
+        let module = parser.parse_module().expect("parse failed");
+
+        let caps = Capabilities {
+            clock: Some(Box::new(FixedClock::new(1700000000))),
+            console: Some(Box::new(MockConsole::new())),
+            ..Default::default()
+        };
+        let mut interp = Interpreter::with_capabilities(caps);
+        let result = interp.eval_module(&module).unwrap();
+
+        assert!(matches!(result, Value::Int(1700000000)));
+    }
 }
