@@ -311,6 +311,14 @@ impl<'a> Parser<'a> {
         let start_span = self.current_span();
         self.expect(TokenKind::Test)?;
         let name = self.expect_text()?;
+
+        // Parse optional using clause
+        let using = if self.check(TokenKind::Using) {
+            Some(self.parse_using_clause()?)
+        } else {
+            None
+        };
+
         let body = self.parse_block()?;
 
         let end_span = self.current_span();
@@ -318,7 +326,7 @@ impl<'a> Parser<'a> {
             id: NodeId::new(),
             span: start_span.merge(&end_span),
             name,
-            using: None,
+            using,
             body,
         })
     }
@@ -327,6 +335,14 @@ impl<'a> Parser<'a> {
         let start_span = self.current_span();
         self.expect(TokenKind::Property)?;
         let name = self.expect_text()?;
+
+        // Parse optional using clause
+        let using = if self.check(TokenKind::Using) {
+            Some(self.parse_using_clause()?)
+        } else {
+            None
+        };
+
         let body = self.parse_block()?;
 
         let end_span = self.current_span();
@@ -334,8 +350,54 @@ impl<'a> Parser<'a> {
             id: NodeId::new(),
             span: start_span.merge(&end_span),
             name,
-            using: None,
+            using,
             body,
+        })
+    }
+
+    /// Parse `using effects(Effect = Expr, ...)` clause
+    fn parse_using_clause(&mut self) -> Result<UsingClause, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::Using)?;
+        self.expect(TokenKind::Effects)?;
+        self.expect(TokenKind::LParen)?;
+
+        let mut bindings = Vec::new();
+
+        if !self.check(TokenKind::RParen) {
+            bindings.push(self.parse_effect_binding()?);
+            while self.check(TokenKind::Comma) {
+                self.advance();
+                if self.check(TokenKind::RParen) {
+                    break;
+                }
+                bindings.push(self.parse_effect_binding()?);
+            }
+        }
+
+        self.expect(TokenKind::RParen)?;
+
+        let end_span = self.current_span();
+        Ok(UsingClause {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            bindings,
+        })
+    }
+
+    /// Parse `Effect = Expr` binding (e.g., `Rand = Rand.seeded(42)`)
+    fn parse_effect_binding(&mut self) -> Result<EffectBinding, Diagnostic> {
+        let start_span = self.current_span();
+        let effect = self.expect_ident()?;
+        self.expect(TokenKind::Eq)?;
+        let value = self.parse_expr()?;
+
+        let end_span = self.current_span();
+        Ok(EffectBinding {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            effect,
+            value: Box::new(value),
         })
     }
 

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::diagnostics::DiagnosticBag;
 use crate::interpreter::{
-    Capabilities, ConsoleCapability, EnvCapability, Interpreter,
+    Capabilities, ConsoleCapability, EnvCapability, FixedClock, Interpreter, SeededRand,
 };
 use crate::parser::{Lexer, Parser as AstraParser, SourceFile};
 
@@ -242,12 +242,8 @@ fn run_test(
 
                 total_tests += 1;
 
-                // Run the test
-                let console = Box::new(TestConsole::new());
-                let capabilities = Capabilities {
-                    console: Some(console),
-                    ..Default::default()
-                };
+                // Build capabilities from using clause
+                let capabilities = build_test_capabilities(&test.using);
 
                 let mut interpreter = Interpreter::with_capabilities(capabilities);
                 // Load the module functions first
@@ -306,6 +302,71 @@ impl ConsoleCapability for TestConsole {
     fn read_line(&self) -> Option<String> {
         None
     }
+}
+
+/// Build capabilities for a test based on its `using effects(...)` clause.
+///
+/// Supports:
+/// - `Rand = Rand.seeded(<seed>)` -> SeededRand
+/// - `Clock = Clock.fixed(<time>)` -> FixedClock
+/// - Console is always provided (captured)
+fn build_test_capabilities(using: &Option<crate::parser::ast::UsingClause>) -> Capabilities {
+    let mut capabilities = Capabilities {
+        console: Some(Box::new(TestConsole::new())),
+        ..Default::default()
+    };
+
+    if let Some(clause) = using {
+        for binding in &clause.bindings {
+            match binding.effect.as_str() {
+                "Rand" => {
+                    // Expect: Rand.seeded(<int>)
+                    if let Some(seed) = extract_method_int_arg(&binding.value, "Rand", "seeded") {
+                        capabilities.rand = Some(Box::new(SeededRand::new(seed as u64)));
+                    }
+                }
+                "Clock" => {
+                    // Expect: Clock.fixed(<int>)
+                    if let Some(time) = extract_method_int_arg(&binding.value, "Clock", "fixed") {
+                        capabilities.clock = Some(Box::new(FixedClock::new(time)));
+                    }
+                }
+                _ => {
+                    // Unknown effect binding - ignore for now
+                }
+            }
+        }
+    }
+
+    capabilities
+}
+
+/// Extract an integer argument from a method call expression like `Foo.bar(42)`.
+fn extract_method_int_arg(
+    expr: &crate::parser::ast::Expr,
+    expected_receiver: &str,
+    expected_method: &str,
+) -> Option<i64> {
+    use crate::parser::ast::Expr;
+
+    if let Expr::MethodCall {
+        receiver,
+        method,
+        args,
+        ..
+    } = expr
+    {
+        if method == expected_method {
+            if let Expr::Ident { name, .. } = receiver.as_ref() {
+                if name == expected_receiver {
+                    if let Some(Expr::IntLit { value, .. }) = args.first() {
+                        return Some(*value);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
