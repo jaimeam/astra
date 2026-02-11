@@ -152,9 +152,20 @@ fn check_file(path: &PathBuf, json: bool) -> Result<usize, Box<dyn std::error::E
     let lexer = Lexer::new(&source_file);
     let mut parser = AstraParser::new(lexer, source_file.clone());
     match parser.parse_module() {
-        Ok(_module) => {
-            // TODO: Add type checking here
-            Ok(0)
+        Ok(module) => {
+            // Run type checking (includes exhaustiveness + effect enforcement)
+            let mut checker = crate::typechecker::TypeChecker::new();
+            match checker.check_module(&module) {
+                Ok(()) => Ok(0),
+                Err(bag) => {
+                    if json {
+                        println!("{}", bag.to_json());
+                    } else {
+                        eprintln!("Error in {:?}:\n{}", path, bag.format_text(&source));
+                    }
+                    Ok(bag.len())
+                }
+            }
         }
         Err(e) => {
             let bag = DiagnosticBag::from(e);

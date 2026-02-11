@@ -1,7 +1,7 @@
 # Astra Implementation Plan
 
 > This document tracks the implementation status and coordinates parallel development across agents.
-> **Last updated**: 2026-01-27
+> **Last updated**: 2026-02-11
 
 ## Vision Alignment Check
 
@@ -9,11 +9,11 @@
 
 | Differentiator | Why It Matters for LLMs | Status |
 |----------------|------------------------|--------|
-| **Machine-readable diagnostics with fix suggestions** | LLMs can parse errors and apply fixes automatically | 🟡 Has codes, needs suggestions |
-| **Explicit effects with enforcement** | LLMs see exactly what functions can do | 🔴 Not enforced yet |
+| **Machine-readable diagnostics with fix suggestions** | LLMs can parse errors and apply fixes automatically | ✅ Codes + suggestions |
+| **Explicit effects with enforcement** | LLMs see exactly what functions can do | ✅ Enforced in type checker |
 | **Deterministic testing** | Tests never flake, LLMs trust results | 🟡 Basic tests work |
 | **No null (Option/Result)** | Type system catches missing cases | ✅ Runtime works |
-| **Exhaustive match checking** | Compiler catches forgotten cases | 🔴 Not implemented |
+| **Exhaustive match checking** | Compiler catches forgotten cases | ✅ Implemented |
 | **One canonical format** | No style choices to make | 🔴 Placeholder only |
 
 ---
@@ -27,9 +27,9 @@
 | # | Task | Impact | Status | Est. Time |
 |---|------|--------|--------|-----------|
 | **C1** | Option/Result runtime (Some/None/Ok/Err) | Unlocks null-free programming | ✅ Done | 2h |
-| **C2** | Exhaustive match checking | Compiler catches missing cases | ⬜ Ready | 3h |
-| **C3** | Error suggestions in diagnostics | LLMs can auto-apply fixes | ⬜ Ready | 4h |
-| **C4** | Effect checking enforcement | Verify effects match declarations | ⬜ Ready | 4h |
+| **C2** | Exhaustive match checking | Compiler catches missing cases | ✅ Done | 3h |
+| **C3** | Error suggestions in diagnostics | LLMs can auto-apply fixes | ✅ Done | 4h |
+| **C4** | Effect checking enforcement | Verify effects match declarations | ✅ Done | 4h |
 | **C5** | Deterministic test effects (`using effects()`) | Inject mocked Clock/Rand | ⬜ Ready | 3h |
 
 ### 🟡 High Value (Improves LLM experience significantly)
@@ -211,18 +211,22 @@ test "time is fixed" using effects(Clock = Clock.fixed(1000)) {
 - [x] Test block parsing and execution
 - [x] assert/assert_eq builtins
 - [x] All 7 examples pass check and run
-- [x] 32+ unit tests, 4 golden tests
-
-### In Progress 🟡
-- [ ] Option/Result runtime (C1) - **Recommended next**
-- [ ] Basic type checking
+- [x] 55+ unit tests, 4 golden tests
+- [x] Option/Result runtime (C1)
+- [x] ? operator for Option/Result (H1)
+- [x] Exhaustive match checking for Option/Result/Bool/enums (C2)
+- [x] Error suggestions in diagnostics (C3)
+- [x] Effect checking enforcement (C4)
+- [x] Type checker wired into CLI check command
+- [x] Function type resolution in type environment
+- [x] Binary operator type inference (comparisons return Bool)
 
 ### Not Started 🔴
-- [ ] Exhaustive match checking (C2)
-- [ ] Error suggestions (C3)
-- [ ] Effect enforcement (C4)
 - [ ] Deterministic test effects (C5)
-- [ ] Formatter implementation
+- [ ] Contracts parsing (H2)
+- [ ] Contract runtime checks (H3)
+- [ ] Formatter implementation (H4)
+- [ ] Type inference for let bindings (H5)
 
 ---
 
@@ -230,12 +234,12 @@ test "time is fixed" using effects(Clock = Clock.fixed(1000)) {
 
 ```bash
 cargo build                              # Build
-cargo test                               # Run all tests (32+)
+cargo test                               # Run all tests (55+)
 cargo run -- run examples/hello.astra    # Run a program
-cargo run -- check examples/             # Check syntax
+cargo run -- check examples/             # Check syntax + types + effects
 cargo run -- test                        # Run test blocks
 cargo run -- test "filter"               # Run matching tests
-cargo run -- check --json file.astra     # JSON diagnostics
+cargo run -- check --json file.astra     # JSON diagnostics with suggestions
 ```
 
 ---
@@ -248,22 +252,25 @@ cargo run -- check --json file.astra     # JSON diagnostics
 | 2026-01-27 | claude | Test blocks, assert builtin, examples fixed, plan updated |
 | 2026-01-27 | claude | C1: Option/Result runtime (Some/None/Ok/Err) |
 | 2026-01-27 | claude | H1: ? operator for Option/Result |
+| 2026-02-11 | claude | C2: Exhaustive match checking (Option/Result/Bool/enum) |
+| 2026-02-11 | claude | C3: Error suggestions in diagnostics |
+| 2026-02-11 | claude | C4: Effect checking enforcement |
+| 2026-02-11 | claude | Type checker wired into CLI, function resolution, binary op fixes |
 
 ---
 
 ## For Next Agent
 
-**Recommended task**: **C1 (Option/Result runtime)**
+**Recommended task**: **C5 (Deterministic test effects)**
 
-This is the highest-impact task because:
-1. It's a prerequisite for C2 (exhaustive match checking)
-2. It enables the "no null" value proposition
-3. The examples are already written to use Option/Result
-4. It's self-contained (~2 hours)
+This is the highest-impact remaining task because:
+1. It completes the critical path for the "LLM → check → fix → repeat" loop
+2. Tests with Clock/Rand can become fully deterministic
+3. The infrastructure (SeededRand, FixedClock) already exists in the interpreter
 
-**After C1, prioritize**:
-- C2 (exhaustive matching) - the killer feature for LLMs
-- C3 (error suggestions) - enables automatic fix application
+**After C5, prioritize**:
+- H4 (formatter) - one canonical format eliminates style decisions for LLMs
+- H2/H3 (contracts) - preconditions/postconditions for stronger verification
 
 **Avoid getting distracted by**:
 - Nice-to-have syntax features (N1-N4)
@@ -281,7 +288,7 @@ The goal is to make Astra demonstrably better for LLMs than Python/JS/Rust as qu
 | Lexer | `src/parser/lexer.rs` | In-file |
 | Parser | `src/parser/parser.rs` | In-file + golden |
 | AST | `src/parser/ast.rs` | - |
-| Type Checker | `src/typechecker/mod.rs` | In-file |
+| Type Checker | `src/typechecker/mod.rs` | In-file (16+) |
 | Effects | `src/effects/mod.rs` | In-file |
 | Interpreter | `src/interpreter/mod.rs` | In-file (11+) |
 | CLI | `src/cli/mod.rs` | Integration |

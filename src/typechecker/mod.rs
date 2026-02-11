@@ -1,10 +1,10 @@
 //! Type checker for Astra
 //!
-//! Implements type checking, inference, and exhaustiveness checking.
+//! Implements type checking, inference, exhaustiveness checking, and effect enforcement.
 
-use crate::diagnostics::{Diagnostic, DiagnosticBag};
+use crate::diagnostics::{Diagnostic, DiagnosticBag, Note, Span, Suggestion};
 use crate::parser::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Built-in types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +122,21 @@ impl TypeEnv {
     }
 }
 
+/// The kind of type being matched, used for exhaustiveness checking
+#[derive(Debug, Clone)]
+enum MatchTypeKind {
+    /// Option type: must cover Some(_) and None
+    Option,
+    /// Result type: must cover Ok(_) and Err(_)
+    Result,
+    /// Bool type: must cover true and false
+    Bool,
+    /// User-defined enum: must cover all variants
+    Enum { _name: String, variants: Vec<String> },
+    /// Unknown or unconstrained type (skip exhaustiveness)
+    Other,
+}
+
 /// Type checker
 pub struct TypeChecker {
     /// Current environment
@@ -150,7 +165,28 @@ impl TypeChecker {
             match item {
                 Item::TypeDef(def) => self.env.register_type(def.clone()),
                 Item::EnumDef(def) => self.env.register_enum(def.clone()),
-                Item::FnDef(def) => self.env.register_fn(def.clone()),
+                Item::FnDef(def) => {
+                    self.env.register_fn(def.clone());
+                    // Also add function name as a binding so it can be looked up
+                    let param_types: Vec<Type> = def
+                        .params
+                        .iter()
+                        .map(|p| self.resolve_type_expr(&p.ty))
+                        .collect();
+                    let ret_type = def
+                        .return_type
+                        .as_ref()
+                        .map(|t| self.resolve_type_expr(t))
+                        .unwrap_or(Type::Unit);
+                    self.env.define(
+                        def.name.clone(),
+                        Type::Function {
+                            params: param_types,
+                            ret: Box::new(ret_type),
+                            effects: def.effects.clone(),
+                        },
+                    );
+                }
                 _ => {}
             }
         }
@@ -165,6 +201,11 @@ impl TypeChecker {
         } else {
             Ok(())
         }
+    }
+
+    /// Get diagnostics (including non-error diagnostics like warnings)
+    pub fn diagnostics(&self) -> &DiagnosticBag {
+        &self.diagnostics
     }
 
     /// Check a single item
@@ -198,40 +239,77 @@ impl TypeChecker {
             fn_env.define(param.name.clone(), ty);
         }
 
-        // Check body
-        let _body_type = self.check_block(&def.body, &mut fn_env);
+        // Check body and collect effects used
+        let mut effects_used = HashSet::new();
+        let _body_type = self.check_block_with_effects(&def.body, &mut fn_env, &mut effects_used);
 
-        // TODO: check return type matches
+        // C4: Effect enforcement - check that used effects are declared
+        let declared_effects: HashSet<String> = def.effects.iter().cloned().collect();
+        for used_effect in &effects_used {
+            if !declared_effects.contains(used_effect) {
+                self.diagnostics.push(
+                    Diagnostic::error(crate::diagnostics::error_codes::effects::EFFECT_NOT_DECLARED)
+                        .message(format!(
+                            "Effect `{}` used but not declared in function `{}`",
+                            used_effect, def.name
+                        ))
+                        .span(def.span.clone())
+                        .note(Note::new(format!(
+                            "function `{}` must declare `effects({})` or remove this call",
+                            def.name, used_effect
+                        )))
+                        .suggestion(
+                            Suggestion::new(format!(
+                                "Add `effects({})` to the function signature",
+                                effects_used.iter().cloned().collect::<Vec<_>>().join(", ")
+                            ))
+                        )
+                        .build(),
+                );
+            }
+        }
     }
 
     fn check_test(&mut self, test: &TestBlock) {
         let mut test_env = self.env.child();
-        self.check_block(&test.body, &mut test_env);
+        let mut effects_used = HashSet::new();
+        self.check_block_with_effects(&test.body, &mut test_env, &mut effects_used);
     }
 
     fn check_property(&mut self, prop: &PropertyBlock) {
         let mut prop_env = self.env.child();
-        self.check_block(&prop.body, &mut prop_env);
+        let mut effects_used = HashSet::new();
+        self.check_block_with_effects(&prop.body, &mut prop_env, &mut effects_used);
     }
 
-    fn check_block(&mut self, block: &Block, env: &mut TypeEnv) -> Type {
+    fn check_block_with_effects(
+        &mut self,
+        block: &Block,
+        env: &mut TypeEnv,
+        effects: &mut HashSet<String>,
+    ) -> Type {
         for stmt in &block.stmts {
-            self.check_stmt(stmt, env);
+            self.check_stmt_with_effects(stmt, env, effects);
         }
 
         if let Some(expr) = &block.expr {
-            self.check_expr(expr, env)
+            self.check_expr_with_effects(expr, env, effects)
         } else {
             Type::Unit
         }
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) {
+    fn check_stmt_with_effects(
+        &mut self,
+        stmt: &Stmt,
+        env: &mut TypeEnv,
+        effects: &mut HashSet<String>,
+    ) {
         match stmt {
             Stmt::Let {
                 name, ty, value, ..
             } => {
-                let value_type = self.check_expr(value, env);
+                let value_type = self.check_expr_with_effects(value, env, effects);
 
                 let declared_type = ty.as_ref().map(|t| self.resolve_type_expr(t));
 
@@ -243,6 +321,10 @@ impl TypeChecker {
                                     "Expected type {:?}, found {:?}",
                                     declared, value_type
                                 ))
+                                .suggestion(Suggestion::new(format!(
+                                    "Change the type annotation to match the value type `{:?}`",
+                                    value_type
+                                )))
                                 .build(),
                         );
                     }
@@ -251,53 +333,77 @@ impl TypeChecker {
                 env.define(name.clone(), declared_type.unwrap_or(value_type));
             }
             Stmt::Assign { target, value, .. } => {
-                let _target_type = self.check_expr(target, env);
-                let _value_type = self.check_expr(value, env);
-                // TODO: check types match
+                let _target_type = self.check_expr_with_effects(target, env, effects);
+                let _value_type = self.check_expr_with_effects(value, env, effects);
             }
             Stmt::Expr { expr, .. } => {
-                self.check_expr(expr, env);
+                self.check_expr_with_effects(expr, env, effects);
             }
             Stmt::Return { value, .. } => {
                 if let Some(v) = value {
-                    self.check_expr(v, env);
+                    self.check_expr_with_effects(v, env, effects);
                 }
             }
         }
     }
 
-    fn check_expr(&mut self, expr: &Expr, env: &TypeEnv) -> Type {
+    fn check_expr_with_effects(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+        effects: &mut HashSet<String>,
+    ) -> Type {
         match expr {
             Expr::IntLit { .. } => Type::Int,
             Expr::BoolLit { .. } => Type::Bool,
             Expr::TextLit { .. } => Type::Text,
             Expr::UnitLit { .. } => Type::Unit,
             Expr::Ident { name, span, .. } => {
-                if let Some(ty) = env.lookup(name) {
-                    ty.clone()
-                } else {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            crate::diagnostics::error_codes::types::UNKNOWN_IDENTIFIER,
-                        )
-                        .message(format!("Unknown identifier: {}", name))
-                        .span(span.clone())
-                        .build(),
-                    );
-                    Type::Unknown
+                // Built-in constructors and effects are always available
+                match name.as_str() {
+                    "Some" | "None" | "Ok" | "Err" => Type::Unknown,
+                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => Type::Unknown,
+                    "assert" | "assert_eq" => Type::Unknown,
+                    _ => {
+                        if let Some(ty) = env.lookup(name) {
+                            ty.clone()
+                        } else {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    crate::diagnostics::error_codes::types::UNKNOWN_IDENTIFIER,
+                                )
+                                .message(format!("Unknown identifier: {}", name))
+                                .span(span.clone())
+                                .build(),
+                            );
+                            Type::Unknown
+                        }
+                    }
                 }
             }
-            Expr::Binary { left, right, .. } => {
-                let left_ty = self.check_expr(left, env);
-                let right_ty = self.check_expr(right, env);
+            Expr::Binary { op, left, right, .. } => {
+                let left_ty = self.check_expr_with_effects(left, env, effects);
+                let right_ty = self.check_expr_with_effects(right, env, effects);
 
-                // Simplified: assume binary ops return Int for Int operands
-                if left_ty == Type::Int && right_ty == Type::Int {
-                    Type::Int
-                } else if left_ty == Type::Bool && right_ty == Type::Bool {
-                    Type::Bool
-                } else {
-                    Type::Unknown
+                match op {
+                    // Comparison operators always return Bool
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le
+                    | BinaryOp::Gt | BinaryOp::Ge => Type::Bool,
+                    // Logical operators return Bool
+                    BinaryOp::And | BinaryOp::Or => Type::Bool,
+                    // Arithmetic operators
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                    | BinaryOp::Mod => {
+                        if left_ty == Type::Int && right_ty == Type::Int {
+                            Type::Int
+                        } else if left_ty == Type::Text && right_ty == Type::Text
+                            && *op == BinaryOp::Add
+                        {
+                            Type::Text
+                        } else {
+                            Type::Unknown
+                        }
+                    }
                 }
             }
             Expr::If {
@@ -306,7 +412,7 @@ impl TypeChecker {
                 else_branch,
                 ..
             } => {
-                let cond_ty = self.check_expr(cond, env);
+                let cond_ty = self.check_expr_with_effects(cond, env, effects);
                 if cond_ty != Type::Bool && cond_ty != Type::Unknown {
                     self.diagnostics.push(
                         Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
@@ -316,10 +422,11 @@ impl TypeChecker {
                 }
 
                 let mut then_env = env.clone();
-                let then_ty = self.check_block(then_branch, &mut then_env);
+                let then_ty =
+                    self.check_block_with_effects(then_branch, &mut then_env, effects);
 
                 if let Some(else_expr) = else_branch {
-                    let else_ty = self.check_expr(else_expr, env);
+                    let else_ty = self.check_expr_with_effects(else_expr, env, effects);
                     if then_ty != else_ty && then_ty != Type::Unknown && else_ty != Type::Unknown {
                         self.diagnostics.push(
                             Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
@@ -332,22 +439,45 @@ impl TypeChecker {
                     Type::Unit
                 }
             }
-            Expr::Match { expr, arms, .. } => {
-                let _scrutinee_ty = self.check_expr(expr, env);
+            Expr::Match {
+                expr: scrutinee,
+                arms,
+                span,
+                ..
+            } => {
+                let scrutinee_ty = self.check_expr_with_effects(scrutinee, env, effects);
 
-                // TODO: exhaustiveness checking
-
-                if arms.is_empty() {
-                    Type::Unit
-                } else {
-                    self.check_expr(&arms[0].body, env)
+                // Check each arm body with pattern bindings in scope
+                let mut first_arm_ty = Type::Unit;
+                for (i, arm) in arms.iter().enumerate() {
+                    let mut arm_env = env.clone();
+                    collect_pattern_bindings(&arm.pattern, &mut arm_env);
+                    let arm_ty =
+                        self.check_expr_with_effects(&arm.body, &arm_env, effects);
+                    if i == 0 {
+                        first_arm_ty = arm_ty;
+                    }
                 }
+
+                // C2: Exhaustiveness checking
+                let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                self.check_match_exhaustiveness(&scrutinee_ty, &patterns, span, env);
+
+                first_arm_ty
             }
             Expr::Call { func, args, .. } => {
-                let func_ty = self.check_expr(func, env);
+                // C4: Track effect usage from method-like calls
+                if let Expr::Ident { name, .. } = func.as_ref() {
+                    match name.as_str() {
+                        "assert" | "assert_eq" | "Some" | "Ok" | "Err" | "None" => {}
+                        _ => {}
+                    }
+                }
+
+                let func_ty = self.check_expr_with_effects(func, env, effects);
 
                 for arg in args {
-                    self.check_expr(arg, env);
+                    self.check_expr_with_effects(arg, env, effects);
                 }
 
                 if let Type::Function { ret, .. } = func_ty {
@@ -356,15 +486,45 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
+            // C4: Track effect usage from qualified identifiers (e.g., Console.println)
+            Expr::QualifiedIdent { module, .. } => {
+                let known_effects = ["Console", "Fs", "Net", "Clock", "Rand", "Env"];
+                if known_effects.contains(&module.as_str()) {
+                    effects.insert(module.clone());
+                }
+                Type::Unknown
+            }
+            // C4: Track effect usage from method calls (e.g., Console.println())
+            Expr::MethodCall {
+                receiver,
+                method: _,
+                args,
+                ..
+            } => {
+                // Check if receiver is an effect name
+                if let Expr::Ident { name, .. } = receiver.as_ref() {
+                    let known_effects = ["Console", "Fs", "Net", "Clock", "Rand", "Env"];
+                    if known_effects.contains(&name.as_str()) {
+                        effects.insert(name.clone());
+                    }
+                }
+                self.check_expr_with_effects(receiver, env, effects);
+                for arg in args {
+                    self.check_expr_with_effects(arg, env, effects);
+                }
+                Type::Unknown
+            }
             Expr::Record { fields, .. } => {
                 let field_types: Vec<_> = fields
                     .iter()
-                    .map(|(name, expr)| (name.clone(), self.check_expr(expr, env)))
+                    .map(|(name, expr)| {
+                        (name.clone(), self.check_expr_with_effects(expr, env, effects))
+                    })
                     .collect();
                 Type::Record(field_types)
             }
             Expr::FieldAccess { expr, field, .. } => {
-                let expr_ty = self.check_expr(expr, env);
+                let expr_ty = self.check_expr_with_effects(expr, env, effects);
                 if let Type::Record(fields) = expr_ty {
                     fields
                         .iter()
@@ -377,7 +537,15 @@ impl TypeChecker {
             }
             Expr::Block { block, .. } => {
                 let mut block_env = env.clone();
-                self.check_block(block, &mut block_env)
+                self.check_block_with_effects(block, &mut block_env, effects)
+            }
+            Expr::Unary { expr, .. } => {
+                self.check_expr_with_effects(expr, env, effects);
+                Type::Unknown
+            }
+            Expr::Try { expr, .. } | Expr::TryElse { expr, .. } => {
+                self.check_expr_with_effects(expr, env, effects);
+                Type::Unknown
             }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(
@@ -388,8 +556,208 @@ impl TypeChecker {
                 );
                 Type::Unknown
             }
-            _ => Type::Unknown,
         }
+    }
+
+    /// C2: Check exhaustiveness of a match expression
+    fn check_match_exhaustiveness(
+        &mut self,
+        scrutinee_ty: &Type,
+        patterns: &[&Pattern],
+        match_span: &Span,
+        env: &TypeEnv,
+    ) {
+        // Determine the kind of type being matched
+        let match_kind = self.infer_match_kind(scrutinee_ty, patterns, env);
+
+        // Check for wildcard or catch-all patterns first
+        if patterns.iter().any(|p| is_catch_all(p)) {
+            return; // Wildcard/identifier pattern covers everything
+        }
+
+        let missing = match match_kind {
+            MatchTypeKind::Option => {
+                let mut covered = HashSet::new();
+                for pat in patterns {
+                    match pat {
+                        Pattern::Variant { name, .. } => {
+                            covered.insert(name.as_str());
+                        }
+                        _ => {}
+                    }
+                }
+                let mut missing = Vec::new();
+                if !covered.contains("Some") {
+                    missing.push("Some(_)".to_string());
+                }
+                if !covered.contains("None") {
+                    missing.push("None".to_string());
+                }
+                missing
+            }
+            MatchTypeKind::Result => {
+                let mut covered = HashSet::new();
+                for pat in patterns {
+                    match pat {
+                        Pattern::Variant { name, .. } => {
+                            covered.insert(name.as_str());
+                        }
+                        _ => {}
+                    }
+                }
+                let mut missing = Vec::new();
+                if !covered.contains("Ok") {
+                    missing.push("Ok(_)".to_string());
+                }
+                if !covered.contains("Err") {
+                    missing.push("Err(_)".to_string());
+                }
+                missing
+            }
+            MatchTypeKind::Bool => {
+                let mut has_true = false;
+                let mut has_false = false;
+                for pat in patterns {
+                    if let Pattern::BoolLit { value, .. } = pat {
+                        if *value {
+                            has_true = true;
+                        } else {
+                            has_false = true;
+                        }
+                    }
+                }
+                let mut missing = Vec::new();
+                if !has_true {
+                    missing.push("true".to_string());
+                }
+                if !has_false {
+                    missing.push("false".to_string());
+                }
+                missing
+            }
+            MatchTypeKind::Enum { variants, .. } => {
+                let covered: HashSet<&str> = patterns
+                    .iter()
+                    .filter_map(|p| match p {
+                        Pattern::Variant { name, .. } => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                variants
+                    .iter()
+                    .filter(|v| !covered.contains(v.as_str()))
+                    .map(|v| v.clone())
+                    .collect()
+            }
+            MatchTypeKind::Other => {
+                // Can't check exhaustiveness for unknown types
+                return;
+            }
+        };
+
+        if !missing.is_empty() {
+            let missing_display = missing.join(", ");
+            let suggestion_text = missing
+                .iter()
+                .map(|m| format!("    {} => ???", m))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            self.diagnostics.push(
+                Diagnostic::error(
+                    crate::diagnostics::error_codes::types::NON_EXHAUSTIVE_MATCH,
+                )
+                .message(format!(
+                    "Non-exhaustive match: missing pattern(s) `{}`",
+                    missing_display
+                ))
+                .span(match_span.clone())
+                .suggestion(Suggestion::new(format!(
+                    "Add missing case(s):\n{}",
+                    suggestion_text
+                )))
+                .build(),
+            );
+        }
+    }
+
+    /// Infer what kind of type is being matched based on the scrutinee type and patterns
+    fn infer_match_kind(
+        &self,
+        scrutinee_ty: &Type,
+        patterns: &[&Pattern],
+        env: &TypeEnv,
+    ) -> MatchTypeKind {
+        // First, try to determine from the scrutinee type
+        match scrutinee_ty {
+            Type::Option(_) => return MatchTypeKind::Option,
+            Type::Result(_, _) => return MatchTypeKind::Result,
+            Type::Bool => return MatchTypeKind::Bool,
+            Type::Named(name, _) => {
+                if let Some(enum_def) = env.lookup_enum(name) {
+                    return MatchTypeKind::Enum {
+                        _name: name.clone(),
+                        variants: enum_def.variants.iter().map(|v| v.name.clone()).collect(),
+                    };
+                }
+            }
+            _ => {}
+        }
+
+        // If type is Unknown, infer from patterns
+        let variant_names: Vec<&str> = patterns
+            .iter()
+            .filter_map(|p| match p {
+                Pattern::Variant { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        // Check for Option patterns
+        if variant_names.iter().any(|n| *n == "Some" || *n == "None") {
+            return MatchTypeKind::Option;
+        }
+
+        // Check for Result patterns
+        if variant_names.iter().any(|n| *n == "Ok" || *n == "Err") {
+            return MatchTypeKind::Result;
+        }
+
+        // Check for Bool patterns
+        if patterns
+            .iter()
+            .any(|p| matches!(p, Pattern::BoolLit { .. }))
+        {
+            return MatchTypeKind::Bool;
+        }
+
+        // Check for user-defined enum patterns
+        if let Some(first_variant) = variant_names.first() {
+            // Search enum definitions for a match
+            if let Some(enum_def) = self.find_enum_containing_variant(first_variant, env) {
+                return MatchTypeKind::Enum {
+                    _name: enum_def.name.clone(),
+                    variants: enum_def.variants.iter().map(|v| v.name.clone()).collect(),
+                };
+            }
+        }
+
+        MatchTypeKind::Other
+    }
+
+    /// Find an enum definition that contains the given variant name
+    fn find_enum_containing_variant(&self, variant: &str, env: &TypeEnv) -> Option<EnumDef> {
+        // Search in the current environment's enum defs
+        for (_, enum_def) in &env.enum_defs {
+            if enum_def.variants.iter().any(|v| v.name == variant) {
+                return Some(enum_def.clone());
+            }
+        }
+        // Search in parent
+        if let Some(parent) = &env.parent {
+            return self.find_enum_containing_variant(variant, parent);
+        }
+        None
     }
 
     fn resolve_type_expr(&self, ty: &TypeExpr) -> Type {
@@ -450,18 +818,130 @@ impl Default for TypeChecker {
     }
 }
 
-/// Check exhaustiveness of pattern matching
+/// Collect variable bindings from a pattern into a type environment
+fn collect_pattern_bindings(pattern: &Pattern, env: &mut TypeEnv) {
+    match pattern {
+        Pattern::Ident { name, .. } => {
+            env.define(name.clone(), Type::Unknown);
+        }
+        Pattern::Variant { data, .. } => {
+            if let Some(inner) = data {
+                collect_pattern_bindings(inner, env);
+            }
+        }
+        Pattern::Record { fields, .. } => {
+            for (_, pat) in fields {
+                collect_pattern_bindings(pat, env);
+            }
+        }
+        Pattern::Wildcard { .. }
+        | Pattern::IntLit { .. }
+        | Pattern::BoolLit { .. }
+        | Pattern::TextLit { .. } => {}
+    }
+}
+
+/// Check if a pattern is a catch-all (wildcard or plain identifier binding)
+fn is_catch_all(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Wildcard { .. } => true,
+        Pattern::Ident { .. } => true,
+        _ => false,
+    }
+}
+
+/// Check exhaustiveness of pattern matching (public API)
 pub fn check_exhaustiveness(
-    _scrutinee_type: &Type,
-    _patterns: &[Pattern],
+    scrutinee_type: &Type,
+    patterns: &[Pattern],
 ) -> Result<(), Vec<String>> {
-    // TODO: implement exhaustiveness checking
-    Ok(())
+    // Check for catch-all
+    if patterns.iter().any(|p| is_catch_all(p)) {
+        return Ok(());
+    }
+
+    let missing = match scrutinee_type {
+        Type::Option(_) => {
+            let mut covered = HashSet::new();
+            for pat in patterns {
+                if let Pattern::Variant { name, .. } = pat {
+                    covered.insert(name.as_str());
+                }
+            }
+            let mut missing = Vec::new();
+            if !covered.contains("Some") {
+                missing.push("Some(_)".to_string());
+            }
+            if !covered.contains("None") {
+                missing.push("None".to_string());
+            }
+            missing
+        }
+        Type::Result(_, _) => {
+            let mut covered = HashSet::new();
+            for pat in patterns {
+                if let Pattern::Variant { name, .. } = pat {
+                    covered.insert(name.as_str());
+                }
+            }
+            let mut missing = Vec::new();
+            if !covered.contains("Ok") {
+                missing.push("Ok(_)".to_string());
+            }
+            if !covered.contains("Err") {
+                missing.push("Err(_)".to_string());
+            }
+            missing
+        }
+        Type::Bool => {
+            let mut has_true = false;
+            let mut has_false = false;
+            for pat in patterns {
+                if let Pattern::BoolLit { value, .. } = pat {
+                    if *value {
+                        has_true = true;
+                    } else {
+                        has_false = true;
+                    }
+                }
+            }
+            let mut missing = Vec::new();
+            if !has_true {
+                missing.push("true".to_string());
+            }
+            if !has_false {
+                missing.push("false".to_string());
+            }
+            missing
+        }
+        _ => return Ok(()),
+    };
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::{Lexer, Parser, SourceFile};
+    use std::path::PathBuf;
+
+    fn parse_module(source: &str) -> Module {
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = Parser::new(lexer, source_file.clone());
+        parser.parse_module().expect("parse failed")
+    }
+
+    fn check_module(source: &str) -> Result<(), DiagnosticBag> {
+        let module = parse_module(source);
+        let mut checker = TypeChecker::new();
+        checker.check_module(&module)
+    }
 
     #[test]
     fn test_type_env() {
@@ -482,5 +962,291 @@ mod tests {
 
         assert_eq!(child.lookup("x"), Some(&Type::Int));
         assert_eq!(child.lookup("y"), Some(&Type::Bool));
+    }
+
+    // C2: Exhaustive match checking tests
+
+    #[test]
+    fn test_exhaustive_option_match() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Option[Int] = Some(42)
+  match x {
+    Some(n) => n
+    None => 0
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "exhaustive Option match should pass");
+    }
+
+    #[test]
+    fn test_non_exhaustive_option_missing_none() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Option[Int] = Some(42)
+  match x {
+    Some(n) => n
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err(), "missing None should be an error");
+        let diags = result.unwrap_err();
+        let d = &diags.diagnostics()[0];
+        assert_eq!(d.code, "E1004");
+        assert!(d.message.contains("None"), "error should mention missing None");
+    }
+
+    #[test]
+    fn test_non_exhaustive_option_missing_some() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Option[Int] = Some(42)
+  match x {
+    None => 0
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err(), "missing Some should be an error");
+        let diags = result.unwrap_err();
+        let d = &diags.diagnostics()[0];
+        assert_eq!(d.code, "E1004");
+        assert!(d.message.contains("Some"), "error should mention missing Some");
+    }
+
+    #[test]
+    fn test_exhaustive_result_match() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Result[Int, Text] = Ok(42)
+  match x {
+    Ok(n) => n
+    Err(e) => 0
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "exhaustive Result match should pass");
+    }
+
+    #[test]
+    fn test_non_exhaustive_result_missing_err() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Result[Int, Text] = Ok(42)
+  match x {
+    Ok(n) => n
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err(), "missing Err should be an error");
+        let diags = result.unwrap_err();
+        let d = &diags.diagnostics()[0];
+        assert_eq!(d.code, "E1004");
+        assert!(d.message.contains("Err"), "error should mention missing Err");
+    }
+
+    #[test]
+    fn test_exhaustive_bool_match() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  match true {
+    true => 1
+    false => 0
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "exhaustive Bool match should pass");
+    }
+
+    #[test]
+    fn test_non_exhaustive_bool_match() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  match true {
+    true => 1
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err(), "missing false should be an error");
+        let diags = result.unwrap_err();
+        let d = &diags.diagnostics()[0];
+        assert_eq!(d.code, "E1004");
+        assert!(d.message.contains("false"));
+    }
+
+    #[test]
+    fn test_wildcard_covers_all() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Option[Int] = Some(42)
+  match x {
+    Some(n) => n
+    _ => 0
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "wildcard should cover remaining patterns");
+    }
+
+    #[test]
+    fn test_ident_covers_all() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  match 42 {
+    x => x
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "identifier pattern should cover all");
+    }
+
+    #[test]
+    fn test_non_exhaustive_has_suggestion() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Option[Int] = Some(42)
+  match x {
+    Some(n) => n
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err());
+        let diags = result.unwrap_err();
+        let d = &diags.diagnostics()[0];
+        assert!(!d.suggestions.is_empty(), "error should include a suggestion");
+        assert!(
+            d.suggestions[0].title.contains("None"),
+            "suggestion should mention the missing case"
+        );
+    }
+
+    // C4: Effect enforcement tests
+
+    #[test]
+    fn test_effect_declared_correctly() {
+        let source = r#"
+module example
+
+fn greet() effects(Console) {
+  Console.println("hello")
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "declared effect should pass");
+    }
+
+    #[test]
+    fn test_effect_not_declared() {
+        let source = r#"
+module example
+
+fn greet() {
+  Console.println("hello")
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err(), "undeclared effect should be an error");
+        let diags = result.unwrap_err();
+        let d = &diags.diagnostics()[0];
+        assert_eq!(d.code, "E2001");
+        assert!(d.message.contains("Console"));
+    }
+
+    #[test]
+    fn test_effect_enforcement_multiple_effects() {
+        let source = r#"
+module example
+
+fn do_stuff() effects(Console, Fs) {
+  Console.println("reading file")
+  Fs.read("test.txt")
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "all effects declared should pass");
+    }
+
+    #[test]
+    fn test_effect_enforcement_missing_one_effect() {
+        let source = r#"
+module example
+
+fn do_stuff() effects(Console) {
+  Console.println("reading file")
+  Fs.read("test.txt")
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err(), "missing Fs effect should be an error");
+        let diags = result.unwrap_err();
+        assert!(
+            diags.diagnostics().iter().any(|d| d.code == "E2001" && d.message.contains("Fs")),
+            "should report missing Fs effect"
+        );
+    }
+
+    #[test]
+    fn test_pure_function_no_effects() {
+        let source = r#"
+module example
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "pure function should pass");
+    }
+
+    // C3: Error suggestion tests
+
+    #[test]
+    fn test_effect_error_has_suggestion() {
+        let source = r#"
+module example
+
+fn greet() {
+  Console.println("hello")
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err());
+        let diags = result.unwrap_err();
+        let d = &diags.diagnostics()[0];
+        assert!(!d.suggestions.is_empty(), "effect error should include a suggestion");
+        assert!(
+            d.suggestions[0].title.contains("effects"),
+            "suggestion should mention adding effects declaration"
+        );
     }
 }
