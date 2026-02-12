@@ -1,0 +1,27 @@
+module tests.runtime.deterministic_effects
+
+test "fixed clock returns constant time" using effects(Clock = Clock.fixed(1700000000)) {
+  let now = Clock.now()
+  assert(now == 1700000000)
+}
+
+test "seeded rand is deterministic" using effects(Rand = Rand.seeded(42)) {
+  let x = Rand.int(1, 100)
+  let y = Rand.int(1, 100)
+  assert(x == x)
+  assert(y == y)
+}
+
+test "fixed clock sleep is no-op" using effects(Clock = Clock.fixed(5000)) {
+  Clock.sleep(1000)
+  let now = Clock.now()
+  assert(now == 5000)
+}
+
+test "multiple deterministic effects" using effects(Clock = Clock.fixed(999), Rand = Rand.seeded(7)) {
+  let time = Clock.now()
+  let random = Rand.int(1, 10)
+  assert(time == 999)
+  assert(random >= 1)
+  assert(random <= 10)
+}

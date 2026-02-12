@@ -105,12 +105,94 @@ impl Cli {
 }
 
 fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Formatting {} path(s)...", paths.len());
-    if check {
-        println!("(check mode - no files will be modified)");
+    let mut files_formatted = 0;
+    let mut files_changed = 0;
+
+    for path in paths {
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "astra") {
+            match fmt_file(path, check)? {
+                FmtResult::Unchanged => files_formatted += 1,
+                FmtResult::Changed => {
+                    files_formatted += 1;
+                    files_changed += 1;
+                }
+                FmtResult::Error => {}
+            }
+        } else if path.is_dir() {
+            for entry in walkdir(path)? {
+                if entry.extension().map_or(false, |ext| ext == "astra") {
+                    match fmt_file(&entry, check)? {
+                        FmtResult::Unchanged => files_formatted += 1,
+                        FmtResult::Changed => {
+                            files_formatted += 1;
+                            files_changed += 1;
+                        }
+                        FmtResult::Error => {}
+                    }
+                }
+            }
+        }
     }
-    // TODO: Implement formatting
+
+    if check {
+        if files_changed > 0 {
+            println!(
+                "{} file(s) would be reformatted ({} checked)",
+                files_changed, files_formatted
+            );
+            std::process::exit(1);
+        } else {
+            println!("{} file(s) already formatted", files_formatted);
+        }
+    } else {
+        println!(
+            "Formatted {} file(s) ({} changed)",
+            files_formatted, files_changed
+        );
+    }
+
     Ok(())
+}
+
+enum FmtResult {
+    Unchanged,
+    Changed,
+    Error,
+}
+
+fn fmt_file(path: &PathBuf, check: bool) -> Result<FmtResult, Box<dyn std::error::Error>> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+
+    let source_file = SourceFile::new(path.clone(), source.clone());
+    let lexer = Lexer::new(&source_file);
+    let mut parser = AstraParser::new(lexer, source_file.clone());
+
+    let module = match parser.parse_module() {
+        Ok(m) => m,
+        Err(e) => {
+            let bag = crate::diagnostics::DiagnosticBag::from(e);
+            eprintln!("Parse error in {:?}:\n{}", path, bag.format_text(&source));
+            return Ok(FmtResult::Error);
+        }
+    };
+
+    let mut formatter = crate::formatter::Formatter::new();
+    let formatted = formatter.format_module(&module);
+
+    if formatted == source {
+        return Ok(FmtResult::Unchanged);
+    }
+
+    if check {
+        println!("Would reformat: {:?}", path);
+        Ok(FmtResult::Changed)
+    } else {
+        std::fs::write(path, &formatted)
+            .map_err(|e| format!("Failed to write {:?}: {}", path, e))?;
+        println!("Formatted: {:?}", path);
+        Ok(FmtResult::Changed)
+    }
 }
 
 fn run_check(paths: &[PathBuf], json: bool) -> Result<(), Box<dyn std::error::Error>> {

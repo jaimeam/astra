@@ -1,0 +1,62 @@
+module tests.runtime.contracts
+
+fn divide(a: Int, b: Int) -> Int
+  requires b != 0
+{
+  a / b
+}
+
+fn abs(x: Int) -> Int
+  ensures result >= 0
+{
+  if x < 0 {
+    0 - x
+  } else {
+    x
+  }
+}
+
+fn clamp(x: Int, lo: Int, hi: Int) -> Int
+  requires lo <= hi
+  requires lo >= 0
+  ensures result >= lo
+  ensures result <= hi
+{
+  if x < lo {
+    lo
+  } else {
+    if x > hi {
+      hi
+    } else {
+      x
+    }
+  }
+}
+
+test "requires passes with valid args" {
+  assert_eq(divide(10, 2), 5)
+}
+
+test "ensures passes for positive input" {
+  assert_eq(abs(5), 5)
+}
+
+test "ensures passes for negative input" {
+  assert_eq(abs(0 - 5), 5)
+}
+
+test "ensures passes for zero" {
+  assert_eq(abs(0), 0)
+}
+
+test "clamp within range" {
+  assert_eq(clamp(50, 0, 100), 50)
+}
+
+test "clamp below range" {
+  assert_eq(clamp(0 - 10, 0, 100), 0)
+}
+
+test "clamp above range" {
+  assert_eq(clamp(200, 0, 100), 100)
+}
