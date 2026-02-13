@@ -111,6 +111,16 @@ impl RuntimeError {
     pub fn hole_encountered() -> Self {
         Self::new("E4013", "encountered incomplete code (hole)")
     }
+
+    /// Precondition violation error
+    pub fn precondition_violated(fn_name: &str) -> Self {
+        Self::new("E3001", format!("precondition violated in function `{}`", fn_name))
+    }
+
+    /// Postcondition violation error
+    pub fn postcondition_violated(fn_name: &str) -> Self {
+        Self::new("E3002", format!("postcondition violated in function `{}`", fn_name))
+    }
 }
 
 impl fmt::Display for RuntimeError {
@@ -141,6 +151,7 @@ pub enum Value {
     },
     /// Function closure
     Closure {
+        name: Option<String>,
         params: Vec<String>,
         body: ClosureBody,
         env: Environment,
@@ -155,11 +166,15 @@ pub enum Value {
     Err(Box<Value>),
 }
 
-/// Closure body containing the AST block
+/// Closure body containing the AST block and optional contracts
 #[derive(Debug, Clone)]
 pub struct ClosureBody {
     /// The block to execute when called
     pub block: Block,
+    /// Preconditions (requires clauses)
+    pub requires: Vec<Expr>,
+    /// Postconditions (ensures clauses)
+    pub ensures: Vec<Expr>,
 }
 
 /// Compare two values for equality
@@ -336,9 +351,12 @@ impl Interpreter {
             if let Item::FnDef(fn_def) = item {
                 let params: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
                 let closure = Value::Closure {
+                    name: Some(fn_def.name.clone()),
                     params,
                     body: ClosureBody {
                         block: fn_def.body.clone(),
+                        requires: fn_def.requires.clone(),
+                        ensures: fn_def.ensures.clone(),
                     },
                     env: Environment::new(), // Will use global env at call time
                 };
@@ -714,7 +732,7 @@ impl Interpreter {
     /// Call a function value with arguments
     fn call_function(&mut self, func: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
         match func {
-            Value::Closure { params, body, env } => {
+            Value::Closure { name, params, body, env } => {
                 if params.len() != args.len() {
                     return Err(RuntimeError::arity_mismatch(params.len(), args.len()));
                 }
@@ -734,18 +752,72 @@ impl Interpreter {
                     call_env.define(param.clone(), arg);
                 }
 
+                let fn_name = name.as_deref().unwrap_or("<anonymous>");
+
+                // Check preconditions (requires clauses)
+                if !body.requires.is_empty() {
+                    let old_env = std::mem::replace(&mut self.env, call_env.clone());
+                    for req_expr in &body.requires {
+                        let cond = self.eval_expr(req_expr)?;
+                        match cond {
+                            Value::Bool(true) => {}
+                            Value::Bool(false) => {
+                                self.env = old_env;
+                                return Err(RuntimeError::precondition_violated(fn_name));
+                            }
+                            _ => {
+                                self.env = old_env;
+                                return Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond)));
+                            }
+                        }
+                    }
+                    self.env = old_env;
+                }
+
+                // Save call_env for postcondition checking (has param bindings)
+                let saved_call_env = if !body.ensures.is_empty() {
+                    Some(call_env.clone())
+                } else {
+                    None
+                };
+
                 // Execute the body
                 let old_env = std::mem::replace(&mut self.env, call_env);
                 let result = self.eval_block(&body.block);
                 self.env = old_env;
 
                 // Handle early returns from ? operator
-                match result {
+                let result = match result {
                     Err(e) if e.is_early_return() => {
                         Ok(e.get_early_return().unwrap())
                     }
                     other => other,
+                }?;
+
+                // Check postconditions (ensures clauses)
+                if !body.ensures.is_empty() {
+                    // Use the call env (which has param bindings) and add `result`
+                    let mut ensures_env = saved_call_env.unwrap();
+                    ensures_env.define("result".to_string(), result.clone());
+                    let old_env = std::mem::replace(&mut self.env, ensures_env);
+                    for ens_expr in &body.ensures {
+                        let cond = self.eval_expr(ens_expr)?;
+                        match cond {
+                            Value::Bool(true) => {}
+                            Value::Bool(false) => {
+                                self.env = old_env;
+                                return Err(RuntimeError::postcondition_violated(fn_name));
+                            }
+                            _ => {
+                                self.env = old_env;
+                                return Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond)));
+                            }
+                        }
+                    }
+                    self.env = old_env;
                 }
+
+                Ok(result)
             }
             _ => Err(RuntimeError::not_callable()),
         }
@@ -1684,5 +1756,123 @@ fn main() effects(Clock) {
         let result = interp.eval_module(&module).unwrap();
 
         assert!(matches!(result, Value::Int(1700000000)));
+    }
+
+    #[test]
+    fn test_requires_passes() {
+        let source = r#"
+module example
+
+fn divide(a: Int, b: Int) -> Int
+  requires b != 0
+{
+  a / b
+}
+
+fn main() -> Int {
+  divide(10, 2)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_requires_fails() {
+        let source = r#"
+module example
+
+fn divide(a: Int, b: Int) -> Int
+  requires b != 0
+{
+  a / b
+}
+
+fn main() -> Int {
+  divide(10, 0)
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code, "E3001");
+    }
+
+    #[test]
+    fn test_ensures_passes() {
+        let source = r#"
+module example
+
+fn abs(x: Int) -> Int
+  ensures result >= 0
+{
+  if x < 0 { 0 - x } else { x }
+}
+
+fn main() -> Int {
+  abs(0 - 5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_ensures_fails() {
+        let source = r#"
+module example
+
+fn bad_abs(x: Int) -> Int
+  ensures result >= 0
+{
+  x
+}
+
+fn main() -> Int {
+  bad_abs(0 - 5)
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code, "E3002");
+    }
+
+    #[test]
+    fn test_multiple_requires() {
+        let source = r#"
+module example
+
+fn clamp(x: Int, lo: Int, hi: Int) -> Int
+  requires lo <= hi
+  requires lo >= 0
+{
+  if x < lo { lo } else { if x > hi { hi } else { x } }
+}
+
+fn main() -> Int {
+  clamp(50, 0, 100)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(50)));
+    }
+
+    #[test]
+    fn test_requires_and_ensures() {
+        let source = r#"
+module example
+
+fn safe_divide(a: Int, b: Int) -> Int
+  requires b != 0
+  ensures result * b <= a
+{
+  a / b
+}
+
+fn main() -> Int {
+  safe_divide(10, 3)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
     }
 }

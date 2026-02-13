@@ -256,9 +256,19 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
-        // Skip requires/ensures for now
-        let requires = Vec::new();
-        let ensures = Vec::new();
+        // Parse optional requires clauses
+        let mut requires = Vec::new();
+        while self.check(TokenKind::Requires) {
+            self.advance();
+            requires.push(self.parse_expr()?);
+        }
+
+        // Parse optional ensures clauses
+        let mut ensures = Vec::new();
+        while self.check(TokenKind::Ensures) {
+            self.advance();
+            ensures.push(self.parse_expr()?);
+        }
 
         let body = self.parse_block()?;
 
