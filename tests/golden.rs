@@ -8,7 +8,9 @@ use std::path::Path;
 
 /// Run all golden tests in a directory
 fn run_golden_tests(dir: &str, extension: &str) {
-    let test_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join(dir);
+    let test_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join(dir);
 
     if !test_dir.exists() {
         // No tests yet - this is fine for initial setup
@@ -31,7 +33,11 @@ fn run_single_golden_test(path: &Path) {
 
     // TODO: Once parser is complete, parse and serialize AST
     // For now, just verify the file is readable
-    assert!(!source.is_empty(), "Test file should not be empty: {:?}", path);
+    assert!(
+        !source.is_empty(),
+        "Test file should not be empty: {:?}",
+        path
+    );
 
     // If snapshot exists, compare
     if snapshot_path.exists() {

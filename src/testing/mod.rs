@@ -262,7 +262,7 @@ pub mod property {
 
     impl Generator<bool> for BoolGenerator {
         fn generate(&self, rng: &mut dyn FnMut() -> u64) -> bool {
-            rng() % 2 == 0
+            rng().is_multiple_of(2)
         }
 
         fn shrink(&self, value: bool) -> Vec<bool> {

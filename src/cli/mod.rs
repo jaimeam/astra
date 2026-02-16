@@ -5,7 +5,6 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::diagnostics::DiagnosticBag;
 use crate::interpreter::{
     Capabilities, ConsoleCapability, EnvCapability, FixedClock, Interpreter, SeededRand,
 };
@@ -113,7 +112,7 @@ fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn st
     let mut files_changed = 0;
 
     for path in paths {
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "astra") {
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "astra") {
             match fmt_file(path, check)? {
                 FmtResult::Unchanged => files_formatted += 1,
                 FmtResult::Changed => {
@@ -124,7 +123,7 @@ fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn st
             }
         } else if path.is_dir() {
             for entry in walkdir(path)? {
-                if entry.extension().map_or(false, |ext| ext == "astra") {
+                if entry.extension().is_some_and(|ext| ext == "astra") {
                     match fmt_file(&entry, check)? {
                         FmtResult::Unchanged => files_formatted += 1,
                         FmtResult::Changed => {
@@ -165,8 +164,8 @@ enum FmtResult {
 }
 
 fn fmt_file(path: &PathBuf, check: bool) -> Result<FmtResult, Box<dyn std::error::Error>> {
-    let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+    let source =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
 
     let source_file = SourceFile::new(path.clone(), source.clone());
     let lexer = Lexer::new(&source_file);
@@ -175,8 +174,7 @@ fn fmt_file(path: &PathBuf, check: bool) -> Result<FmtResult, Box<dyn std::error
     let module = match parser.parse_module() {
         Ok(m) => m,
         Err(e) => {
-            let bag = crate::diagnostics::DiagnosticBag::from(e);
-            eprintln!("Parse error in {:?}:\n{}", path, bag.format_text(&source));
+            eprintln!("Parse error in {:?}:\n{}", path, e.format_text(&source));
             return Ok(FmtResult::Error);
         }
     };
@@ -205,20 +203,24 @@ struct CheckCounts {
     warnings: usize,
 }
 
-fn run_check(paths: &[PathBuf], strict: bool, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_check(
+    paths: &[PathBuf],
+    strict: bool,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut total_errors = 0;
     let mut total_warnings = 0;
     let mut files_checked = 0;
 
     for path in paths {
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "astra") {
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "astra") {
             files_checked += 1;
             let counts = check_file(path, json)?;
             total_errors += counts.errors;
             total_warnings += counts.warnings;
         } else if path.is_dir() {
             for entry in walkdir(path)? {
-                if entry.extension().map_or(false, |ext| ext == "astra") {
+                if entry.extension().is_some_and(|ext| ext == "astra") {
                     files_checked += 1;
                     let counts = check_file(&entry, json)?;
                     total_errors += counts.errors;
@@ -237,7 +239,10 @@ fn run_check(paths: &[PathBuf], strict: bool, json: bool) -> Result<(), Box<dyn 
         }
         if total_warnings > 0 {
             if strict {
-                parts.push(format!("{} warning(s) [treated as errors with --strict]", total_warnings));
+                parts.push(format!(
+                    "{} warning(s) [treated as errors with --strict]",
+                    total_warnings
+                ));
             } else {
                 parts.push(format!("{} warning(s)", total_warnings));
             }
@@ -261,8 +266,8 @@ fn run_check(paths: &[PathBuf], strict: bool, json: bool) -> Result<(), Box<dyn 
 }
 
 fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::error::Error>> {
-    let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+    let source =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
 
     let source_file = SourceFile::new(path.clone(), source.clone());
     let lexer = Lexer::new(&source_file);
@@ -312,14 +317,13 @@ fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::er
             })
         }
         Err(e) => {
-            let bag = DiagnosticBag::from(e);
             if json {
-                println!("{}", bag.to_json());
+                println!("{}", e.to_json());
             } else {
-                eprintln!("Error in {:?}:\n{}", path, bag.format_text(&source));
+                eprintln!("Error in {:?}:\n{}", path, e.format_text(&source));
             }
             Ok(CheckCounts {
-                errors: bag.len(),
+                errors: e.len(),
                 warnings: 0,
             })
         }
@@ -353,7 +357,7 @@ fn run_test(
     let files = walkdir(&current_dir)?;
     let astra_files: Vec<_> = files
         .into_iter()
-        .filter(|p| p.extension().map_or(false, |ext| ext == "astra"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "astra"))
         .collect();
 
     let mut total_tests = 0;
@@ -371,8 +375,7 @@ fn run_test(
         let module = match parser.parse_module() {
             Ok(m) => m,
             Err(e) => {
-                let bag = DiagnosticBag::from(e);
-                eprintln!("Parse error in {:?}:\n{}", path, bag.format_text(&source));
+                eprintln!("Parse error in {:?}:\n{}", path, e.format_text(&source));
                 continue;
             }
         };
@@ -415,7 +418,10 @@ fn run_test(
         }
     }
 
-    println!("\n{} tests: {} passed, {} failed", total_tests, passed, failed);
+    println!(
+        "\n{} tests: {} passed, {} failed",
+        total_tests, passed, failed
+    );
 
     if failed > 0 {
         std::process::exit(1);
@@ -525,10 +531,9 @@ fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error
     let source_file = SourceFile::new(file.clone(), source.clone());
     let lexer = Lexer::new(&source_file);
     let mut parser = AstraParser::new(lexer, source_file.clone());
-    let module = parser.parse_module().map_err(|e| {
-        let bag = DiagnosticBag::from(e);
-        format!("Parse error:\n{}", bag.format_text(&source))
-    })?;
+    let module = parser
+        .parse_module()
+        .map_err(|e| format!("Parse error:\n{}", e.format_text(&source)))?;
 
     // Set up capabilities
     let console = Box::new(RealConsole);
