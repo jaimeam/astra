@@ -543,11 +543,14 @@ cargo run -- run fibonacci.astra
 
 ## Next Steps
 
+- **[Astra by Example](examples.md)** - Cookbook of common patterns and idioms
+- **[Effects System](effects.md)** - Deep dive into Astra's capability-based effects
+- **[Testing Guide](testing.md)** - How to write deterministic tests
+- **[Standard Library](stdlib.md)** - API reference for built-in types and functions
 - **[Language Specification](spec.md)** - Complete syntax and semantics reference
 - **[Error Codes Reference](errors.md)** - All error codes with explanations
 - **[Formatting Rules](formatting.md)** - How the canonical formatter works
 - **[Why Astra?](why-astra.md)** - Design philosophy and rationale
-- **[Examples](../examples/)** - More code examples
 
 ## Quick Reference
 

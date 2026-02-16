@@ -111,11 +111,14 @@ test "rejects zero amount" {
 ## Documentation
 
 - **[Why Astra?](docs/why-astra.md)** - The case for an LLM-native language
-- [Getting Started](docs/getting-started.md)
-- [Language Specification](docs/spec.md)
-- [Error Codes Reference](docs/errors.md)
-- [Formatting Rules](docs/formatting.md)
-- [Effects System](docs/effects.md)
+- [Getting Started](docs/getting-started.md) - Tutorial for your first Astra program
+- [Astra by Example](docs/examples.md) - Cookbook of common patterns and idioms
+- [Language Specification](docs/spec.md) - Complete syntax and semantics reference
+- [Effects System](docs/effects.md) - Guide to Astra's capability-based effects
+- [Testing Guide](docs/testing.md) - How to write and run tests
+- [Standard Library](docs/stdlib.md) - API reference for built-in types and functions
+- [Error Codes Reference](docs/errors.md) - All error codes with examples and fixes
+- [Formatting Rules](docs/formatting.md) - Canonical formatting specification
 
 ## Project Structure
 
