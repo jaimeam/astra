@@ -232,6 +232,14 @@ pub enum Stmt {
         ty: Option<TypeExpr>,
         value: Box<Expr>,
     },
+    /// Let destructuring binding (e.g., `let {x, y} = expr`)
+    LetPattern {
+        id: NodeId,
+        span: Span,
+        pattern: Pattern,
+        ty: Option<TypeExpr>,
+        value: Box<Expr>,
+    },
     /// Assignment
     Assign {
         id: NodeId,
@@ -372,6 +380,15 @@ pub enum Expr {
         elements: Vec<Expr>,
     },
 
+    // Lambda/anonymous function
+    Lambda {
+        id: NodeId,
+        span: Span,
+        params: Vec<LambdaParam>,
+        return_type: Option<Box<TypeExpr>>,
+        body: Box<Block>,
+    },
+
     // Special
     Hole {
         id: NodeId,
@@ -401,6 +418,7 @@ impl Expr {
             | Expr::Try { span, .. }
             | Expr::TryElse { span, .. }
             | Expr::ListLit { span, .. }
+            | Expr::Lambda { span, .. }
             | Expr::Hole { span, .. } => span,
         }
     }
@@ -467,12 +485,22 @@ impl UnaryOp {
     }
 }
 
+/// Lambda parameter (may omit type for inference)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LambdaParam {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub ty: Option<TypeExpr>,
+}
+
 /// Match arm
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchArm {
     pub id: NodeId,
     pub span: Span,
     pub pattern: Pattern,
+    pub guard: Option<Box<Expr>>,
     pub body: Box<Expr>,
 }
 

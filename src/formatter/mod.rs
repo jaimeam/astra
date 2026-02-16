@@ -387,6 +387,18 @@ impl Formatter {
                 self.write(" = ");
                 self.format_expr(value);
             }
+            Stmt::LetPattern {
+                pattern, ty, value, ..
+            } => {
+                self.write("let ");
+                self.format_pattern(pattern);
+                if let Some(ty) = ty {
+                    self.write(": ");
+                    self.format_type_expr(ty);
+                }
+                self.write(" = ");
+                self.format_expr(value);
+            }
             Stmt::Assign { target, value, .. } => {
                 self.format_expr(target);
                 self.write(" = ");
@@ -517,6 +529,10 @@ impl Formatter {
                 for arm in arms {
                     self.write_indent();
                     self.format_pattern(&arm.pattern);
+                    if let Some(guard) = &arm.guard {
+                        self.write(" if ");
+                        self.format_expr(guard);
+                    }
                     self.write(" => ");
                     self.format_expr(&arm.body);
                     self.newline();
@@ -548,6 +564,31 @@ impl Formatter {
                     self.format_expr(elem);
                 }
                 self.write("]");
+            }
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                ..
+            } => {
+                self.write("fn(");
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write(&param.name);
+                    if let Some(ty) = &param.ty {
+                        self.write(": ");
+                        self.format_type_expr(ty);
+                    }
+                }
+                self.write(")");
+                if let Some(ret) = return_type {
+                    self.write(" -> ");
+                    self.format_type_expr(ret);
+                }
+                self.write(" ");
+                self.format_block(body);
             }
             Expr::Hole { .. } => {
                 self.write("???");

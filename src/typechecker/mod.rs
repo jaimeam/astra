@@ -439,6 +439,7 @@ impl TypeChecker {
             if seen_return {
                 let stmt_span = match stmt {
                     Stmt::Let { span, .. }
+                    | Stmt::LetPattern { span, .. }
                     | Stmt::Assign { span, .. }
                     | Stmt::Expr { span, .. }
                     | Stmt::Return { span, .. } => span.clone(),
@@ -521,6 +522,11 @@ impl TypeChecker {
 
                 // Track for lint (W0001 unused var, W0006 shadowed binding)
                 self.lint_define_var(name, span);
+            }
+            Stmt::LetPattern { pattern, value, .. } => {
+                self.check_expr_with_effects(value, env, effects);
+                // Bind pattern variables into the environment
+                collect_pattern_bindings(pattern, env);
             }
             Stmt::Assign { target, value, .. } => {
                 let _target_type = self.check_expr_with_effects(target, env, effects);
@@ -658,6 +664,10 @@ impl TypeChecker {
                 for (i, arm) in arms.iter().enumerate() {
                     let mut arm_env = env.clone();
                     collect_pattern_bindings(&arm.pattern, &mut arm_env);
+                    // Check guard expression if present
+                    if let Some(guard) = &arm.guard {
+                        self.check_expr_with_effects(guard, &arm_env, effects);
+                    }
                     let arm_ty = self.check_expr_with_effects(&arm.body, &arm_env, effects);
                     if i == 0 {
                         first_arm_ty = arm_ty;
@@ -760,6 +770,44 @@ impl TypeChecker {
                     self.check_expr_with_effects(elem, env, effects);
                 }
                 Type::Unknown // List type not fully tracked yet
+            }
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                ..
+            } => {
+                let mut lambda_env = env.clone();
+                self.push_lint_scope();
+                for param in params {
+                    let ty = param
+                        .ty
+                        .as_ref()
+                        .map(|t| self.resolve_type_expr(t))
+                        .unwrap_or(Type::Unknown);
+                    lambda_env.define(param.name.clone(), ty);
+                    self.lint_define_var(&param.name, &param.span);
+                }
+                let _body_ty = self.check_block_with_effects(body, &mut lambda_env, effects);
+                self.pop_lint_scope();
+
+                let param_types: Vec<Type> = params
+                    .iter()
+                    .map(|p| {
+                        p.ty.as_ref()
+                            .map(|t| self.resolve_type_expr(t))
+                            .unwrap_or(Type::Unknown)
+                    })
+                    .collect();
+                let ret_ty = return_type
+                    .as_ref()
+                    .map(|t| self.resolve_type_expr(t))
+                    .unwrap_or(Type::Unknown);
+                Type::Function {
+                    params: param_types,
+                    ret: Box::new(ret_ty),
+                    effects: Vec::new(),
+                }
             }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(
