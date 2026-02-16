@@ -363,7 +363,7 @@ impl TypeChecker {
                 match name.as_str() {
                     "Some" | "None" | "Ok" | "Err" => Type::Unknown,
                     "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => Type::Unknown,
-                    "assert" | "assert_eq" => Type::Unknown,
+                    "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" => Type::Unknown,
                     _ => {
                         if let Some(ty) = env.lookup(name) {
                             ty.clone()
@@ -546,6 +546,12 @@ impl TypeChecker {
             Expr::Try { expr, .. } | Expr::TryElse { expr, .. } => {
                 self.check_expr_with_effects(expr, env, effects);
                 Type::Unknown
+            }
+            Expr::ListLit { elements, .. } => {
+                for elem in elements {
+                    self.check_expr_with_effects(elem, env, effects);
+                }
+                Type::Unknown // List type not fully tracked yet
             }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(
@@ -1226,6 +1232,22 @@ fn add(a: Int, b: Int) -> Int {
 "#;
         let result = check_module(source);
         assert!(result.is_ok(), "pure function should pass");
+    }
+
+    // H5: Type inference for let bindings
+    #[test]
+    fn test_let_without_type_annotation() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x = 42
+  let y = x + 8
+  y
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "let without type annotation should pass type checking");
     }
 
     // C3: Error suggestion tests

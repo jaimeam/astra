@@ -164,6 +164,8 @@ pub enum Value {
     Ok(Box<Value>),
     /// Result::Err
     Err(Box<Value>),
+    /// List of values
+    List(Vec<Value>),
 }
 
 /// Closure body containing the AST block and optional contracts
@@ -199,6 +201,9 @@ fn values_equal(left: &Value, right: &Value) -> bool {
             r1.len() == r2.len() && r1.iter().all(|(k, v)| {
                 r2.get(k).map_or(false, |v2| values_equal(v, v2))
             })
+        }
+        (Value::List(a), Value::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
         }
         // Closures are never equal
         (Value::Closure { .. }, Value::Closure { .. }) => false,
@@ -495,6 +500,56 @@ impl Interpreter {
                             let val = self.eval_expr(&args[0])?;
                             return Ok(Value::Err(Box::new(val)));
                         }
+                        // N2: print builtin (no newline)
+                        "print" => {
+                            let mut output = String::new();
+                            for (i, arg) in args.iter().enumerate() {
+                                if i > 0 {
+                                    output.push(' ');
+                                }
+                                let val = self.eval_expr(arg)?;
+                                output.push_str(&format_value(&val));
+                            }
+                            if let Some(console) = &self.capabilities.console {
+                                console.print(&output);
+                            }
+                            return Ok(Value::Unit);
+                        }
+                        // N2: println builtin
+                        "println" => {
+                            let mut output = String::new();
+                            for (i, arg) in args.iter().enumerate() {
+                                if i > 0 {
+                                    output.push(' ');
+                                }
+                                let val = self.eval_expr(arg)?;
+                                output.push_str(&format_value(&val));
+                            }
+                            if let Some(console) = &self.capabilities.console {
+                                console.println(&output);
+                            }
+                            return Ok(Value::Unit);
+                        }
+                        // N3: len builtin
+                        "len" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Text(s) => Ok(Value::Int(s.len() as i64)),
+                                Value::List(l) => Ok(Value::Int(l.len() as i64)),
+                                _ => Err(RuntimeError::type_mismatch("Text or List", &format!("{:?}", val))),
+                            };
+                        }
+                        // N3: to_text builtin
+                        "to_text" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return Ok(Value::Text(format_value(&val)));
+                        }
                         _ => {}
                     }
                 }
@@ -601,6 +656,15 @@ impl Interpreter {
                     }
                     _ => Err(RuntimeError::type_mismatch("Record", &format!("{:?}", val))),
                 }
+            }
+
+            // List literal
+            Expr::ListLit { elements, .. } => {
+                let mut values = Vec::new();
+                for elem in elements {
+                    values.push(self.eval_expr(elem)?);
+                }
+                Ok(Value::List(values))
             }
 
             // Hole (incomplete code)
@@ -1084,6 +1148,30 @@ impl Interpreter {
                 args.into_iter().next().ok_or_else(|| RuntimeError::arity_mismatch(1, 0))
             }
 
+            // List methods
+            (Value::List(items), "len") => Ok(Value::Int(items.len() as i64)),
+            (Value::List(items), "get") => {
+                if let Some(Value::Int(idx)) = args.first() {
+                    let idx = *idx as usize;
+                    if idx < items.len() {
+                        Ok(Value::Some(Box::new(items[idx].clone())))
+                    } else {
+                        Ok(Value::None)
+                    }
+                } else {
+                    Err(RuntimeError::type_mismatch("Int", "other"))
+                }
+            }
+            (Value::List(items), "contains") => {
+                if let Some(needle) = args.first() {
+                    Ok(Value::Bool(items.iter().any(|v| values_equal(v, needle))))
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+            // Text methods
+            (Value::Text(s), "len") => Ok(Value::Int(s.len() as i64)),
+
             _ => Err(RuntimeError::unknown_method(&format!("{:?}", receiver), method)),
         }
     }
@@ -1220,6 +1308,10 @@ fn format_value(value: &Value) -> String {
             }
         }
         Value::Closure { .. } => "<closure>".to_string(),
+        Value::List(items) => {
+            let item_strs: Vec<String> = items.iter().map(|v| format_value(v)).collect();
+            format!("[{}]", item_strs.join(", "))
+        }
         Value::Some(inner) => format!("Some({})", format_value(inner)),
         Value::None => "None".to_string(),
         Value::Ok(inner) => format!("Ok({})", format_value(inner)),
@@ -1874,5 +1966,274 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(3)));
+    }
+
+    // H5: Type inference for let bindings
+    #[test]
+    fn test_let_type_inference() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x = 42
+  let y = x + 8
+  y
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(50)));
+    }
+
+    #[test]
+    fn test_let_type_inference_text() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  let greeting = "Hello"
+  let name = "World"
+  greeting + " " + name
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "Hello World"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    // N1: List literal syntax
+    #[test]
+    fn test_list_literal_empty() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let xs = []
+  len(xs)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(0)));
+    }
+
+    #[test]
+    fn test_list_literal_ints() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let xs = [1, 2, 3]
+  len(xs)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_list_get() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let xs = [10, 20, 30]
+  match xs.get(1) {
+    Some(n) => n
+    None => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(20)));
+    }
+
+    #[test]
+    fn test_list_get_out_of_bounds() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let xs = [10, 20, 30]
+  match xs.get(5) {
+    Some(n) => n
+    None => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(0)));
+    }
+
+    #[test]
+    fn test_list_contains() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  let xs = [1, 2, 3]
+  xs.contains(2)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_list_method_len() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let xs = [10, 20, 30, 40]
+  xs.len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(4)));
+    }
+
+    // N2: print and println builtins
+    #[test]
+    fn test_println_builtin() {
+        let source = r#"
+module example
+
+fn main() {
+  println("hello from builtin")
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_print_builtin() {
+        let source = r#"
+module example
+
+fn main() {
+  print("no newline")
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    // N3: len and to_text builtins
+    #[test]
+    fn test_len_text() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  len("hello")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_to_text_int() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  to_text(42)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "42"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_to_text_bool() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  to_text(true)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "true"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_text_len_method() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let s = "hello"
+  s.len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    // N4: if-then-else expression syntax
+    #[test]
+    fn test_if_then_else_basic() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  if true then 42 else 0
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_if_then_else_false() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  if false then 42 else 0
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(0)));
+    }
+
+    #[test]
+    fn test_if_then_else_with_expr() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x = 10
+  if x > 5 then x * 2 else x
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(20)));
+    }
+
+    // List equality
+    #[test]
+    fn test_list_equality() {
+        let source = r#"
+module example
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = [1, 2, 3]
+  assert_eq(xs, ys)
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
     }
 }

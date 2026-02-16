@@ -790,6 +790,7 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::RParen)?;
                 Ok(expr)
             }
+            TokenKind::LBracket => self.parse_list_expr(),
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
             TokenKind::Assert => self.parse_assert_expr(),
@@ -837,36 +838,93 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_list_expr(&mut self) -> Result<Expr, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::LBracket)?;
+
+        let mut elements = Vec::new();
+        if !self.check(TokenKind::RBracket) {
+            elements.push(self.parse_expr()?);
+            while self.check(TokenKind::Comma) {
+                self.advance();
+                if self.check(TokenKind::RBracket) {
+                    break;
+                }
+                elements.push(self.parse_expr()?);
+            }
+        }
+
+        self.expect(TokenKind::RBracket)?;
+        let end_span = self.current_span();
+
+        Ok(Expr::ListLit {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            elements,
+        })
+    }
+
     fn parse_if_expr(&mut self) -> Result<Expr, Diagnostic> {
         let start_span = self.current_span();
         self.expect(TokenKind::If)?;
         let cond = Box::new(self.parse_expr()?);
-        let then_branch = Box::new(self.parse_block()?);
 
-        let else_branch = if self.check(TokenKind::Else) {
+        // Support both `if cond { ... }` and `if cond then expr else expr`
+        if self.check(TokenKind::Then) {
+            // N4: `if X then Y else Z` syntax
             self.advance();
-            if self.check(TokenKind::If) {
-                Some(Box::new(self.parse_if_expr()?))
-            } else {
-                let block = self.parse_block()?;
-                Some(Box::new(Expr::Block {
-                    id: NodeId::new(),
-                    span: block.span.clone(),
-                    block: Box::new(block),
-                }))
-            }
-        } else {
-            None
-        };
+            let then_expr = self.parse_expr()?;
+            let then_span = then_expr.span().clone();
+            let then_branch = Box::new(Block {
+                id: NodeId::new(),
+                span: then_span,
+                stmts: Vec::new(),
+                expr: Some(Box::new(then_expr)),
+            });
 
-        let end_span = self.current_span();
-        Ok(Expr::If {
-            id: NodeId::new(),
-            span: start_span.merge(&end_span),
-            cond,
-            then_branch,
-            else_branch,
-        })
+            let else_branch = if self.check(TokenKind::Else) {
+                self.advance();
+                Some(Box::new(self.parse_expr()?))
+            } else {
+                None
+            };
+
+            let end_span = self.current_span();
+            Ok(Expr::If {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                cond,
+                then_branch,
+                else_branch,
+            })
+        } else {
+            let then_branch = Box::new(self.parse_block()?);
+
+            let else_branch = if self.check(TokenKind::Else) {
+                self.advance();
+                if self.check(TokenKind::If) {
+                    Some(Box::new(self.parse_if_expr()?))
+                } else {
+                    let block = self.parse_block()?;
+                    Some(Box::new(Expr::Block {
+                        id: NodeId::new(),
+                        span: block.span.clone(),
+                        block: Box::new(block),
+                    }))
+                }
+            } else {
+                None
+            };
+
+            let end_span = self.current_span();
+            Ok(Expr::If {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                cond,
+                then_branch,
+                else_branch,
+            })
+        }
     }
 
     fn parse_assert_expr(&mut self) -> Result<Expr, Diagnostic> {
@@ -1106,6 +1164,7 @@ impl<'a> Parser<'a> {
             | Expr::Block { span, .. }
             | Expr::Try { span, .. }
             | Expr::TryElse { span, .. }
+            | Expr::ListLit { span, .. }
             | Expr::Hole { span, .. } => span.clone(),
         }
     }

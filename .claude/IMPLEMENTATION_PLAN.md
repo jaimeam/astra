@@ -1,7 +1,7 @@
 # Astra Implementation Plan
 
 > This document tracks the implementation status and coordinates parallel development across agents.
-> **Last updated**: 2026-02-12
+> **Last updated**: 2026-02-16
 
 ## Vision Alignment Check
 
@@ -41,16 +41,16 @@
 | **H2** | `requires`/`ensures` parsing | Contract syntax | ✅ Done | 2h |
 | **H3** | Contract runtime checks | Precondition/postcondition enforcement | ✅ Done | 2h |
 | **H4** | Formatter wired to CLI | One canonical format via `astra fmt` | ✅ Done | 4h |
-| **H5** | Type inference for let bindings | Less boilerplate | ⬜ Ready | 3h |
+| **H5** | Type inference for let bindings | Less boilerplate | ✅ Done | 3h |
 
 ### 🟢 Nice to Have (General language features)
 
 | # | Task | Impact | Status | Est. Time |
 |---|------|--------|--------|-----------|
-| **N1** | List literal syntax `[1, 2, 3]` | Convenience | ⬜ Ready | 2h |
-| **N2** | `print` builtin (no newline) | Convenience | ⬜ Ready | 30m |
-| **N3** | `len` and `to_text` builtins | Convenience | ⬜ Ready | 30m |
-| **N4** | `if X then Y else Z` syntax | Alternative syntax | ⬜ Ready | 1h |
+| **N1** | List literal syntax `[1, 2, 3]` | Convenience | ✅ Done | 2h |
+| **N2** | `print`/`println` builtins | Convenience I/O without effects | ✅ Done | 30m |
+| **N3** | `len` and `to_text` builtins | Convenience | ✅ Done | 30m |
+| **N4** | `if X then Y else Z` syntax | Alternative syntax | ✅ Done | 1h |
 
 ---
 
@@ -66,7 +66,7 @@
 - [x] Test block parsing and execution
 - [x] assert/assert_eq builtins
 - [x] All 7 examples pass check and run
-- [x] 73+ unit tests, 4 golden tests, 29+ Astra tests
+- [x] 92 unit tests, 4 golden tests, 33 Astra tests
 - [x] Option/Result runtime (C1)
 - [x] ? operator for Option/Result (H1)
 - [x] Exhaustive match checking for Option/Result/Bool/enums (C2)
@@ -79,9 +79,20 @@
 - [x] `requires`/`ensures` contract parsing (H2)
 - [x] Contract runtime enforcement with E3001/E3002 errors (H3)
 - [x] Formatter wired to `astra fmt` with check mode (H4)
+- [x] Type inference for let bindings (H5)
+- [x] List literal syntax `[1, 2, 3]` with methods (N1)
+- [x] `print`/`println` builtins (N2)
+- [x] `len` and `to_text` builtins (N3)
+- [x] `if X then Y else Z` expression syntax (N4)
 
 ### Not Started 🔴
-- [ ] Type inference for let bindings (H5)
+- [ ] Generic functions (`fn identity[T](x: T) -> T`)
+- [ ] Lambda/closure expressions (`fn(x) { x + 1 }`)
+- [ ] Multi-field variant patterns (`Rectangle(w, h)`)
+- [ ] Record destructuring patterns (`{x, y}`)
+- [ ] Function type syntax in expressions (`(Int) -> Int`)
+- [ ] For loops / iterators
+- [ ] Module system (imports across files)
 
 ---
 
@@ -89,10 +100,10 @@
 
 ```bash
 cargo build                              # Build
-cargo test                               # Run all tests (73+)
+cargo test                               # Run all tests (92+)
 cargo run -- run examples/hello.astra    # Run a program
 cargo run -- check examples/             # Check syntax + types + effects
-cargo run -- test                        # Run test blocks (29+)
+cargo run -- test                        # Run test blocks (33+)
 cargo run -- test "filter"               # Run matching tests
 cargo run -- check --json file.astra     # JSON diagnostics with suggestions
 cargo run -- fmt file.astra              # Format a file
@@ -118,26 +129,40 @@ cargo run -- fmt .                       # Format all .astra files
 | 2026-02-12 | claude | H2: `requires`/`ensures` contract parsing |
 | 2026-02-12 | claude | H3: Contract runtime checks (E3001 precondition, E3002 postcondition) |
 | 2026-02-12 | claude | H4: Formatter wired to `astra fmt` CLI with check mode |
+| 2026-02-16 | claude | H5: Type inference for let bindings (verified working) |
+| 2026-02-16 | claude | N1: List literal syntax with `get`, `contains`, `len` methods |
+| 2026-02-16 | claude | N2: `print`/`println` builtins (no effect required) |
+| 2026-02-16 | claude | N3: `len` and `to_text` builtins + `Text.len()` method |
+| 2026-02-16 | claude | N4: `if X then Y else Z` inline expression syntax |
 
 ---
 
 ## For Next Agent
 
-**Recommended task**: **H5 (Type inference for let bindings)**
+**Recommended tasks** (in priority order):
 
-This is the highest-impact remaining task because:
-1. It reduces boilerplate - LLMs can write simpler code
-2. `let x = 42` should infer `Int` without requiring `let x: Int = 42`
-3. The type checker already has type inference infrastructure
+1. **Generic functions** (`fn identity[T](x: T) -> T`)
+   - The parser already has type parameter parsing for types/enums
+   - Needs: function type parameter parsing, type instantiation in checker
+   - Impact: Enables stdlib functions like `map`, `filter`, `fold`
 
-**After H5, prioritize**:
-- N1 (list literal syntax) - common data structure
-- N2/N3 (print, len, to_text builtins) - basic I/O and introspection
+2. **Lambda/closure expressions** (`fn(x) { x + 1 }`)
+   - Enables functional programming patterns (map/filter/fold)
+   - The interpreter already supports closures
+   - Needs: parser support for anonymous `fn` expressions
+
+3. **Multi-field variant patterns** (`Rectangle(w, h)`)
+   - Currently only single-field variants can be destructured
+   - Needs: parser + pattern matcher updates
+
+4. **For loops / iterators**
+   - `for x in list { ... }` iteration
+   - Essential for practical programming with lists
 
 **Avoid getting distracted by**:
-- Advanced type system features (generics, traits)
 - Performance optimizations
 - Cross-module compilation
+- Advanced type system features (traits, type classes)
 
 The goal is to make Astra demonstrably better for LLMs than Python/JS/Rust as quickly as possible.
 
@@ -150,9 +175,9 @@ The goal is to make Astra demonstrably better for LLMs than Python/JS/Rust as qu
 | Lexer | `src/parser/lexer.rs` | In-file |
 | Parser | `src/parser/parser.rs` | In-file + golden |
 | AST | `src/parser/ast.rs` | - |
-| Type Checker | `src/typechecker/mod.rs` | In-file (16+) |
+| Type Checker | `src/typechecker/mod.rs` | In-file (17+) |
 | Effects | `src/effects/mod.rs` | In-file |
-| Interpreter | `src/interpreter/mod.rs` | In-file (25+) |
+| Interpreter | `src/interpreter/mod.rs` | In-file (44+) |
 | CLI | `src/cli/mod.rs` | Integration |
 | Diagnostics | `src/diagnostics/mod.rs` | In-file |
 | Formatter | `src/formatter/mod.rs` | Via golden tests |
