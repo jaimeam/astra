@@ -1,0 +1,20 @@
+module examples.generics
+
+fn identity[T](x: T) -> T {
+  x
+}
+
+fn apply[T, U](x: T, f: (T) -> U) -> U {
+  f(x)
+}
+
+fn main() effects(Console) {
+  let x = identity(42)
+  let y = identity("hello")
+
+  Console.println("identity(42) = " + to_text(x))
+  Console.println("identity(\"hello\") = " + y)
+
+  let doubled = apply(21, fn(n) { n * 2 })
+  Console.println("apply(21, double) = " + to_text(doubled))
+}

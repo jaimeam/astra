@@ -370,6 +370,11 @@ impl TypeChecker {
         // Push lint scope for function body
         self.push_lint_scope();
 
+        // Register type parameters as unknown types
+        for tp in &def.type_params {
+            fn_env.define(tp.clone(), Type::Unknown);
+        }
+
         // Add parameters to environment
         for param in &def.params {
             let ty = self.resolve_type_expr(&param.ty);
@@ -809,6 +814,21 @@ impl TypeChecker {
                     effects: Vec::new(),
                 }
             }
+            Expr::ForIn {
+                binding,
+                iter,
+                body,
+                ..
+            } => {
+                self.check_expr_with_effects(iter, env, effects);
+                let mut loop_env = env.clone();
+                loop_env.define(binding.clone(), Type::Unknown);
+                self.push_lint_scope();
+                self.lint_define_var(binding, iter.span());
+                self.check_block_with_effects(body, &mut loop_env, effects);
+                self.pop_lint_scope();
+                Type::Unit
+            }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(
                     Diagnostic::info("H0001")
@@ -1113,8 +1133,8 @@ fn collect_pattern_bindings(pattern: &Pattern, env: &mut TypeEnv) {
         Pattern::Ident { name, .. } => {
             env.define(name.clone(), Type::Unknown);
         }
-        Pattern::Variant { data, .. } => {
-            if let Some(inner) = data {
+        Pattern::Variant { fields, .. } => {
+            for inner in fields {
                 collect_pattern_bindings(inner, env);
             }
         }

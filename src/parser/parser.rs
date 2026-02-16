@@ -232,6 +232,7 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::Fn)?;
         let name = self.expect_ident()?;
+        let type_params = self.parse_optional_type_params()?;
         self.expect(TokenKind::LParen)?;
         let params = self.parse_params()?;
         self.expect(TokenKind::RParen)?;
@@ -279,6 +280,7 @@ impl<'a> Parser<'a> {
             span: start_span.merge(&end_span),
             visibility,
             name,
+            type_params,
             params,
             return_type,
             effects,
@@ -535,8 +537,19 @@ impl<'a> Parser<'a> {
                 // Parse an expression
                 let e = self.parse_expr()?;
 
-                // If we're at the end of the block, this is the final expression
-                if self.check(TokenKind::RBrace) {
+                // Check for assignment: `expr = value`
+                if self.check(TokenKind::Eq) {
+                    self.advance();
+                    let value = self.parse_expr()?;
+                    let span = e.span().merge(value.span());
+                    stmts.push(Stmt::Assign {
+                        id: NodeId::new(),
+                        span,
+                        target: Box::new(e),
+                        value: Box::new(value),
+                    });
+                } else if self.check(TokenKind::RBrace) {
+                    // If we're at the end of the block, this is the final expression
                     expr = Some(Box::new(e));
                     break;
                 } else {
@@ -858,6 +871,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::LBracket => self.parse_list_expr(),
             TokenKind::Fn => self.parse_lambda_expr(),
+            TokenKind::For => self.parse_for_expr(),
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
             TokenKind::Assert => self.parse_assert_expr(),
@@ -985,6 +999,24 @@ impl<'a> Parser<'a> {
             span: start_span.merge(&end_span),
             name,
             ty,
+        })
+    }
+
+    fn parse_for_expr(&mut self) -> Result<Expr, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::For)?;
+        let binding = self.expect_ident()?;
+        self.expect(TokenKind::In)?;
+        let iter = Box::new(self.parse_expr()?);
+        let body = Box::new(self.parse_block()?);
+        let end_span = self.current_span();
+
+        Ok(Expr::ForIn {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            binding,
+            iter,
+            body,
         })
     }
 
@@ -1171,18 +1203,24 @@ impl<'a> Parser<'a> {
 
                 if self.check(TokenKind::LParen) {
                     self.advance();
-                    let data = if self.check(TokenKind::RParen) {
-                        None
-                    } else {
-                        Some(Box::new(self.parse_pattern()?))
-                    };
+                    let mut fields = Vec::new();
+                    if !self.check(TokenKind::RParen) {
+                        fields.push(self.parse_pattern()?);
+                        while self.check(TokenKind::Comma) {
+                            self.advance();
+                            if self.check(TokenKind::RParen) {
+                                break;
+                            }
+                            fields.push(self.parse_pattern()?);
+                        }
+                    }
                     self.expect(TokenKind::RParen)?;
                     let end_span = self.current_span();
                     Ok(Pattern::Variant {
                         id: NodeId::new(),
                         span: token.span.merge(&end_span),
                         name,
-                        data,
+                        fields,
                     })
                 } else if name
                     .chars()
@@ -1194,7 +1232,7 @@ impl<'a> Parser<'a> {
                         id: NodeId::new(),
                         span: token.span,
                         name,
-                        data: None,
+                        fields: Vec::new(),
                     })
                 } else {
                     Ok(Pattern::Ident {
@@ -1347,6 +1385,7 @@ impl<'a> Parser<'a> {
             | Expr::TryElse { span, .. }
             | Expr::ListLit { span, .. }
             | Expr::Lambda { span, .. }
+            | Expr::ForIn { span, .. }
             | Expr::Hole { span, .. } => span.clone(),
         }
     }

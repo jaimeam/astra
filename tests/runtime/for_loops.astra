@@ -1,0 +1,36 @@
+module tests.runtime.for_loops
+
+test "for loop over list" {
+  let mut sum = 0
+  for x in [1, 2, 3, 4, 5] {
+    sum = sum + x
+  }
+  assert_eq(sum, 15)
+}
+
+test "for loop with empty list" {
+  let mut count = 0
+  for _x in [] {
+    count = count + 1
+  }
+  assert_eq(count, 0)
+}
+
+test "for loop with map result" {
+  let doubled = [1, 2, 3].map(fn(x) { x * 2 })
+  let mut sum = 0
+  for x in doubled {
+    sum = sum + x
+  }
+  assert_eq(sum, 12)
+}
+
+test "nested for loops" {
+  let mut sum = 0
+  for x in [1, 2] {
+    for y in [10, 20] {
+      sum = sum + x * y
+    }
+  }
+  assert_eq(sum, 90)
+}

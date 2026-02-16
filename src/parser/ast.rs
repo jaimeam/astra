@@ -122,6 +122,7 @@ pub struct FnDef {
     pub span: Span,
     pub visibility: Visibility,
     pub name: String,
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub effects: Vec<String>,
@@ -389,6 +390,15 @@ pub enum Expr {
         body: Box<Block>,
     },
 
+    // For loop
+    ForIn {
+        id: NodeId,
+        span: Span,
+        binding: String,
+        iter: Box<Expr>,
+        body: Box<Block>,
+    },
+
     // Special
     Hole {
         id: NodeId,
@@ -419,6 +429,7 @@ impl Expr {
             | Expr::TryElse { span, .. }
             | Expr::ListLit { span, .. }
             | Expr::Lambda { span, .. }
+            | Expr::ForIn { span, .. }
             | Expr::Hole { span, .. } => span,
         }
     }
@@ -541,7 +552,7 @@ pub enum Pattern {
         id: NodeId,
         span: Span,
         name: String,
-        data: Option<Box<Pattern>>,
+        fields: Vec<Pattern>,
     },
 }
 

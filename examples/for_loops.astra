@@ -1,0 +1,22 @@
+module examples.for_loops
+
+fn sum_list(items: List[Int]) -> Int
+  effects(Console)
+{
+  let mut total = 0
+  for item in items {
+    total = total + item
+  }
+  Console.println("Sum: " + to_text(total))
+  total
+}
+
+fn main() effects(Console) {
+  let numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  sum_list(numbers)
+
+  Console.println("Squares:")
+  for n in [1, 2, 3, 4, 5] {
+    Console.println("  " + to_text(n) + "^2 = " + to_text(n * n))
+  }
+}

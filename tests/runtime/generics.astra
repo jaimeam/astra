@@ -1,0 +1,37 @@
+module tests.runtime.generics
+
+fn identity[T](x: T) -> T {
+  x
+}
+
+fn first[T, U](a: T, b: U) -> T {
+  a
+}
+
+fn wrap[T](x: T) -> Option[T] {
+  Some(x)
+}
+
+test "generic identity with Int" {
+  assert_eq(identity(42), 42)
+}
+
+test "generic identity with Text" {
+  assert_eq(identity("hello"), "hello")
+}
+
+test "generic identity with Bool" {
+  assert_eq(identity(true), true)
+}
+
+test "generic first function" {
+  assert_eq(first(1, "hello"), 1)
+}
+
+test "generic wrap function" {
+  let result = wrap(42)
+  match result {
+    Some(n) => assert_eq(n, 42)
+    None => assert(false)
+  }
+}

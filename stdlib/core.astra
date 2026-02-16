@@ -6,5 +6,5 @@ type Unit = ()
 # Identity function
 fn identity[T](x: T) -> T { x }
 
-# Constant function
-fn const[T, U](x: T, _: U) -> T { x }
+# Constant function (always returns first argument)
+fn constant[T, U](x: T, unused: U) -> T { x }
