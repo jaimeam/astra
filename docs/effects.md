@@ -4,7 +4,7 @@ The effects system is Astra's most distinctive feature. It makes side effects ex
 
 ## Why Effects?
 
-In most languages, any function can secretly perform I/O:
+In most languages, any function can secretly perform I/O. This is true across Python, TypeScript, Go, and Rust:
 
 ```python
 # Python - no way to know this reads files and makes HTTP calls
@@ -14,7 +14,25 @@ def process(path):
     return len(data)
 ```
 
-In Astra, capabilities must be declared in the function signature:
+```typescript
+// TypeScript - same problem, even with strict types
+function process(path: string): number {
+    const data = fs.readFileSync(path, "utf-8"); // Hidden file I/O
+    fetch("/api", { method: "POST", body: data }); // Hidden network I/O
+    return data.length;
+}
+```
+
+```go
+// Go - same problem
+func process(path string) int {
+    data, _ := os.ReadFile(path)            // Hidden file I/O
+    http.Post("/api", "text/plain", bytes.NewReader(data)) // Hidden network I/O
+    return len(data)
+}
+```
+
+None of these signatures tell you what side effects the function performs. In Astra, capabilities must be declared in the function signature:
 
 ```astra
 fn process(path: Text) -> Int

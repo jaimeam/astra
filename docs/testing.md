@@ -281,11 +281,11 @@ Property tests use seeded randomness internally, so they are deterministic and r
 
 ## Key Differences from Other Languages
 
-| Feature | Python (pytest) | Rust | Astra |
-|---------|----------------|------|-------|
-| Test syntax | `def test_foo():` | `#[test] fn test_foo()` | `test "foo" { }` |
-| Assertions | `assert x == y` | `assert_eq!(x, y)` | `assert_eq(x, y)` |
-| Test location | Separate files | Same file, `#[cfg(test)]` module | Same file, inline |
-| Mocking I/O | External libraries | External libraries | Built-in `using effects()` |
-| Determinism | Not guaranteed | Not guaranteed | Guaranteed by design |
-| Test runner | External (`pytest`) | Built-in (`cargo test`) | Built-in (`astra test`) |
+| Feature | Python (pytest) | TypeScript (Jest) | Go | Rust | Astra |
+|---------|----------------|-------------------|-----|------|-------|
+| Test syntax | `def test_foo():` | `it("foo", () => { })` | `func TestFoo(t *testing.T)` | `#[test] fn test_foo()` | `test "foo" { }` |
+| Assertions | `assert x == y` | `expect(x).toBe(y)` | `if x != y { t.Error() }` | `assert_eq!(x, y)` | `assert_eq(x, y)` |
+| Test location | Separate files | Separate files | `_test.go` files | Same file, `#[cfg(test)]` | Same file, inline |
+| Mocking I/O | External libraries | External libraries | External libraries / interfaces | External libraries | Built-in `using effects()` |
+| Determinism | Not guaranteed | Not guaranteed | Not guaranteed | Not guaranteed | Guaranteed by design |
+| Test runner | External (`pytest`) | External (`jest` / `vitest`) | Built-in (`go test`) | Built-in (`cargo test`) | Built-in (`astra test`) |
