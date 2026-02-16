@@ -1,6 +1,7 @@
 //! Recursive descent parser for Astra
 //!
 //! This is a foundational implementation that will be expanded.
+#![allow(clippy::result_large_err)]
 
 use crate::diagnostics::{Diagnostic, DiagnosticBag, Span};
 use crate::parser::ast::*;
@@ -1050,7 +1051,12 @@ impl<'a> Parser<'a> {
                         name,
                         data,
                     })
-                } else if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                } else if name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+                {
                     Ok(Pattern::Variant {
                         id: NodeId::new(),
                         span: token.span,
@@ -1108,10 +1114,12 @@ impl<'a> Parser<'a> {
         if std::mem::discriminant(&token.kind) == std::mem::discriminant(&kind) {
             Ok(token)
         } else {
-            Err(Diagnostic::error(crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN)
-                .message(format!("Expected {:?}, found {:?}", kind, token.kind))
-                .span(token.span)
-                .build())
+            Err(
+                Diagnostic::error(crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN)
+                    .message(format!("Expected {:?}, found {:?}", kind, token.kind))
+                    .span(token.span)
+                    .build(),
+            )
         }
     }
 
@@ -1119,10 +1127,12 @@ impl<'a> Parser<'a> {
         let token = self.advance();
         match token.kind {
             TokenKind::Ident(name) => Ok(name),
-            _ => Err(Diagnostic::error(crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN)
-                .message(format!("Expected identifier, found {:?}", token.kind))
-                .span(token.span)
-                .build()),
+            _ => Err(
+                Diagnostic::error(crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN)
+                    .message(format!("Expected identifier, found {:?}", token.kind))
+                    .span(token.span)
+                    .build(),
+            ),
         }
     }
 
@@ -1130,10 +1140,12 @@ impl<'a> Parser<'a> {
         let token = self.advance();
         match token.kind {
             TokenKind::TextLit(s) => Ok(s),
-            _ => Err(Diagnostic::error(crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN)
-                .message(format!("Expected string literal, found {:?}", token.kind))
-                .span(token.span)
-                .build()),
+            _ => Err(
+                Diagnostic::error(crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN)
+                    .message(format!("Expected string literal, found {:?}", token.kind))
+                    .span(token.span)
+                    .build(),
+            ),
         }
     }
 

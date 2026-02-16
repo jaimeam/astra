@@ -205,7 +205,8 @@ impl<'a> Lexer<'a> {
         if self.at_eof {
             return Token::new(
                 TokenKind::Eof,
-                self.source.span(self.source.content().len(), self.source.content().len()),
+                self.source
+                    .span(self.source.content().len(), self.source.content().len()),
             );
         }
 
@@ -232,7 +233,8 @@ impl<'a> Lexer<'a> {
                     self.at_eof = true;
                     return Token::new(
                         TokenKind::Eof,
-                        self.source.span(self.source.content().len(), self.source.content().len()),
+                        self.source
+                            .span(self.source.content().len(), self.source.content().len()),
                     );
                 }
             }
@@ -287,64 +289,75 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        assert_eq!(lex("fn let if else match"), vec![
-            TokenKind::Fn,
-            TokenKind::Let,
-            TokenKind::If,
-            TokenKind::Else,
-            TokenKind::Match,
-        ]);
+        assert_eq!(
+            lex("fn let if else match"),
+            vec![
+                TokenKind::Fn,
+                TokenKind::Let,
+                TokenKind::If,
+                TokenKind::Else,
+                TokenKind::Match,
+            ]
+        );
     }
 
     #[test]
     fn test_literals() {
-        assert_eq!(lex("42 true false"), vec![
-            TokenKind::IntLit(42),
-            TokenKind::True,
-            TokenKind::False,
-        ]);
+        assert_eq!(
+            lex("42 true false"),
+            vec![TokenKind::IntLit(42), TokenKind::True, TokenKind::False,]
+        );
     }
 
     #[test]
     fn test_identifiers() {
-        assert_eq!(lex("foo bar_baz _underscore"), vec![
-            TokenKind::Ident("foo".to_string()),
-            TokenKind::Ident("bar_baz".to_string()),
-            TokenKind::Ident("_underscore".to_string()),
-        ]);
+        assert_eq!(
+            lex("foo bar_baz _underscore"),
+            vec![
+                TokenKind::Ident("foo".to_string()),
+                TokenKind::Ident("bar_baz".to_string()),
+                TokenKind::Ident("_underscore".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn test_operators() {
-        assert_eq!(lex("+ - * / == != < > <= >="), vec![
-            TokenKind::Plus,
-            TokenKind::Minus,
-            TokenKind::Star,
-            TokenKind::Slash,
-            TokenKind::EqEq,
-            TokenKind::BangEq,
-            TokenKind::Lt,
-            TokenKind::Gt,
-            TokenKind::LtEq,
-            TokenKind::GtEq,
-        ]);
+        assert_eq!(
+            lex("+ - * / == != < > <= >="),
+            vec![
+                TokenKind::Plus,
+                TokenKind::Minus,
+                TokenKind::Star,
+                TokenKind::Slash,
+                TokenKind::EqEq,
+                TokenKind::BangEq,
+                TokenKind::Lt,
+                TokenKind::Gt,
+                TokenKind::LtEq,
+                TokenKind::GtEq,
+            ]
+        );
     }
 
     #[test]
     fn test_punctuation() {
-        assert_eq!(lex("( ) { } [ ] , : = -> => |"), vec![
-            TokenKind::LParen,
-            TokenKind::RParen,
-            TokenKind::LBrace,
-            TokenKind::RBrace,
-            TokenKind::LBracket,
-            TokenKind::RBracket,
-            TokenKind::Comma,
-            TokenKind::Colon,
-            TokenKind::Eq,
-            TokenKind::Arrow,
-            TokenKind::FatArrow,
-            TokenKind::Pipe,
-        ]);
+        assert_eq!(
+            lex("( ) { } [ ] , : = -> => |"),
+            vec![
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+                TokenKind::Comma,
+                TokenKind::Colon,
+                TokenKind::Eq,
+                TokenKind::Arrow,
+                TokenKind::FatArrow,
+                TokenKind::Pipe,
+            ]
+        );
     }
 }

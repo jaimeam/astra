@@ -150,7 +150,10 @@ enum MatchTypeKind {
     /// Bool type: must cover true and false
     Bool,
     /// User-defined enum: must cover all variants
-    Enum { _name: String, variants: Vec<String> },
+    Enum {
+        _name: String,
+        variants: Vec<String>,
+    },
     /// Unknown or unconstrained type (skip exhaustiveness)
     Other,
 }
@@ -266,27 +269,20 @@ impl TypeChecker {
                 Item::Import(import) => {
                     // Track imports for W0002 (unused import)
                     let import_name = match &import.kind {
-                        ImportKind::Module => import
-                            .path
-                            .segments
-                            .last()
-                            .cloned()
-                            .unwrap_or_default(),
+                        ImportKind::Module => {
+                            import.path.segments.last().cloned().unwrap_or_default()
+                        }
                         ImportKind::Alias(alias) => alias.clone(),
                         ImportKind::Items(items) => {
                             // Track each imported item
                             for item_name in items {
-                                self.imports.push((
-                                    item_name.clone(),
-                                    import.span.clone(),
-                                    false,
-                                ));
+                                self.imports
+                                    .push((item_name.clone(), import.span.clone(), false));
                             }
                             continue;
                         }
                     };
-                    self.imports
-                        .push((import_name, import.span.clone(), false));
+                    self.imports.push((import_name, import.span.clone(), false));
                 }
                 Item::TypeDef(def) => self.env.register_type(def.clone()),
                 Item::EnumDef(def) => self.env.register_enum(def.clone()),
@@ -325,13 +321,11 @@ impl TypeChecker {
         for (name, span, used) in &self.imports {
             if !*used {
                 self.diagnostics.push(
-                    Diagnostic::warning(
-                        crate::diagnostics::error_codes::warnings::UNUSED_IMPORT,
-                    )
-                    .message(format!("Unused import `{}`", name))
-                    .span(span.clone())
-                    .note(Note::new("remove this import if it is no longer needed"))
-                    .build(),
+                    Diagnostic::warning(crate::diagnostics::error_codes::warnings::UNUSED_IMPORT)
+                        .message(format!("Unused import `{}`", name))
+                        .span(span.clone())
+                        .note(Note::new("remove this import if it is no longer needed"))
+                        .build(),
                 );
             }
         }
@@ -395,23 +389,23 @@ impl TypeChecker {
         for used_effect in &effects_used {
             if !declared_effects.contains(used_effect) {
                 self.diagnostics.push(
-                    Diagnostic::error(crate::diagnostics::error_codes::effects::EFFECT_NOT_DECLARED)
-                        .message(format!(
-                            "Effect `{}` used but not declared in function `{}`",
-                            used_effect, def.name
-                        ))
-                        .span(def.span.clone())
-                        .note(Note::new(format!(
-                            "function `{}` must declare `effects({})` or remove this call",
-                            def.name, used_effect
-                        )))
-                        .suggestion(
-                            Suggestion::new(format!(
-                                "Add `effects({})` to the function signature",
-                                effects_used.iter().cloned().collect::<Vec<_>>().join(", ")
-                            ))
-                        )
-                        .build(),
+                    Diagnostic::error(
+                        crate::diagnostics::error_codes::effects::EFFECT_NOT_DECLARED,
+                    )
+                    .message(format!(
+                        "Effect `{}` used but not declared in function `{}`",
+                        used_effect, def.name
+                    ))
+                    .span(def.span.clone())
+                    .note(Note::new(format!(
+                        "function `{}` must declare `effects({})` or remove this call",
+                        def.name, used_effect
+                    )))
+                    .suggestion(Suggestion::new(format!(
+                        "Add `effects({})` to the function signature",
+                        effects_used.iter().cloned().collect::<Vec<_>>().join(", ")
+                    )))
+                    .build(),
                 );
             }
         }
@@ -494,7 +488,11 @@ impl TypeChecker {
     ) {
         match stmt {
             Stmt::Let {
-                name, ty, value, span, ..
+                name,
+                ty,
+                value,
+                span,
+                ..
             } => {
                 let value_type = self.check_expr_with_effects(value, env, effects);
 
@@ -503,16 +501,18 @@ impl TypeChecker {
                 if let Some(declared) = &declared_type {
                     if !self.types_compatible(&value_type, declared) {
                         self.diagnostics.push(
-                            Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
-                                .message(format!(
-                                    "Expected type {:?}, found {:?}",
-                                    declared, value_type
-                                ))
-                                .suggestion(Suggestion::new(format!(
-                                    "Change the type annotation to match the value type `{:?}`",
-                                    value_type
-                                )))
-                                .build(),
+                            Diagnostic::error(
+                                crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                            )
+                            .message(format!(
+                                "Expected type {:?}, found {:?}",
+                                declared, value_type
+                            ))
+                            .suggestion(Suggestion::new(format!(
+                                "Change the type annotation to match the value type `{:?}`",
+                                value_type
+                            )))
+                            .build(),
                         );
                     }
                 }
@@ -553,7 +553,9 @@ impl TypeChecker {
                 match name.as_str() {
                     "Some" | "None" | "Ok" | "Err" => Type::Unknown,
                     "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => Type::Unknown,
-                    "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" => Type::Unknown,
+                    "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" => {
+                        Type::Unknown
+                    }
                     _ => {
                         // Mark variable as used for W0001 lint
                         self.lint_use_var(name);
@@ -574,22 +576,32 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let left_ty = self.check_expr_with_effects(left, env, effects);
                 let right_ty = self.check_expr_with_effects(right, env, effects);
 
                 match op {
                     // Comparison operators always return Bool
-                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le
-                    | BinaryOp::Gt | BinaryOp::Ge => Type::Bool,
+                    BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge => Type::Bool,
                     // Logical operators return Bool
                     BinaryOp::And | BinaryOp::Or => Type::Bool,
                     // Arithmetic operators
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                    BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::Div
                     | BinaryOp::Mod => {
                         if left_ty == Type::Int && right_ty == Type::Int {
                             Type::Int
-                        } else if left_ty == Type::Text && right_ty == Type::Text
+                        } else if left_ty == Type::Text
+                            && right_ty == Type::Text
                             && *op == BinaryOp::Add
                         {
                             Type::Text
@@ -615,16 +627,17 @@ impl TypeChecker {
                 }
 
                 let mut then_env = env.clone();
-                let then_ty =
-                    self.check_block_with_effects(then_branch, &mut then_env, effects);
+                let then_ty = self.check_block_with_effects(then_branch, &mut then_env, effects);
 
                 if let Some(else_expr) = else_branch {
                     let else_ty = self.check_expr_with_effects(else_expr, env, effects);
                     if then_ty != else_ty && then_ty != Type::Unknown && else_ty != Type::Unknown {
                         self.diagnostics.push(
-                            Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
-                                .message("If branches have different types")
-                                .build(),
+                            Diagnostic::error(
+                                crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                            )
+                            .message("If branches have different types")
+                            .build(),
                         );
                     }
                     then_ty
@@ -645,8 +658,7 @@ impl TypeChecker {
                 for (i, arm) in arms.iter().enumerate() {
                     let mut arm_env = env.clone();
                     collect_pattern_bindings(&arm.pattern, &mut arm_env);
-                    let arm_ty =
-                        self.check_expr_with_effects(&arm.body, &arm_env, effects);
+                    let arm_ty = self.check_expr_with_effects(&arm.body, &arm_env, effects);
                     if i == 0 {
                         first_arm_ty = arm_ty;
                     }
@@ -711,7 +723,10 @@ impl TypeChecker {
                 let field_types: Vec<_> = fields
                     .iter()
                     .map(|(name, expr)| {
-                        (name.clone(), self.check_expr_with_effects(expr, env, effects))
+                        (
+                            name.clone(),
+                            self.check_expr_with_effects(expr, env, effects),
+                        )
                     })
                     .collect();
                 Type::Record(field_types)
@@ -770,10 +785,14 @@ impl TypeChecker {
         let match_kind = self.infer_match_kind(scrutinee_ty, patterns, env);
 
         // Check for wildcard or catch-all patterns first
+        #[allow(clippy::redundant_closure)]
         if patterns.iter().any(|p| is_catch_all(p)) {
             // W0005: Wildcard match — warn when the type is known and all
             // variants could be explicitly listed
-            if let Some(wildcard_pat) = patterns.iter().find(|p| matches!(p, Pattern::Wildcard { .. })) {
+            if let Some(wildcard_pat) = patterns
+                .iter()
+                .find(|p| matches!(p, Pattern::Wildcard { .. }))
+            {
                 let type_name = match &match_kind {
                     MatchTypeKind::Option => Some("Option"),
                     MatchTypeKind::Result => Some("Result"),
@@ -809,11 +828,8 @@ impl TypeChecker {
             MatchTypeKind::Option => {
                 let mut covered = HashSet::new();
                 for pat in patterns {
-                    match pat {
-                        Pattern::Variant { name, .. } => {
-                            covered.insert(name.as_str());
-                        }
-                        _ => {}
+                    if let Pattern::Variant { name, .. } = pat {
+                        covered.insert(name.as_str());
                     }
                 }
                 let mut missing = Vec::new();
@@ -828,11 +844,8 @@ impl TypeChecker {
             MatchTypeKind::Result => {
                 let mut covered = HashSet::new();
                 for pat in patterns {
-                    match pat {
-                        Pattern::Variant { name, .. } => {
-                            covered.insert(name.as_str());
-                        }
-                        _ => {}
+                    if let Pattern::Variant { name, .. } = pat {
+                        covered.insert(name.as_str());
                     }
                 }
                 let mut missing = Vec::new();
@@ -876,7 +889,7 @@ impl TypeChecker {
                 variants
                     .iter()
                     .filter(|v| !covered.contains(v.as_str()))
-                    .map(|v| v.clone())
+                    .cloned()
                     .collect()
             }
             MatchTypeKind::Other => {
@@ -894,19 +907,17 @@ impl TypeChecker {
                 .join("\n");
 
             self.diagnostics.push(
-                Diagnostic::error(
-                    crate::diagnostics::error_codes::types::NON_EXHAUSTIVE_MATCH,
-                )
-                .message(format!(
-                    "Non-exhaustive match: missing pattern(s) `{}`",
-                    missing_display
-                ))
-                .span(match_span.clone())
-                .suggestion(Suggestion::new(format!(
-                    "Add missing case(s):\n{}",
-                    suggestion_text
-                )))
-                .build(),
+                Diagnostic::error(crate::diagnostics::error_codes::types::NON_EXHAUSTIVE_MATCH)
+                    .message(format!(
+                        "Non-exhaustive match: missing pattern(s) `{}`",
+                        missing_display
+                    ))
+                    .span(match_span.clone())
+                    .suggestion(Suggestion::new(format!(
+                        "Add missing case(s):\n{}",
+                        suggestion_text
+                    )))
+                    .build(),
             );
         }
     }
@@ -978,7 +989,7 @@ impl TypeChecker {
     /// Find an enum definition that contains the given variant name
     fn find_enum_containing_variant(&self, variant: &str, env: &TypeEnv) -> Option<EnumDef> {
         // Search in the current environment's enum defs
-        for (_, enum_def) in &env.enum_defs {
+        for enum_def in env.enum_defs.values() {
             if enum_def.variants.iter().any(|v| v.name == variant) {
                 return Some(enum_def.clone());
             }
@@ -1073,11 +1084,7 @@ fn collect_pattern_bindings(pattern: &Pattern, env: &mut TypeEnv) {
 
 /// Check if a pattern is a catch-all (wildcard or plain identifier binding)
 fn is_catch_all(pattern: &Pattern) -> bool {
-    match pattern {
-        Pattern::Wildcard { .. } => true,
-        Pattern::Ident { .. } => true,
-        _ => false,
-    }
+    matches!(pattern, Pattern::Wildcard { .. } | Pattern::Ident { .. })
 }
 
 /// Check exhaustiveness of pattern matching (public API)
@@ -1086,7 +1093,7 @@ pub fn check_exhaustiveness(
     patterns: &[Pattern],
 ) -> Result<(), Vec<String>> {
     // Check for catch-all
-    if patterns.iter().any(|p| is_catch_all(p)) {
+    if patterns.iter().any(is_catch_all) {
         return Ok(());
     }
 
@@ -1239,7 +1246,10 @@ fn main() -> Int {
         let diags = result.unwrap_err();
         let d = &diags.diagnostics()[0];
         assert_eq!(d.code, "E1004");
-        assert!(d.message.contains("None"), "error should mention missing None");
+        assert!(
+            d.message.contains("None"),
+            "error should mention missing None"
+        );
     }
 
     #[test]
@@ -1259,7 +1269,10 @@ fn main() -> Int {
         let diags = result.unwrap_err();
         let d = &diags.diagnostics()[0];
         assert_eq!(d.code, "E1004");
-        assert!(d.message.contains("Some"), "error should mention missing Some");
+        assert!(
+            d.message.contains("Some"),
+            "error should mention missing Some"
+        );
     }
 
     #[test]
@@ -1296,7 +1309,10 @@ fn main() -> Int {
         let diags = result.unwrap_err();
         let d = &diags.diagnostics()[0];
         assert_eq!(d.code, "E1004");
-        assert!(d.message.contains("Err"), "error should mention missing Err");
+        assert!(
+            d.message.contains("Err"),
+            "error should mention missing Err"
+        );
     }
 
     #[test]
@@ -1382,7 +1398,10 @@ fn main() -> Int {
         assert!(result.is_err());
         let diags = result.unwrap_err();
         let d = &diags.diagnostics()[0];
-        assert!(!d.suggestions.is_empty(), "error should include a suggestion");
+        assert!(
+            !d.suggestions.is_empty(),
+            "error should include a suggestion"
+        );
         assert!(
             d.suggestions[0].title.contains("None"),
             "suggestion should mention the missing case"
@@ -1449,7 +1468,10 @@ fn do_stuff() effects(Console) {
         assert!(result.is_err(), "missing Fs effect should be an error");
         let diags = result.unwrap_err();
         assert!(
-            diags.diagnostics().iter().any(|d| d.code == "E2001" && d.message.contains("Fs")),
+            diags
+                .diagnostics()
+                .iter()
+                .any(|d| d.code == "E2001" && d.message.contains("Fs")),
             "should report missing Fs effect"
         );
     }
@@ -1480,7 +1502,10 @@ fn main() -> Int {
 }
 "#;
         let result = check_module(source);
-        assert!(result.is_ok(), "let without type annotation should pass type checking");
+        assert!(
+            result.is_ok(),
+            "let without type annotation should pass type checking"
+        );
     }
 
     // C3: Error suggestion tests
@@ -1498,7 +1523,10 @@ fn greet() {
         assert!(result.is_err());
         let diags = result.unwrap_err();
         let d = &diags.diagnostics()[0];
-        assert!(!d.suggestions.is_empty(), "effect error should include a suggestion");
+        assert!(
+            !d.suggestions.is_empty(),
+            "effect error should include a suggestion"
+        );
         assert!(
             d.suggestions[0].title.contains("effects"),
             "suggestion should mention adding effects declaration"
@@ -1546,7 +1574,10 @@ fn add(a: Int, b: Int) -> Int {
             .iter()
             .filter(|d| d.code == "W0001")
             .collect();
-        assert!(warnings.is_empty(), "used variables should not generate warnings");
+        assert!(
+            warnings.is_empty(),
+            "used variables should not generate warnings"
+        );
     }
 
     #[test]
@@ -1661,10 +1692,7 @@ fn main() -> Int {
             .iter()
             .filter(|d| d.code == "W0006")
             .collect();
-        assert!(
-            !warnings.is_empty(),
-            "should warn about shadowed binding"
-        );
+        assert!(!warnings.is_empty(), "should warn about shadowed binding");
         assert!(warnings[0].message.contains("shadows"));
     }
 
@@ -1710,10 +1738,7 @@ fn main() -> Int {
             .iter()
             .filter(|d| d.code == "W0002")
             .collect();
-        assert!(
-            !warnings.is_empty(),
-            "should warn about unused import"
-        );
+        assert!(!warnings.is_empty(), "should warn about unused import");
         assert!(warnings[0].message.contains("math"));
     }
 

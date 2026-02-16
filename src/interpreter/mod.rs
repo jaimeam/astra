@@ -54,7 +54,10 @@ impl RuntimeError {
 
     /// Type mismatch error
     pub fn type_mismatch(expected: &str, got: &str) -> Self {
-        Self::new("E4002", format!("type mismatch: expected {}, got {}", expected, got))
+        Self::new(
+            "E4002",
+            format!("type mismatch: expected {}, got {}", expected, got),
+        )
     }
 
     /// Division by zero error
@@ -94,7 +97,10 @@ impl RuntimeError {
 
     /// Arity mismatch error
     pub fn arity_mismatch(expected: usize, got: usize) -> Self {
-        Self::new("E4010", format!("expected {} arguments, got {}", expected, got))
+        Self::new(
+            "E4010",
+            format!("expected {} arguments, got {}", expected, got),
+        )
     }
 
     /// Unwrap None error
@@ -114,12 +120,18 @@ impl RuntimeError {
 
     /// Precondition violation error
     pub fn precondition_violated(fn_name: &str) -> Self {
-        Self::new("E3001", format!("precondition violated in function `{}`", fn_name))
+        Self::new(
+            "E3001",
+            format!("precondition violated in function `{}`", fn_name),
+        )
     }
 
     /// Postcondition violation error
     pub fn postcondition_violated(fn_name: &str) -> Self {
-        Self::new("E3002", format!("postcondition violated in function `{}`", fn_name))
+        Self::new(
+            "E3002",
+            format!("postcondition violated in function `{}`", fn_name),
+        )
     }
 }
 
@@ -133,6 +145,7 @@ impl std::error::Error for RuntimeError {}
 
 /// Runtime value
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Value {
     /// Unit value
     Unit,
@@ -191,16 +204,18 @@ fn values_equal(left: &Value, right: &Value) -> bool {
         (Value::Ok(a), Value::Ok(b)) => values_equal(a, b),
         (Value::Err(a), Value::Err(b)) => values_equal(a, b),
         (Value::Variant { name: n1, data: d1 }, Value::Variant { name: n2, data: d2 }) => {
-            n1 == n2 && match (d1, d2) {
-                (None, None) => true,
-                (Some(a), Some(b)) => values_equal(a, b),
-                _ => false,
-            }
+            n1 == n2
+                && match (d1, d2) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => values_equal(a, b),
+                    _ => false,
+                }
         }
         (Value::Record(r1), Value::Record(r2)) => {
-            r1.len() == r2.len() && r1.iter().all(|(k, v)| {
-                r2.get(k).map_or(false, |v2| values_equal(v, v2))
-            })
+            r1.len() == r2.len()
+                && r1
+                    .iter()
+                    .all(|(k, v)| r2.get(k).is_some_and(|v2| values_equal(v, v2)))
         }
         (Value::List(a), Value::List(b)) => {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
@@ -302,6 +317,7 @@ pub trait EnvCapability {
 }
 
 /// Runtime capabilities
+#[derive(Default)]
 pub struct Capabilities {
     pub net: Option<Box<dyn NetCapability>>,
     pub fs: Option<Box<dyn FsCapability>>,
@@ -309,19 +325,6 @@ pub struct Capabilities {
     pub rand: Option<Box<dyn RandCapability>>,
     pub console: Option<Box<dyn ConsoleCapability>>,
     pub env: Option<Box<dyn EnvCapability>>,
-}
-
-impl Default for Capabilities {
-    fn default() -> Self {
-        Self {
-            net: None,
-            fs: None,
-            clock: None,
-            rand: None,
-            console: None,
-            env: None,
-        }
-    }
 }
 
 /// Interpreter for Astra programs
@@ -377,22 +380,18 @@ impl Interpreter {
         self.load_module(module)?;
 
         // Look for and run main function if it exists
-        if let Some(main_fn) = self.env.lookup("main").cloned() {
-            if let Value::Closure { params, body, .. } = main_fn {
-                if params.is_empty() {
-                    // Execute in a child of the global environment
-                    let call_env = self.env.child();
-                    let old_env = std::mem::replace(&mut self.env, call_env);
-                    let result = self.eval_block(&body.block);
-                    self.env = old_env;
-                    // Handle early returns from ? operator
-                    return match result {
-                        Err(e) if e.is_early_return() => {
-                            Ok(e.get_early_return().unwrap())
-                        }
-                        other => other,
-                    };
-                }
+        if let Some(Value::Closure { params, body, .. }) = self.env.lookup("main").cloned() {
+            if params.is_empty() {
+                // Execute in a child of the global environment
+                let call_env = self.env.child();
+                let old_env = std::mem::replace(&mut self.env, call_env);
+                let result = self.eval_block(&body.block);
+                self.env = old_env;
+                // Handle early returns from ? operator
+                return match result {
+                    Err(e) if e.is_early_return() => Ok(e.get_early_return().unwrap()),
+                    other => other,
+                };
             }
         }
 
@@ -417,13 +416,23 @@ impl Interpreter {
                     }
                     // Option/Result constructors
                     "None" => Ok(Value::None),
-                    "Some" => Ok(Value::Variant { name: "Some".to_string(), data: None }),
-                    "Ok" => Ok(Value::Variant { name: "Ok".to_string(), data: None }),
-                    "Err" => Ok(Value::Variant { name: "Err".to_string(), data: None }),
-                    _ => self.env
+                    "Some" => Ok(Value::Variant {
+                        name: "Some".to_string(),
+                        data: None,
+                    }),
+                    "Ok" => Ok(Value::Variant {
+                        name: "Ok".to_string(),
+                        data: None,
+                    }),
+                    "Err" => Ok(Value::Variant {
+                        name: "Err".to_string(),
+                        data: None,
+                    }),
+                    _ => self
+                        .env
                         .lookup(name)
                         .cloned()
-                        .ok_or_else(|| RuntimeError::undefined_variable(name))
+                        .ok_or_else(|| RuntimeError::undefined_variable(name)),
                 }
             }
             Expr::QualifiedIdent { module, name, .. } => {
@@ -432,7 +441,9 @@ impl Interpreter {
             }
 
             // Binary operations
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let left_val = self.eval_expr(left)?;
                 let right_val = self.eval_expr(right)?;
                 self.eval_binary_op(*op, &left_val, &right_val)
@@ -456,11 +467,12 @@ impl Interpreter {
                             let cond = self.eval_expr(&args[0])?;
                             return match cond {
                                 Value::Bool(true) => Ok(Value::Unit),
-                                Value::Bool(false) => Err(RuntimeError::new(
-                                    "E4020",
-                                    "assertion failed",
-                                )),
-                                _ => Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond))),
+                                Value::Bool(false) => {
+                                    Err(RuntimeError::new("E4020", "assertion failed"))
+                                }
+                                _ => {
+                                    Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond)))
+                                }
                             };
                         }
                         "assert_eq" => {
@@ -539,7 +551,10 @@ impl Interpreter {
                             return match val {
                                 Value::Text(s) => Ok(Value::Int(s.len() as i64)),
                                 Value::List(l) => Ok(Value::Int(l.len() as i64)),
-                                _ => Err(RuntimeError::type_mismatch("Text or List", &format!("{:?}", val))),
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "Text or List",
+                                    &format!("{:?}", val),
+                                )),
                             };
                         }
                         // N3: to_text builtin
@@ -563,7 +578,12 @@ impl Interpreter {
             }
 
             // Method calls (for effects)
-            Expr::MethodCall { receiver, method, args, .. } => {
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
                 let recv = self.eval_expr(receiver)?;
                 let mut arg_vals = Vec::new();
                 for arg in args {
@@ -573,7 +593,12 @@ impl Interpreter {
             }
 
             // If expression
-            Expr::If { cond, then_branch, else_branch, .. } => {
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 let cond_val = self.eval_expr(cond)?;
                 match cond_val {
                     Value::Bool(true) => self.eval_block(then_branch),
@@ -584,7 +609,10 @@ impl Interpreter {
                             Ok(Value::Unit)
                         }
                     }
-                    _ => Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond_val))),
+                    _ => Err(RuntimeError::type_mismatch(
+                        "Bool",
+                        &format!("{:?}", cond_val),
+                    )),
                 }
             }
 
@@ -623,7 +651,9 @@ impl Interpreter {
             }
 
             // TryElse expression (unwrap or use default)
-            Expr::TryElse { expr, else_expr, .. } => {
+            Expr::TryElse {
+                expr, else_expr, ..
+            } => {
                 let val = self.eval_expr(expr)?;
                 match val {
                     Value::Some(inner) => Ok(*inner),
@@ -648,12 +678,10 @@ impl Interpreter {
             Expr::FieldAccess { expr, field, .. } => {
                 let val = self.eval_expr(expr)?;
                 match val {
-                    Value::Record(fields) => {
-                        fields
-                            .get(field)
-                            .cloned()
-                            .ok_or_else(|| RuntimeError::invalid_field_access(field))
-                    }
+                    Value::Record(fields) => fields
+                        .get(field)
+                        .cloned()
+                        .ok_or_else(|| RuntimeError::invalid_field_access(field)),
                     _ => Err(RuntimeError::type_mismatch("Record", &format!("{:?}", val))),
                 }
             }
@@ -740,7 +768,12 @@ impl Interpreter {
     }
 
     /// Evaluate a binary operation
-    fn eval_binary_op(&self, op: BinaryOp, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
+    fn eval_binary_op(
+        &self,
+        op: BinaryOp,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Value, RuntimeError> {
         match (op, left, right) {
             // Integer arithmetic
             (BinaryOp::Add, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
@@ -752,7 +785,9 @@ impl Interpreter {
             (BinaryOp::Mod, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
 
             // String concatenation
-            (BinaryOp::Add, Value::Text(a), Value::Text(b)) => Ok(Value::Text(format!("{}{}", a, b))),
+            (BinaryOp::Add, Value::Text(a), Value::Text(b)) => {
+                Ok(Value::Text(format!("{}{}", a, b)))
+            }
 
             // Integer comparison
             (BinaryOp::Eq, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a == b)),
@@ -796,7 +831,12 @@ impl Interpreter {
     /// Call a function value with arguments
     fn call_function(&mut self, func: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
         match func {
-            Value::Closure { name, params, body, env } => {
+            Value::Closure {
+                name,
+                params,
+                body,
+                env,
+            } => {
                 if params.len() != args.len() {
                     return Err(RuntimeError::arity_mismatch(params.len(), args.len()));
                 }
@@ -831,7 +871,10 @@ impl Interpreter {
                             }
                             _ => {
                                 self.env = old_env;
-                                return Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond)));
+                                return Err(RuntimeError::type_mismatch(
+                                    "Bool",
+                                    &format!("{:?}", cond),
+                                ));
                             }
                         }
                     }
@@ -852,9 +895,7 @@ impl Interpreter {
 
                 // Handle early returns from ? operator
                 let result = match result {
-                    Err(e) if e.is_early_return() => {
-                        Ok(e.get_early_return().unwrap())
-                    }
+                    Err(e) if e.is_early_return() => Ok(e.get_early_return().unwrap()),
                     other => other,
                 }?;
 
@@ -874,7 +915,10 @@ impl Interpreter {
                             }
                             _ => {
                                 self.env = old_env;
-                                return Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond)));
+                                return Err(RuntimeError::type_mismatch(
+                                    "Bool",
+                                    &format!("{:?}", cond),
+                                ));
                             }
                         }
                     }
@@ -888,27 +932,22 @@ impl Interpreter {
     }
 
     /// Call a method on a receiver (for effects like Console.println)
-    fn call_method(&mut self, receiver: &Value, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    fn call_method(
+        &mut self,
+        receiver: &Value,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
         // Check if receiver is an effect identifier
         match receiver {
             Value::Text(name) if name == "Console.println" || name.starts_with("Console") => {
                 self.call_console_method(method, args)
             }
-            Value::Text(name) if name.starts_with("Fs") => {
-                self.call_fs_method(method, args)
-            }
-            Value::Text(name) if name.starts_with("Net") => {
-                self.call_net_method(method, args)
-            }
-            Value::Text(name) if name.starts_with("Clock") => {
-                self.call_clock_method(method, args)
-            }
-            Value::Text(name) if name.starts_with("Rand") => {
-                self.call_rand_method(method, args)
-            }
-            Value::Text(name) if name.starts_with("Env") => {
-                self.call_env_method(method, args)
-            }
+            Value::Text(name) if name.starts_with("Fs") => self.call_fs_method(method, args),
+            Value::Text(name) if name.starts_with("Net") => self.call_net_method(method, args),
+            Value::Text(name) if name.starts_with("Clock") => self.call_clock_method(method, args),
+            Value::Text(name) if name.starts_with("Rand") => self.call_rand_method(method, args),
+            Value::Text(name) if name.starts_with("Env") => self.call_env_method(method, args),
             // For direct calls like Console.println()
             _ => {
                 // Try to interpret receiver as effect name
@@ -924,8 +963,15 @@ impl Interpreter {
     }
 
     /// Call a Console effect method
-    fn call_console_method(&mut self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let console = self.capabilities.console.as_ref()
+    fn call_console_method(
+        &mut self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let console = self
+            .capabilities
+            .console
+            .as_ref()
             .ok_or_else(|| RuntimeError::capability_not_available("Console"))?;
 
         match method {
@@ -965,7 +1011,10 @@ impl Interpreter {
 
     /// Call a Fs effect method
     fn call_fs_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let fs = self.capabilities.fs.as_ref()
+        let fs = self
+            .capabilities
+            .fs
+            .as_ref()
             .ok_or_else(|| RuntimeError::capability_not_available("Fs"))?;
 
         match method {
@@ -981,7 +1030,9 @@ impl Interpreter {
             }
             "write" => {
                 if args.len() == 2 {
-                    if let (Some(Value::Text(path)), Some(Value::Text(content))) = (args.get(0), args.get(1)) {
+                    if let (Some(Value::Text(path)), Some(Value::Text(content))) =
+                        (args.first(), args.get(1))
+                    {
                         match fs.write(path, content) {
                             Ok(()) => Ok(Value::Ok(Box::new(Value::Unit))),
                             Err(e) => Ok(Value::Err(Box::new(Value::Text(e)))),
@@ -1006,7 +1057,10 @@ impl Interpreter {
 
     /// Call a Net effect method
     fn call_net_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let net = self.capabilities.net.as_ref()
+        let net = self
+            .capabilities
+            .net
+            .as_ref()
             .ok_or_else(|| RuntimeError::capability_not_available("Net"))?;
 
         match method {
@@ -1022,7 +1076,9 @@ impl Interpreter {
             }
             "post" => {
                 if args.len() == 2 {
-                    if let (Some(Value::Text(url)), Some(Value::Text(body))) = (args.get(0), args.get(1)) {
+                    if let (Some(Value::Text(url)), Some(Value::Text(body))) =
+                        (args.first(), args.get(1))
+                    {
                         match net.post(url, body) {
                             Ok(val) => Ok(Value::Ok(Box::new(val))),
                             Err(e) => Ok(Value::Err(Box::new(Value::Text(e)))),
@@ -1040,7 +1096,10 @@ impl Interpreter {
 
     /// Call a Clock effect method
     fn call_clock_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let clock = self.capabilities.clock.as_ref()
+        let clock = self
+            .capabilities
+            .clock
+            .as_ref()
             .ok_or_else(|| RuntimeError::capability_not_available("Clock"))?;
 
         match method {
@@ -1059,13 +1118,18 @@ impl Interpreter {
 
     /// Call a Rand effect method
     fn call_rand_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let rand = self.capabilities.rand.as_ref()
+        let rand = self
+            .capabilities
+            .rand
+            .as_ref()
             .ok_or_else(|| RuntimeError::capability_not_available("Rand"))?;
 
         match method {
             "int" => {
                 if args.len() == 2 {
-                    if let (Some(Value::Int(min)), Some(Value::Int(max))) = (args.get(0), args.get(1)) {
+                    if let (Some(Value::Int(min)), Some(Value::Int(max))) =
+                        (args.first(), args.get(1))
+                    {
                         Ok(Value::Int(rand.int(*min, *max)))
                     } else {
                         Err(RuntimeError::type_mismatch("(Int, Int)", "other"))
@@ -1086,7 +1150,10 @@ impl Interpreter {
 
     /// Call an Env effect method
     fn call_env_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let env_cap = self.capabilities.env.as_ref()
+        let env_cap = self
+            .capabilities
+            .env
+            .as_ref()
             .ok_or_else(|| RuntimeError::capability_not_available("Env"))?;
 
         match method {
@@ -1114,7 +1181,12 @@ impl Interpreter {
     }
 
     /// Call a method on a value (for Option/Result operations)
-    fn call_value_method(&self, receiver: &Value, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    fn call_value_method(
+        &self,
+        receiver: &Value,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
         match (receiver, method) {
             // Option methods
             (Value::Some(inner), "unwrap") => Ok((**inner).clone()),
@@ -1140,13 +1212,15 @@ impl Interpreter {
 
             // unwrap_or for Option/Result
             (Value::Some(inner), "unwrap_or") => Ok((**inner).clone()),
-            (Value::None, "unwrap_or") => {
-                args.into_iter().next().ok_or_else(|| RuntimeError::arity_mismatch(1, 0))
-            }
+            (Value::None, "unwrap_or") => args
+                .into_iter()
+                .next()
+                .ok_or_else(|| RuntimeError::arity_mismatch(1, 0)),
             (Value::Ok(inner), "unwrap_or") => Ok((**inner).clone()),
-            (Value::Err(_), "unwrap_or") => {
-                args.into_iter().next().ok_or_else(|| RuntimeError::arity_mismatch(1, 0))
-            }
+            (Value::Err(_), "unwrap_or") => args
+                .into_iter()
+                .next()
+                .ok_or_else(|| RuntimeError::arity_mismatch(1, 0)),
 
             // List methods
             (Value::List(items), "len") => Ok(Value::Int(items.len() as i64)),
@@ -1172,7 +1246,10 @@ impl Interpreter {
             // Text methods
             (Value::Text(s), "len") => Ok(Value::Int(s.len() as i64)),
 
-            _ => Err(RuntimeError::unknown_method(&format!("{:?}", receiver), method)),
+            _ => Err(RuntimeError::unknown_method(
+                &format!("{:?}", receiver),
+                method,
+            )),
         }
     }
 }
@@ -1269,7 +1346,13 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
                     }
                 }
                 // Generic variant
-                (pat_name, Value::Variant { name: var_name, data: var_data }) => {
+                (
+                    pat_name,
+                    Value::Variant {
+                        name: var_name,
+                        data: var_data,
+                    },
+                ) => {
                     if pat_name == var_name {
                         match (data, var_data) {
                             (None, None) => Some(vec![]),
@@ -1309,7 +1392,7 @@ fn format_value(value: &Value) -> String {
         }
         Value::Closure { .. } => "<closure>".to_string(),
         Value::List(items) => {
-            let item_strs: Vec<String> = items.iter().map(|v| format_value(v)).collect();
+            let item_strs: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", item_strs.join(", "))
         }
         Value::Some(inner) => format!("Some({})", format_value(inner)),
@@ -1393,7 +1476,7 @@ impl RandCapability for SeededRand {
     }
 
     fn bool(&self) -> bool {
-        self.next() % 2 == 0
+        self.next().is_multiple_of(2)
     }
 
     fn float(&self) -> f64 {

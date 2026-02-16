@@ -111,10 +111,7 @@ mod tests {
 
     #[test]
     fn test_span() {
-        let source = SourceFile::new(
-            PathBuf::from("test.astra"),
-            "let x = 42".to_string(),
-        );
+        let source = SourceFile::new(PathBuf::from("test.astra"), "let x = 42".to_string());
 
         let span = source.span(4, 5);
         assert_eq!(span.start_line, 1);

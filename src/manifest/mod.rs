@@ -163,22 +163,20 @@ fn default_true() -> bool {
 impl Manifest {
     /// Load a manifest from a file
     pub fn load(path: &Path) -> Result<Self, ManifestError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ManifestError::Io(e.to_string()))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| ManifestError::Io(e.to_string()))?;
 
         Self::parse(&content)
     }
 
     /// Parse a manifest from TOML string
     pub fn parse(content: &str) -> Result<Self, ManifestError> {
-        toml::from_str(content)
-            .map_err(|e| ManifestError::Parse(e.to_string()))
+        toml::from_str(content).map_err(|e| ManifestError::Parse(e.to_string()))
     }
 
     /// Serialize the manifest to TOML
     pub fn to_toml(&self) -> Result<String, ManifestError> {
-        toml::to_string_pretty(self)
-            .map_err(|e| ManifestError::Serialize(e.to_string()))
+        toml::to_string_pretty(self).map_err(|e| ManifestError::Serialize(e.to_string()))
     }
 
     /// Get the entry point file
@@ -256,20 +254,18 @@ impl Lockfile {
 
     /// Load a lockfile
     pub fn load(path: &Path) -> Result<Self, ManifestError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ManifestError::Io(e.to_string()))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| ManifestError::Io(e.to_string()))?;
 
-        toml::from_str(&content)
-            .map_err(|e| ManifestError::Parse(e.to_string()))
+        toml::from_str(&content).map_err(|e| ManifestError::Parse(e.to_string()))
     }
 
     /// Save the lockfile
     pub fn save(&self, path: &Path) -> Result<(), ManifestError> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| ManifestError::Serialize(e.to_string()))?;
+        let content =
+            toml::to_string_pretty(self).map_err(|e| ManifestError::Serialize(e.to_string()))?;
 
-        std::fs::write(path, content)
-            .map_err(|e| ManifestError::Io(e.to_string()))
+        std::fs::write(path, content).map_err(|e| ManifestError::Io(e.to_string()))
     }
 }
 

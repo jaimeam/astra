@@ -532,7 +532,9 @@ impl Formatter {
                 self.format_expr(expr);
                 self.write("?");
             }
-            Expr::TryElse { expr, else_expr, .. } => {
+            Expr::TryElse {
+                expr, else_expr, ..
+            } => {
                 self.format_expr(expr);
                 self.write(" ?else ");
                 self.format_expr(else_expr);
