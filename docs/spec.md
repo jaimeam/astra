@@ -253,17 +253,61 @@ type PositiveInt = Int
 
 ## 6. Standard Library
 
-See `stdlib/` for the standard library implementation.
+See [Standard Library Reference](stdlib.md) for the full API documentation.
 
-### 6.1 Core Types
+### 6.1 Built-in Types
 
-- `Option[T]`: `Some(T)` | `None`
-- `Result[T, E]`: `Ok(T)` | `Err(E)`
+| Type | Variants | Description |
+|------|----------|-------------|
+| `Int` | — | 64-bit signed integer |
+| `Bool` | `true`, `false` | Boolean |
+| `Text` | — | UTF-8 string |
+| `Unit` | — | Empty type |
+| `Option[T]` | `Some(T)`, `None` | Optional value |
+| `Result[T, E]` | `Ok(T)`, `Err(E)` | Success or error |
+| `List[T]` | — | Ordered collection |
 
-### 6.2 Core Functions
+### 6.2 Built-in Functions
 
-- `assert(condition: Bool)` - Assert condition is true
-- `assert_eq(a: T, b: T)` - Assert values are equal
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `print` | `(Text) -> Unit` | Print text (requires Console) |
+| `println` | `(Text) -> Unit` | Print text with newline (requires Console) |
+| `assert` | `(Bool) -> Unit` | Assert condition is true |
+| `assert_eq` | `(T, T) -> Unit` | Assert two values are equal |
+| `len` | `(List[T]) -> Int` | Get length of a list |
+| `to_text` | `(T) -> Text` | Convert value to text |
+
+### 6.3 std.option
+
+| Function | Signature |
+|----------|-----------|
+| `is_some` | `(Option[T]) -> Bool` |
+| `is_none` | `(Option[T]) -> Bool` |
+| `unwrap_or` | `(Option[T], T) -> T` |
+| `map` | `(Option[T], (T) -> U) -> Option[U]` |
+
+### 6.4 std.result
+
+| Function | Signature |
+|----------|-----------|
+| `is_ok` | `(Result[T, E]) -> Bool` |
+| `is_err` | `(Result[T, E]) -> Bool` |
+| `unwrap_or` | `(Result[T, E], T) -> T` |
+| `map` | `(Result[T, E], (T) -> U) -> Result[U, E]` |
+| `map_err` | `(Result[T, E], (E) -> F) -> Result[T, F]` |
+
+### 6.5 std.list
+
+| Function | Signature |
+|----------|-----------|
+| `is_empty` | `(List[T]) -> Bool` |
+| `head` | `(List[T]) -> Option[T]` |
+
+### 6.6 Error Propagation Operators
+
+- `?` — Propagates `None` or `Err(e)` to the calling function's return value
+- `?else expr` — Provides a fallback value when `?` would propagate
 
 ## 7. Evaluation Semantics
 
