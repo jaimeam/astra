@@ -1,10 +1,28 @@
 //! Type checker for Astra
 //!
-//! Implements type checking, inference, exhaustiveness checking, and effect enforcement.
+//! Implements type checking, inference, exhaustiveness checking, effect enforcement,
+//! and lint checks (W0001-W0007).
 
 use crate::diagnostics::{Diagnostic, DiagnosticBag, Note, Span, Suggestion};
 use crate::parser::ast::*;
 use std::collections::{HashMap, HashSet};
+
+/// Tracks a variable definition for unused-variable lint (W0001)
+#[derive(Debug, Clone)]
+struct VarBinding {
+    name: String,
+    span: Span,
+    used: bool,
+}
+
+/// Tracks lint state within a scope
+#[derive(Debug, Clone, Default)]
+struct LintScope {
+    /// Variables defined in this scope, with usage tracking
+    vars: Vec<VarBinding>,
+    /// Set of variable names already defined in this scope (for shadowing detection)
+    defined_names: HashSet<String>,
+}
 
 /// Built-in types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +164,10 @@ pub struct TypeChecker {
     /// Next type variable ID (used in fresh_type_var)
     #[allow(dead_code)]
     next_var: u32,
+    /// Stack of lint scopes for tracking variable usage
+    lint_scopes: Vec<LintScope>,
+    /// Import names defined at module level, with usage tracking
+    imports: Vec<(String, Span, bool)>,
 }
 
 impl TypeChecker {
@@ -155,14 +177,117 @@ impl TypeChecker {
             env: TypeEnv::new(),
             diagnostics: DiagnosticBag::new(),
             next_var: 0,
+            lint_scopes: Vec::new(),
+            imports: Vec::new(),
+        }
+    }
+
+    /// Push a new lint scope
+    fn push_lint_scope(&mut self) {
+        self.lint_scopes.push(LintScope::default());
+    }
+
+    /// Pop a lint scope and emit W0001 warnings for unused variables
+    fn pop_lint_scope(&mut self) {
+        if let Some(scope) = self.lint_scopes.pop() {
+            for binding in &scope.vars {
+                if !binding.used && !binding.name.starts_with('_') {
+                    self.diagnostics.push(
+                        Diagnostic::warning(
+                            crate::diagnostics::error_codes::warnings::UNUSED_VARIABLE,
+                        )
+                        .message(format!("Unused variable `{}`", binding.name))
+                        .span(binding.span.clone())
+                        .note(Note::new(format!(
+                            "prefix with `_` to suppress this warning: `_{}`",
+                            binding.name
+                        )))
+                        .build(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Record a variable definition in the current lint scope.
+    /// Also checks for shadowing (W0006).
+    fn lint_define_var(&mut self, name: &str, span: &Span) {
+        // W0006: Check for shadowing in current scope
+        if let Some(scope) = self.lint_scopes.last() {
+            if scope.defined_names.contains(name) && !name.starts_with('_') {
+                self.diagnostics.push(
+                    Diagnostic::warning(
+                        crate::diagnostics::error_codes::warnings::SHADOWED_BINDING,
+                    )
+                    .message(format!(
+                        "Variable `{}` shadows a previous binding in the same scope",
+                        name
+                    ))
+                    .span(span.clone())
+                    .build(),
+                );
+            }
+        }
+
+        if let Some(scope) = self.lint_scopes.last_mut() {
+            scope.vars.push(VarBinding {
+                name: name.to_string(),
+                span: span.clone(),
+                used: false,
+            });
+            scope.defined_names.insert(name.to_string());
+        }
+    }
+
+    /// Mark a variable as used across all lint scopes (innermost first)
+    fn lint_use_var(&mut self, name: &str) {
+        for scope in self.lint_scopes.iter_mut().rev() {
+            for binding in scope.vars.iter_mut().rev() {
+                if binding.name == name {
+                    binding.used = true;
+                    return;
+                }
+            }
+        }
+        // Also mark imports as used
+        for import in self.imports.iter_mut() {
+            if import.0 == name {
+                import.2 = true;
+                return;
+            }
         }
     }
 
     /// Check a module
     pub fn check_module(&mut self, module: &Module) -> Result<(), DiagnosticBag> {
-        // First pass: collect all type/enum/fn definitions
+        // First pass: collect all type/enum/fn definitions and imports
         for item in &module.items {
             match item {
+                Item::Import(import) => {
+                    // Track imports for W0002 (unused import)
+                    let import_name = match &import.kind {
+                        ImportKind::Module => import
+                            .path
+                            .segments
+                            .last()
+                            .cloned()
+                            .unwrap_or_default(),
+                        ImportKind::Alias(alias) => alias.clone(),
+                        ImportKind::Items(items) => {
+                            // Track each imported item
+                            for item_name in items {
+                                self.imports.push((
+                                    item_name.clone(),
+                                    import.span.clone(),
+                                    false,
+                                ));
+                            }
+                            continue;
+                        }
+                    };
+                    self.imports
+                        .push((import_name, import.span.clone(), false));
+                }
                 Item::TypeDef(def) => self.env.register_type(def.clone()),
                 Item::EnumDef(def) => self.env.register_enum(def.clone()),
                 Item::FnDef(def) => {
@@ -194,6 +319,21 @@ impl TypeChecker {
         // Second pass: type check all items
         for item in &module.items {
             self.check_item(item);
+        }
+
+        // W0002: Emit warnings for unused imports
+        for (name, span, used) in &self.imports {
+            if !*used {
+                self.diagnostics.push(
+                    Diagnostic::warning(
+                        crate::diagnostics::error_codes::warnings::UNUSED_IMPORT,
+                    )
+                    .message(format!("Unused import `{}`", name))
+                    .span(span.clone())
+                    .note(Note::new("remove this import if it is no longer needed"))
+                    .build(),
+                );
+            }
         }
 
         if self.diagnostics.has_errors() {
@@ -233,15 +373,22 @@ impl TypeChecker {
     fn check_fndef(&mut self, def: &FnDef) {
         let mut fn_env = self.env.child();
 
+        // Push lint scope for function body
+        self.push_lint_scope();
+
         // Add parameters to environment
         for param in &def.params {
             let ty = self.resolve_type_expr(&param.ty);
             fn_env.define(param.name.clone(), ty);
+            self.lint_define_var(&param.name, &param.span);
         }
 
         // Check body and collect effects used
         let mut effects_used = HashSet::new();
         let _body_type = self.check_block_with_effects(&def.body, &mut fn_env, &mut effects_used);
+
+        // Pop lint scope — emits W0001 for unused variables/params
+        self.pop_lint_scope();
 
         // C4: Effect enforcement - check that used effects are declared
         let declared_effects: HashSet<String> = def.effects.iter().cloned().collect();
@@ -273,13 +420,17 @@ impl TypeChecker {
     fn check_test(&mut self, test: &TestBlock) {
         let mut test_env = self.env.child();
         let mut effects_used = HashSet::new();
+        self.push_lint_scope();
         self.check_block_with_effects(&test.body, &mut test_env, &mut effects_used);
+        self.pop_lint_scope();
     }
 
     fn check_property(&mut self, prop: &PropertyBlock) {
         let mut prop_env = self.env.child();
         let mut effects_used = HashSet::new();
+        self.push_lint_scope();
         self.check_block_with_effects(&prop.body, &mut prop_env, &mut effects_used);
+        self.pop_lint_scope();
     }
 
     fn check_block_with_effects(
@@ -288,11 +439,47 @@ impl TypeChecker {
         env: &mut TypeEnv,
         effects: &mut HashSet<String>,
     ) -> Type {
+        let mut seen_return = false;
         for stmt in &block.stmts {
+            // W0003: Unreachable code after return
+            if seen_return {
+                let stmt_span = match stmt {
+                    Stmt::Let { span, .. }
+                    | Stmt::Assign { span, .. }
+                    | Stmt::Expr { span, .. }
+                    | Stmt::Return { span, .. } => span.clone(),
+                };
+                self.diagnostics.push(
+                    Diagnostic::warning(
+                        crate::diagnostics::error_codes::warnings::UNREACHABLE_CODE,
+                    )
+                    .message("Unreachable code after return statement")
+                    .span(stmt_span)
+                    .note(Note::new("this code will never be executed"))
+                    .build(),
+                );
+                break;
+            }
+
+            if matches!(stmt, Stmt::Return { .. }) {
+                seen_return = true;
+            }
+
             self.check_stmt_with_effects(stmt, env, effects);
         }
 
         if let Some(expr) = &block.expr {
+            if seen_return {
+                self.diagnostics.push(
+                    Diagnostic::warning(
+                        crate::diagnostics::error_codes::warnings::UNREACHABLE_CODE,
+                    )
+                    .message("Unreachable expression after return statement")
+                    .span(expr.span().clone())
+                    .note(Note::new("this expression will never be evaluated"))
+                    .build(),
+                );
+            }
             self.check_expr_with_effects(expr, env, effects)
         } else {
             Type::Unit
@@ -307,7 +494,7 @@ impl TypeChecker {
     ) {
         match stmt {
             Stmt::Let {
-                name, ty, value, ..
+                name, ty, value, span, ..
             } => {
                 let value_type = self.check_expr_with_effects(value, env, effects);
 
@@ -331,6 +518,9 @@ impl TypeChecker {
                 }
 
                 env.define(name.clone(), declared_type.unwrap_or(value_type));
+
+                // Track for lint (W0001 unused var, W0006 shadowed binding)
+                self.lint_define_var(name, span);
             }
             Stmt::Assign { target, value, .. } => {
                 let _target_type = self.check_expr_with_effects(target, env, effects);
@@ -365,6 +555,9 @@ impl TypeChecker {
                     "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => Type::Unknown,
                     "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" => Type::Unknown,
                     _ => {
+                        // Mark variable as used for W0001 lint
+                        self.lint_use_var(name);
+
                         if let Some(ty) = env.lookup(name) {
                             ty.clone()
                         } else {
@@ -578,6 +771,37 @@ impl TypeChecker {
 
         // Check for wildcard or catch-all patterns first
         if patterns.iter().any(|p| is_catch_all(p)) {
+            // W0005: Wildcard match — warn when the type is known and all
+            // variants could be explicitly listed
+            if let Some(wildcard_pat) = patterns.iter().find(|p| matches!(p, Pattern::Wildcard { .. })) {
+                let type_name = match &match_kind {
+                    MatchTypeKind::Option => Some("Option"),
+                    MatchTypeKind::Result => Some("Result"),
+                    MatchTypeKind::Bool => Some("Bool"),
+                    MatchTypeKind::Enum { .. } => Some("enum"),
+                    MatchTypeKind::Other => None,
+                };
+                if let Some(name) = type_name {
+                    let span = match wildcard_pat {
+                        Pattern::Wildcard { span, .. } => span.clone(),
+                        _ => match_span.clone(),
+                    };
+                    self.diagnostics.push(
+                        Diagnostic::warning(
+                            crate::diagnostics::error_codes::warnings::WILDCARD_MATCH,
+                        )
+                        .message(format!(
+                            "Wildcard pattern `_` on {} type could hide unhandled variants",
+                            name
+                        ))
+                        .span(span)
+                        .note(Note::new(
+                            "consider matching all variants explicitly to catch future additions",
+                        ))
+                        .build(),
+                    );
+                }
+            }
             return; // Wildcard/identifier pattern covers everything
         }
 
@@ -949,6 +1173,15 @@ mod tests {
         checker.check_module(&module)
     }
 
+    /// Check a module and return all diagnostics (errors + warnings),
+    /// used for testing lint rules that produce warnings.
+    fn check_module_all_diags(source: &str) -> DiagnosticBag {
+        let module = parse_module(source);
+        let mut checker = TypeChecker::new();
+        let _ = checker.check_module(&module);
+        checker.diagnostics().clone()
+    }
+
     #[test]
     fn test_type_env() {
         let mut env = TypeEnv::new();
@@ -1270,5 +1503,240 @@ fn greet() {
             d.suggestions[0].title.contains("effects"),
             "suggestion should mention adding effects declaration"
         );
+    }
+
+    // =========================================================================
+    // Lint tests (W0001-W0007)
+    // =========================================================================
+
+    // W0001: Unused variable
+
+    #[test]
+    fn test_lint_unused_variable() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let unused = 42
+  0
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0001")
+            .collect();
+        assert!(!warnings.is_empty(), "should warn about unused variable");
+        assert!(warnings[0].message.contains("unused"));
+    }
+
+    #[test]
+    fn test_lint_used_variable_no_warning() {
+        let source = r#"
+module example
+
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0001")
+            .collect();
+        assert!(warnings.is_empty(), "used variables should not generate warnings");
+    }
+
+    #[test]
+    fn test_lint_underscore_prefix_suppresses_unused() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let _ignored = 42
+  0
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0001")
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "underscore-prefixed variables should not warn"
+        );
+    }
+
+    // W0003: Unreachable code
+
+    #[test]
+    fn test_lint_unreachable_code_after_return() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  return 1
+  let x = 2
+  x
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0003")
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "should warn about unreachable code after return"
+        );
+    }
+
+    #[test]
+    fn test_lint_no_unreachable_code() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x = 2
+  x
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0003")
+            .collect();
+        assert!(warnings.is_empty(), "no unreachable code warning expected");
+    }
+
+    // W0005: Wildcard match on known type
+
+    #[test]
+    fn test_lint_wildcard_match_on_option() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x: Option[Int] = Some(42)
+  match x {
+    Some(n) => n
+    _ => 0
+  }
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0005")
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "should warn about wildcard on Option type"
+        );
+    }
+
+    // W0006: Shadowed binding
+
+    #[test]
+    fn test_lint_shadowed_binding() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x = 1
+  let x = 2
+  x
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0006")
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "should warn about shadowed binding"
+        );
+        assert!(warnings[0].message.contains("shadows"));
+    }
+
+    #[test]
+    fn test_lint_no_shadowing_different_names() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let x = 1
+  let y = 2
+  x + y
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0006")
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "different names should not trigger shadowing warning"
+        );
+    }
+
+    // W0002: Unused import
+
+    #[test]
+    fn test_lint_unused_import() {
+        let source = r#"
+module example
+
+import std.math
+
+fn main() -> Int {
+  42
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0002")
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "should warn about unused import"
+        );
+        assert!(warnings[0].message.contains("math"));
+    }
+
+    // Integration: lint warnings don't block compilation
+
+    #[test]
+    fn test_lint_warnings_dont_cause_errors() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let unused = 42
+  let _ok = 1
+  _ok
+}
+"#;
+        let result = check_module(source);
+        assert!(
+            result.is_ok(),
+            "lint warnings should not cause check_module to return Err"
+        );
+        let diags = check_module_all_diags(source);
+        assert!(diags.has_warnings(), "should have warnings");
+        assert!(!diags.has_errors(), "should not have errors");
     }
 }

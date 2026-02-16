@@ -376,6 +376,26 @@ impl DiagnosticBag {
         self.diagnostics.iter().any(|d| d.is_error())
     }
 
+    /// Check if there are any warnings
+    pub fn has_warnings(&self) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|d| matches!(d.severity, Severity::Warning))
+    }
+
+    /// Count warnings
+    pub fn warning_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, Severity::Warning))
+            .count()
+    }
+
+    /// Count errors
+    pub fn error_count(&self) -> usize {
+        self.diagnostics.iter().filter(|d| d.is_error()).count()
+    }
+
     /// Get all diagnostics
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics

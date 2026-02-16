@@ -284,3 +284,38 @@ See `stdlib/` for the standard library implementation.
 - `?` on `None` returns `None` from function
 - `?` on `Err(e)` returns `Err(e)` from function
 - `?else expr` provides fallback on failure
+
+## 8. Diagnostics and Linting
+
+### 8.1 Diagnostic Model
+
+All compiler output uses structured diagnostics with:
+- Stable error code (`E####` for errors, `W####` for warnings)
+- Severity level: `error`, `warning`, `info`, `hint`
+- Source span with file, line, and column
+- Optional notes and suggested fixes
+- JSON output via `--json` flag
+
+### 8.2 Built-in Lint Checks
+
+The type checker emits warnings for common issues. Warnings do not prevent compilation unless `--strict` mode is enabled.
+
+| Code | Description |
+|------|-------------|
+| W0001 | Unused variable (suppress with `_` prefix) |
+| W0002 | Unused import |
+| W0003 | Unreachable code after `return` |
+| W0004 | Deprecated feature (reserved) |
+| W0005 | Wildcard pattern on known exhaustive type |
+| W0006 | Shadowed binding in same scope |
+| W0007 | Redundant type annotation (reserved) |
+
+### 8.3 Strict Mode
+
+`astra check --strict` treats all warnings as errors. The check exits with a non-zero status if any warnings are present. This is intended for CI and production use.
+
+Strictness can also be configured in `astra.toml`:
+```toml
+[lint]
+level = "deny"
+```

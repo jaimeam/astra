@@ -23,3 +23,18 @@ std = []
 [build]
 # Build configuration
 incremental = true
+
+[lint]
+# Lint enforcement level: "warn" (default) or "deny" (treats warnings as errors)
+# Equivalent to `astra check --strict` when set to "deny"
+level = "warn"
+
+# Per-rule overrides: "warn", "deny", or "allow"
+# [lint.rules]
+# W0001 = "deny"    # unused variables
+# W0002 = "deny"    # unused imports
+# W0003 = "deny"    # unreachable code
+# W0004 = "allow"   # deprecated
+# W0005 = "warn"    # wildcard match
+# W0006 = "warn"    # shadowed binding
+# W0007 = "allow"   # redundant type annotation
