@@ -617,6 +617,31 @@ Err(error)
 | Dynamic typing | Static typing |
 | `# comment` | `# comment` (same!) |
 
+### Key Differences from TypeScript
+
+| TypeScript | Astra |
+|------------|-------|
+| `function func(): number { }` | `fn func() -> Int {` |
+| `{ x: number, y: number }` | `{ x: Int, y: Int }` (similar structural types) |
+| `null \| undefined` / optional chaining | `Option[T]` with exhaustive matching |
+| `try/catch` with untyped errors | `Result[T, E]` with typed errors |
+| No effect tracking | Explicit `effects(...)` |
+| `// comment` | `# comment` |
+| Semicolons optional | No semicolons |
+
+### Key Differences from Go
+
+| Go | Astra |
+|----|-------|
+| `func add(a, b int) int { }` | `fn add(a: Int, b: Int) -> Int {` |
+| `struct Point { X int }` | `type Point = { x: Int }` |
+| No enums with data | `enum Shape = Circle(r: Int) \| Rectangle(w: Int, h: Int)` |
+| `if err != nil { return err }` | `?` operator or `?else` for fallback |
+| `nil` for absent values | `Option[T]` with `Some`/`None` |
+| No pattern matching | `match` with exhaustiveness checking |
+| `gofmt` (canonical format) | Built-in formatter (same philosophy!) |
+| `go test` (built-in runner) | `astra test` (built-in, inline test blocks) |
+
 ### Key Differences from Rust
 
 | Rust | Astra |

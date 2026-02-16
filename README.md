@@ -2,7 +2,7 @@
 
 **Astra** is a programming language designed for LLMs and AI agents to write, verify, and maintain code.
 
-> **Why not just use Python, JavaScript, or Rust?** See [Why Astra?](docs/why-astra.md) for the full rationale.
+> **Why not just use Python, TypeScript, Go, or Rust?** See [Why Astra?](docs/why-astra.md) for the full rationale.
 
 ## The Problem
 
@@ -11,6 +11,8 @@ When LLMs generate code in existing languages, they face fundamental challenges:
 | Language | Problems for LLMs |
 |----------|-------------------|
 | **Python/JS** | Runtime-only errors, non-deterministic tests, hidden side effects |
+| **TypeScript** | Opt-in null safety, no effect tracking, non-deterministic tests |
+| **Go** | No sum types, no pattern matching, verbose error handling, nil panics |
 | **Rust** | Ownership complexity, human-oriented error messages |
 
 **The result**: LLM generates code → it fails → error is ambiguous → LLM guesses at fix → cycle repeats.
