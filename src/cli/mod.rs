@@ -42,6 +42,10 @@ pub enum Command {
         /// Files or directories to check
         #[arg(default_value = ".")]
         paths: Vec<PathBuf>,
+
+        /// Treat warnings as errors (like strict mypy / ruff enforcement)
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Run tests
@@ -86,8 +90,8 @@ impl Cli {
             Command::Fmt { paths, check } => {
                 run_fmt(&paths, check, cli.json)?;
             }
-            Command::Check { paths } => {
-                run_check(&paths, cli.json)?;
+            Command::Check { paths, strict } => {
+                run_check(&paths, strict, cli.json)?;
             }
             Command::Test { filter, seed } => {
                 run_test(filter.as_deref(), seed, cli.json)?;
@@ -195,30 +199,60 @@ fn fmt_file(path: &PathBuf, check: bool) -> Result<FmtResult, Box<dyn std::error
     }
 }
 
-fn run_check(paths: &[PathBuf], json: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// Counts returned from checking a single file
+struct CheckCounts {
+    errors: usize,
+    warnings: usize,
+}
+
+fn run_check(paths: &[PathBuf], strict: bool, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut total_errors = 0;
+    let mut total_warnings = 0;
     let mut files_checked = 0;
 
     for path in paths {
         if path.is_file() && path.extension().map_or(false, |ext| ext == "astra") {
             files_checked += 1;
-            let errors = check_file(path, json)?;
-            total_errors += errors;
+            let counts = check_file(path, json)?;
+            total_errors += counts.errors;
+            total_warnings += counts.warnings;
         } else if path.is_dir() {
-            // Recursively check all .astra files
             for entry in walkdir(path)? {
                 if entry.extension().map_or(false, |ext| ext == "astra") {
                     files_checked += 1;
-                    let errors = check_file(&entry, json)?;
-                    total_errors += errors;
+                    let counts = check_file(&entry, json)?;
+                    total_errors += counts.errors;
+                    total_warnings += counts.warnings;
                 }
             }
         }
     }
 
-    if total_errors > 0 {
-        eprintln!("\nChecked {} file(s), found {} error(s)", files_checked, total_errors);
+    let has_issues = total_errors > 0 || (strict && total_warnings > 0);
+
+    if has_issues {
+        let mut parts = Vec::new();
+        if total_errors > 0 {
+            parts.push(format!("{} error(s)", total_errors));
+        }
+        if total_warnings > 0 {
+            if strict {
+                parts.push(format!("{} warning(s) [treated as errors with --strict]", total_warnings));
+            } else {
+                parts.push(format!("{} warning(s)", total_warnings));
+            }
+        }
+        eprintln!(
+            "\nChecked {} file(s), found {}",
+            files_checked,
+            parts.join(", ")
+        );
         std::process::exit(1);
+    } else if total_warnings > 0 {
+        println!(
+            "Checked {} file(s), no errors ({} warning(s))",
+            files_checked, total_warnings
+        );
     } else {
         println!("Checked {} file(s), no errors found", files_checked);
     }
@@ -226,7 +260,7 @@ fn run_check(paths: &[PathBuf], json: bool) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-fn check_file(path: &PathBuf, json: bool) -> Result<usize, Box<dyn std::error::Error>> {
+fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
 
@@ -235,19 +269,47 @@ fn check_file(path: &PathBuf, json: bool) -> Result<usize, Box<dyn std::error::E
     let mut parser = AstraParser::new(lexer, source_file.clone());
     match parser.parse_module() {
         Ok(module) => {
-            // Run type checking (includes exhaustiveness + effect enforcement)
+            // Run type checking (includes exhaustiveness + effect + lint enforcement)
             let mut checker = crate::typechecker::TypeChecker::new();
-            match checker.check_module(&module) {
-                Ok(()) => Ok(0),
-                Err(bag) => {
-                    if json {
-                        println!("{}", bag.to_json());
-                    } else {
-                        eprintln!("Error in {:?}:\n{}", path, bag.format_text(&source));
-                    }
-                    Ok(bag.len())
+            let type_result = checker.check_module(&module);
+
+            // Always retrieve all diagnostics (errors + warnings)
+            let all_diags = checker.diagnostics();
+            let errors: Vec<_> = all_diags
+                .diagnostics()
+                .iter()
+                .filter(|d| d.is_error())
+                .collect();
+            let warnings: Vec<_> = all_diags
+                .diagnostics()
+                .iter()
+                .filter(|d| matches!(d.severity, crate::diagnostics::Severity::Warning))
+                .collect();
+
+            // Display errors (from Err result or from diagnostics bag)
+            if let Err(ref bag) = type_result {
+                if json {
+                    println!("{}", bag.to_json());
+                } else {
+                    eprintln!("{}", bag.format_text(&source));
                 }
             }
+
+            // Display warnings
+            if !warnings.is_empty() {
+                for w in &warnings {
+                    if json {
+                        println!("{}", w.to_json());
+                    } else {
+                        eprintln!("{}", w.to_human_readable(&source));
+                    }
+                }
+            }
+
+            Ok(CheckCounts {
+                errors: errors.len(),
+                warnings: warnings.len(),
+            })
         }
         Err(e) => {
             let bag = DiagnosticBag::from(e);
@@ -256,7 +318,10 @@ fn check_file(path: &PathBuf, json: bool) -> Result<usize, Box<dyn std::error::E
             } else {
                 eprintln!("Error in {:?}:\n{}", path, bag.format_text(&source));
             }
-            Ok(bag.len())
+            Ok(CheckCounts {
+                errors: bag.len(),
+                warnings: 0,
+            })
         }
     }
 }
