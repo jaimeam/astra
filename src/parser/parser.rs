@@ -436,6 +436,49 @@ impl<'a> Parser<'a> {
                 span: start_span.merge(&end_span),
                 fields,
             })
+        } else if self.check(TokenKind::LParen) {
+            // Function type: (Type1, Type2) -> RetType effects(...)
+            self.advance();
+            let mut params = Vec::new();
+            if !self.check(TokenKind::RParen) {
+                params.push(self.parse_type_expr()?);
+                while self.check(TokenKind::Comma) {
+                    self.advance();
+                    if self.check(TokenKind::RParen) {
+                        break;
+                    }
+                    params.push(self.parse_type_expr()?);
+                }
+            }
+            self.expect(TokenKind::RParen)?;
+
+            // Must be followed by -> for function type
+            self.expect(TokenKind::Arrow)?;
+            let ret = Box::new(self.parse_type_expr()?);
+
+            // Optional effects
+            let effects = if self.check(TokenKind::Effects) {
+                self.advance();
+                self.expect(TokenKind::LParen)?;
+                let mut effects = vec![self.expect_ident()?];
+                while self.check(TokenKind::Comma) {
+                    self.advance();
+                    effects.push(self.expect_ident()?);
+                }
+                self.expect(TokenKind::RParen)?;
+                effects
+            } else {
+                Vec::new()
+            };
+
+            let end_span = self.current_span();
+            Ok(TypeExpr::Function {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                params,
+                ret,
+                effects,
+            })
         } else {
             let name = self.expect_ident()?;
             let args = self.parse_optional_type_args()?;
@@ -524,6 +567,28 @@ impl<'a> Parser<'a> {
 
         if self.check(TokenKind::Let) {
             self.advance();
+
+            // Check for destructuring pattern: `let { ... } = expr`
+            if self.check(TokenKind::LBrace) {
+                let pattern = self.parse_pattern()?;
+                let ty = if self.check(TokenKind::Colon) {
+                    self.advance();
+                    Some(self.parse_type_expr()?)
+                } else {
+                    None
+                };
+                self.expect(TokenKind::Eq)?;
+                let value = Box::new(self.parse_expr()?);
+                let end_span = self.current_span();
+                return Ok(Stmt::LetPattern {
+                    id: NodeId::new(),
+                    span: start_span.merge(&end_span),
+                    pattern,
+                    ty,
+                    value,
+                });
+            }
+
             let mutable = self.check(TokenKind::Mut);
             if mutable {
                 self.advance();
@@ -792,6 +857,7 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             }
             TokenKind::LBracket => self.parse_list_expr(),
+            TokenKind::Fn => self.parse_lambda_expr(),
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
             TokenKind::Assert => self.parse_assert_expr(),
@@ -862,6 +928,63 @@ impl<'a> Parser<'a> {
             id: NodeId::new(),
             span: start_span.merge(&end_span),
             elements,
+        })
+    }
+
+    fn parse_lambda_expr(&mut self) -> Result<Expr, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::Fn)?;
+        self.expect(TokenKind::LParen)?;
+
+        // Parse lambda parameters (name or name: Type)
+        let mut params = Vec::new();
+        if !self.check(TokenKind::RParen) {
+            params.push(self.parse_lambda_param()?);
+            while self.check(TokenKind::Comma) {
+                self.advance();
+                if self.check(TokenKind::RParen) {
+                    break;
+                }
+                params.push(self.parse_lambda_param()?);
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+
+        // Optional return type
+        let return_type = if self.check(TokenKind::Arrow) {
+            self.advance();
+            Some(Box::new(self.parse_type_expr()?))
+        } else {
+            None
+        };
+
+        let body = Box::new(self.parse_block()?);
+        let end_span = self.current_span();
+
+        Ok(Expr::Lambda {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            params,
+            return_type,
+            body,
+        })
+    }
+
+    fn parse_lambda_param(&mut self) -> Result<LambdaParam, Diagnostic> {
+        let start_span = self.current_span();
+        let name = self.expect_ident()?;
+        let ty = if self.check(TokenKind::Colon) {
+            self.advance();
+            Some(self.parse_type_expr()?)
+        } else {
+            None
+        };
+        let end_span = self.current_span();
+        Ok(LambdaParam {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            name,
+            ty,
         })
     }
 
@@ -975,6 +1098,15 @@ impl<'a> Parser<'a> {
     fn parse_match_arm(&mut self) -> Result<MatchArm, Diagnostic> {
         let start_span = self.current_span();
         let pattern = self.parse_pattern()?;
+
+        // Optional guard: `pattern if guard_expr => body`
+        let guard = if self.check(TokenKind::If) {
+            self.advance();
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+
         self.expect(TokenKind::FatArrow)?;
         let body = Box::new(self.parse_expr()?);
 
@@ -983,6 +1115,7 @@ impl<'a> Parser<'a> {
             id: NodeId::new(),
             span: start_span.merge(&end_span),
             pattern,
+            guard,
             body,
         })
     }
@@ -1070,6 +1203,42 @@ impl<'a> Parser<'a> {
                         name,
                     })
                 }
+            }
+            TokenKind::LBrace => {
+                // Record pattern: { x, y } or { x = pat, y = pat }
+                self.advance();
+                let mut fields = Vec::new();
+                if !self.check(TokenKind::RBrace) {
+                    loop {
+                        let field_name = self.expect_ident()?;
+                        let field_pat = if self.check(TokenKind::Eq) {
+                            self.advance();
+                            self.parse_pattern()?
+                        } else {
+                            // Shorthand: `{ x }` means `{ x = x }`
+                            Pattern::Ident {
+                                id: NodeId::new(),
+                                span: self.current_span(),
+                                name: field_name.clone(),
+                            }
+                        };
+                        fields.push((field_name, field_pat));
+                        if !self.check(TokenKind::Comma) {
+                            break;
+                        }
+                        self.advance();
+                        if self.check(TokenKind::RBrace) {
+                            break;
+                        }
+                    }
+                }
+                self.expect(TokenKind::RBrace)?;
+                let end_span = self.current_span();
+                Ok(Pattern::Record {
+                    id: NodeId::new(),
+                    span: token.span.merge(&end_span),
+                    fields,
+                })
             }
             _ => Err(self.error_unexpected("pattern")),
         }
@@ -1177,6 +1346,7 @@ impl<'a> Parser<'a> {
             | Expr::Try { span, .. }
             | Expr::TryElse { span, .. }
             | Expr::ListLit { span, .. }
+            | Expr::Lambda { span, .. }
             | Expr::Hole { span, .. } => span.clone(),
         }
     }

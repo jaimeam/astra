@@ -626,6 +626,24 @@ impl Interpreter {
                         for (name, value) in bindings {
                             match_env.define(name, value);
                         }
+
+                        // Check guard if present
+                        if let Some(guard) = &arm.guard {
+                            let old_env = std::mem::replace(&mut self.env, match_env.clone());
+                            let guard_val = self.eval_expr(guard)?;
+                            self.env = old_env;
+                            match guard_val {
+                                Value::Bool(true) => {}
+                                Value::Bool(false) => continue,
+                                _ => {
+                                    return Err(RuntimeError::type_mismatch(
+                                        "Bool",
+                                        &format!("{:?}", guard_val),
+                                    ))
+                                }
+                            }
+                        }
+
                         let old_env = std::mem::replace(&mut self.env, match_env);
                         let result = self.eval_expr(&arm.body);
                         self.env = old_env;
@@ -695,6 +713,21 @@ impl Interpreter {
                 Ok(Value::List(values))
             }
 
+            // Lambda expression
+            Expr::Lambda { params, body, .. } => {
+                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                Ok(Value::Closure {
+                    name: None,
+                    params: param_names,
+                    body: ClosureBody {
+                        block: (**body).clone(),
+                        requires: Vec::new(),
+                        ensures: Vec::new(),
+                    },
+                    env: self.env.clone(),
+                })
+            }
+
             // Hole (incomplete code)
             Expr::Hole { .. } => Err(RuntimeError::hole_encountered()),
         }
@@ -707,6 +740,20 @@ impl Interpreter {
                 let val = self.eval_expr(value)?;
                 self.env.define(name.clone(), val);
                 Ok(())
+            }
+            Stmt::LetPattern { pattern, value, .. } => {
+                let val = self.eval_expr(value)?;
+                if let Some(bindings) = match_pattern(pattern, &val) {
+                    for (name, bound_val) in bindings {
+                        self.env.define(name, bound_val);
+                    }
+                    Ok(())
+                } else {
+                    Err(RuntimeError::new(
+                        "E4015",
+                        "destructuring pattern did not match value",
+                    ))
+                }
             }
             Stmt::Assign { target, value, .. } => {
                 let val = self.eval_expr(value)?;
@@ -1181,12 +1228,198 @@ impl Interpreter {
     }
 
     /// Call a method on a value (for Option/Result operations)
+    /// Try to handle higher-order methods that need &mut self for call_function.
+    /// Returns Some(result) if handled, None if not a higher-order method.
+    fn try_ho_method(
+        &mut self,
+        receiver: &Value,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Option<Result<Value, RuntimeError>> {
+        match (receiver, method) {
+            (Value::List(items), "map") => {
+                let items = items.clone();
+                Some(self.ho_list_map(&items, args))
+            }
+            (Value::List(items), "filter") => {
+                let items = items.clone();
+                Some(self.ho_list_filter(&items, args))
+            }
+            (Value::List(items), "fold") => {
+                let items = items.clone();
+                Some(self.ho_list_fold(&items, args))
+            }
+            (Value::List(items), "each") => {
+                let items = items.clone();
+                Some(self.ho_list_each(&items, args))
+            }
+            (Value::List(items), "any") => {
+                let items = items.clone();
+                Some(self.ho_list_any(&items, args))
+            }
+            (Value::List(items), "all") => {
+                let items = items.clone();
+                Some(self.ho_list_all(&items, args))
+            }
+            (Value::List(items), "flat_map") => {
+                let items = items.clone();
+                Some(self.ho_list_flat_map(&items, args))
+            }
+            (Value::Some(inner), "map") => {
+                let inner = (**inner).clone();
+                Some(self.ho_option_map(inner, args))
+            }
+            (Value::None, "map") => Some(Ok(Value::None)),
+            (Value::Ok(inner), "map") => {
+                let inner = (**inner).clone();
+                Some(self.ho_result_map(inner, args))
+            }
+            (Value::Err(_), "map") => Some(Ok(receiver.clone())),
+            (Value::Ok(_), "map_err") => Some(Ok(receiver.clone())),
+            (Value::Err(inner), "map_err") => {
+                let inner = (**inner).clone();
+                Some(self.ho_result_map_err(inner, args))
+            }
+            _ => None,
+        }
+    }
+
+    fn ho_list_map(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        let mut result = Vec::new();
+        for item in items {
+            result.push(self.call_function(func.clone(), vec![item.clone()])?);
+        }
+        Ok(Value::List(result))
+    }
+
+    fn ho_list_filter(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        let mut result = Vec::new();
+        for item in items {
+            match self.call_function(func.clone(), vec![item.clone()])? {
+                Value::Bool(true) => result.push(item.clone()),
+                Value::Bool(false) => {}
+                other => return Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", other))),
+            }
+        }
+        Ok(Value::List(result))
+    }
+
+    fn ho_list_fold(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::arity_mismatch(2, args.len()));
+        }
+        let mut args_iter = args.into_iter();
+        let mut acc = args_iter.next().unwrap();
+        let func = args_iter.next().unwrap();
+        for item in items {
+            acc = self.call_function(func.clone(), vec![acc, item.clone()])?;
+        }
+        Ok(acc)
+    }
+
+    fn ho_list_each(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        for item in items {
+            self.call_function(func.clone(), vec![item.clone()])?;
+        }
+        Ok(Value::Unit)
+    }
+
+    fn ho_list_any(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        for item in items {
+            if let Value::Bool(true) = self.call_function(func.clone(), vec![item.clone()])? {
+                return Ok(Value::Bool(true));
+            }
+        }
+        Ok(Value::Bool(false))
+    }
+
+    fn ho_list_all(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        for item in items {
+            if let Value::Bool(false) = self.call_function(func.clone(), vec![item.clone()])? {
+                return Ok(Value::Bool(false));
+            }
+        }
+        Ok(Value::Bool(true))
+    }
+
+    fn ho_list_flat_map(
+        &mut self,
+        items: &[Value],
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        let mut result = Vec::new();
+        for item in items {
+            match self.call_function(func.clone(), vec![item.clone()])? {
+                Value::List(inner) => result.extend(inner),
+                other => return Err(RuntimeError::type_mismatch("List", &format!("{:?}", other))),
+            }
+        }
+        Ok(Value::List(result))
+    }
+
+    fn ho_option_map(&mut self, inner: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        let result = self.call_function(func, vec![inner])?;
+        Ok(Value::Some(Box::new(result)))
+    }
+
+    fn ho_result_map(&mut self, inner: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        let result = self.call_function(func, vec![inner])?;
+        Ok(Value::Ok(Box::new(result)))
+    }
+
+    fn ho_result_map_err(&mut self, inner: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        let result = self.call_function(func, vec![inner])?;
+        Ok(Value::Err(Box::new(result)))
+    }
+
     fn call_value_method(
-        &self,
+        &mut self,
         receiver: &Value,
         method: &str,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
+        // Handle higher-order methods that need &mut self for call_function
+        // These are extracted before the immutable match to avoid borrow conflicts
+        if let Some(result) = self.try_ho_method(receiver, method, args.clone()) {
+            return result;
+        }
+
         match (receiver, method) {
             // Option methods
             (Value::Some(inner), "unwrap") => Ok((**inner).clone()),
@@ -1243,8 +1476,94 @@ impl Interpreter {
                     Err(RuntimeError::arity_mismatch(1, 0))
                 }
             }
+            (Value::List(items), "is_empty") => Ok(Value::Bool(items.is_empty())),
+            (Value::List(items), "head") => {
+                if let Some(first) = items.first() {
+                    Ok(Value::Some(Box::new(first.clone())))
+                } else {
+                    Ok(Value::None)
+                }
+            }
+            (Value::List(items), "last") => {
+                if let Some(last) = items.last() {
+                    Ok(Value::Some(Box::new(last.clone())))
+                } else {
+                    Ok(Value::None)
+                }
+            }
+            (Value::List(items), "push") => {
+                if let Some(val) = args.into_iter().next() {
+                    let mut new_items = items.clone();
+                    new_items.push(val);
+                    Ok(Value::List(new_items))
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+            (Value::List(items), "concat") => {
+                if let Some(Value::List(other)) = args.first() {
+                    let mut new_items = items.clone();
+                    new_items.extend(other.clone());
+                    Ok(Value::List(new_items))
+                } else {
+                    Err(RuntimeError::type_mismatch("List", "other"))
+                }
+            }
+
             // Text methods
             (Value::Text(s), "len") => Ok(Value::Int(s.len() as i64)),
+            (Value::Text(s), "to_upper") => Ok(Value::Text(s.to_uppercase())),
+            (Value::Text(s), "to_lower") => Ok(Value::Text(s.to_lowercase())),
+            (Value::Text(s), "trim") => Ok(Value::Text(s.trim().to_string())),
+            (Value::Text(s), "contains") => {
+                if let Some(Value::Text(needle)) = args.first() {
+                    Ok(Value::Bool(s.contains(needle.as_str())))
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "starts_with") => {
+                if let Some(Value::Text(prefix)) = args.first() {
+                    Ok(Value::Bool(s.starts_with(prefix.as_str())))
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "ends_with") => {
+                if let Some(Value::Text(suffix)) = args.first() {
+                    Ok(Value::Bool(s.ends_with(suffix.as_str())))
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "split") => {
+                if let Some(Value::Text(delimiter)) = args.first() {
+                    let parts: Vec<Value> = s
+                        .split(delimiter.as_str())
+                        .map(|p| Value::Text(p.to_string()))
+                        .collect();
+                    Ok(Value::List(parts))
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "replace") => {
+                if args.len() == 2 {
+                    if let (Some(Value::Text(from)), Some(Value::Text(to))) =
+                        (args.first(), args.get(1))
+                    {
+                        Ok(Value::Text(s.replace(from.as_str(), to.as_str())))
+                    } else {
+                        Err(RuntimeError::type_mismatch("(Text, Text)", "other"))
+                    }
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            (Value::Text(s), "chars") => {
+                let chars: Vec<Value> = s.chars().map(|c| Value::Text(c.to_string())).collect();
+                Ok(Value::List(chars))
+            }
 
             _ => Err(RuntimeError::unknown_method(
                 &format!("{:?}", receiver),
@@ -2318,5 +2637,608 @@ fn main() {
 "#;
         let result = parse_and_eval(source);
         assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Lambda / Anonymous function tests
+    // =========================================================================
+
+    #[test]
+    fn test_lambda_basic() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let square = fn(x: Int) { x * x }
+  square(5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(25)));
+    }
+
+    #[test]
+    fn test_lambda_no_type_annotation() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let add_one = fn(x) { x + 1 }
+  add_one(41)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_lambda_multi_param() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let add = fn(a, b) { a + b }
+  add(10, 20)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(30)));
+    }
+
+    #[test]
+    fn test_lambda_closure_capture() {
+        let source = r#"
+module example
+
+fn make_adder(n: Int) -> (Int) -> Int {
+  fn(x: Int) { x + n }
+}
+
+fn main() -> Int {
+  let add5 = make_adder(5)
+  add5(10)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(15)));
+    }
+
+    #[test]
+    fn test_lambda_as_argument() {
+        let source = r#"
+module example
+
+fn apply(f: (Int) -> Int, x: Int) -> Int {
+  f(x)
+}
+
+fn main() -> Int {
+  apply(fn(x) { x + 10 }, 5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(15)));
+    }
+
+    #[test]
+    fn test_lambda_inline_in_method() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let xs = [1, 2, 3, 4, 5]
+  let doubled = xs.map(fn(x) { x * 2 })
+  doubled.fold(0, fn(acc, x) { acc + x })
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(30)));
+    }
+
+    // =========================================================================
+    // Higher-order function tests
+    // =========================================================================
+
+    #[test]
+    fn test_function_as_value() {
+        let source = r#"
+module example
+
+fn double(x: Int) -> Int {
+  x * 2
+}
+
+fn apply_twice(f: (Int) -> Int, x: Int) -> Int {
+  f(f(x))
+}
+
+fn main() -> Int {
+  apply_twice(double, 3)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(12)));
+    }
+
+    // =========================================================================
+    // List combinator tests
+    // =========================================================================
+
+    #[test]
+    fn test_list_map() {
+        let source = r#"
+module example
+
+fn main() {
+  let xs = [1, 2, 3]
+  let doubled = xs.map(fn(x) { x * 2 })
+  assert_eq(doubled, [2, 4, 6])
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_filter() {
+        let source = r#"
+module example
+
+fn main() {
+  let xs = [1, 2, 3, 4, 5, 6]
+  let evens = xs.filter(fn(x) { x % 2 == 0 })
+  assert_eq(evens, [2, 4, 6])
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_fold() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let xs = [1, 2, 3, 4, 5]
+  xs.fold(0, fn(acc, x) { acc + x })
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(15)));
+    }
+
+    #[test]
+    fn test_list_method_chain() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  [1, -2, 3, -4, 5]
+    .filter(fn(x) { x > 0 })
+    .map(fn(x) { x * 2 })
+    .fold(0, fn(acc, x) { acc + x })
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(18)));
+    }
+
+    #[test]
+    fn test_list_any() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  [1, 2, 3, 4, 5].any(fn(x) { x > 4 })
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_list_all() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  [2, 4, 6, 8].all(fn(x) { x % 2 == 0 })
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_list_each() {
+        let source = r#"
+module example
+
+fn main() {
+  let xs = [1, 2, 3]
+  xs.each(fn(x) { assert(x > 0) })
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_push() {
+        let source = r#"
+module example
+
+fn main() {
+  let xs = [1, 2, 3]
+  let ys = xs.push(4)
+  assert_eq(ys, [1, 2, 3, 4])
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_concat() {
+        let source = r#"
+module example
+
+fn main() {
+  let xs = [1, 2]
+  let ys = [3, 4]
+  assert_eq(xs.concat(ys), [1, 2, 3, 4])
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_head() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  match [10, 20, 30].head() {
+    Some(x) => x
+    None => 0
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(10)));
+    }
+
+    #[test]
+    fn test_list_is_empty() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  [].is_empty()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_list_flat_map() {
+        let source = r#"
+module example
+
+fn main() {
+  let xs = [1, 2, 3]
+  let result = xs.flat_map(fn(x) { [x, x * 10] })
+  assert_eq(result, [1, 10, 2, 20, 3, 30])
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Pattern guard tests
+    // =========================================================================
+
+    #[test]
+    fn test_pattern_guard_basic() {
+        let source = r#"
+module example
+
+fn classify(x: Int) -> Text {
+  match x {
+    n if n < 0 => "negative"
+    0 => "zero"
+    n if n <= 10 => "small"
+    _ => "large"
+  }
+}
+
+fn main() -> Text {
+  classify(-5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "negative"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_guard_fallthrough() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  let x = 15
+  match x {
+    n if n < 0 => "negative"
+    0 => "zero"
+    n if n <= 10 => "small"
+    _ => "large"
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "large"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_guard_with_variant() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  match Some(5) {
+    Some(n) if n > 10 => "big"
+    Some(n) if n > 0 => "small"
+    Some(n) => "non-positive"
+    None => "nothing"
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "small"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    // =========================================================================
+    // String method tests
+    // =========================================================================
+
+    #[test]
+    fn test_string_to_upper() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  "hello".to_upper()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "HELLO"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_lower() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  "HELLO".to_lower()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_string_trim() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  "  hello  ".trim()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "hello"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_string_contains() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  "hello world".contains("world")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_split() {
+        let source = r#"
+module example
+
+fn main() {
+  let parts = "a,b,c".split(",")
+  assert_eq(parts, ["a", "b", "c"])
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_string_starts_with() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  "hello world".starts_with("hello")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_ends_with() {
+        let source = r#"
+module example
+
+fn main() -> Bool {
+  "hello world".ends_with("world")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_replace() {
+        let source = r#"
+module example
+
+fn main() -> Text {
+  "hello world".replace("world", "astra")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "hello astra"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn test_string_chars() {
+        let source = r#"
+module example
+
+fn main() {
+  let chars = "abc".chars()
+  assert_eq(chars, ["a", "b", "c"])
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Option/Result map tests
+    // =========================================================================
+
+    #[test]
+    fn test_option_map() {
+        let source = r#"
+module example
+
+fn main() {
+  let x = Some(5)
+  let y = x.map(fn(n) { n * 2 })
+  assert_eq(y, Some(10))
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_option_map_none() {
+        let source = r#"
+module example
+
+fn main() {
+  let x = None
+  let y = x.map(fn(n) { n * 2 })
+  assert_eq(y, None)
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_result_map() {
+        let source = r#"
+module example
+
+fn main() {
+  let x = Ok(5)
+  let y = x.map(fn(n) { n * 2 })
+  assert_eq(y, Ok(10))
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_result_map_err() {
+        let source = r#"
+module example
+
+fn main() {
+  let x = Err("bad")
+  let y = x.map_err(fn(e) { e + "!" })
+  assert_eq(y, Err("bad!"))
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // Record destructuring in let bindings
+    // =========================================================================
+
+    #[test]
+    fn test_let_destructure_record() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let point = { x = 10, y = 20 }
+  let { x, y } = point
+  x + y
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(30)));
+    }
+
+    #[test]
+    fn test_let_destructure_record_inline() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let { x, y } = { x = 3, y = 4 }
+  x * y
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(12)));
     }
 }
