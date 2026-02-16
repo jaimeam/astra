@@ -336,23 +336,69 @@ fn fetch() -> Text
 
 ## Warnings (W0xxx)
 
+Warnings indicate code that is valid but likely incorrect or suboptimal. By default, warnings are reported but do not prevent compilation. Use `astra check --strict` to treat all warnings as errors.
+
 ### W0001: Unused variable
 
-**Message**: `Unused variable: {name}`
+**Message**: `Unused variable '{name}'`
 
-**Fix**: Remove the variable or prefix with `_`.
+**Explanation**: A variable was defined but never read. This usually indicates dead code or a missing reference.
+
+**Example**:
+```astra
+fn main() -> Int {
+  let unused = 42   # Warning: Unused variable 'unused'
+  0
+}
+```
+
+**Fix**: Remove the variable, use it, or prefix with `_` to suppress the warning:
+```astra
+fn main() -> Int {
+  let _unused = 42  # No warning: underscore prefix suppresses W0001
+  0
+}
+```
 
 ---
 
 ### W0002: Unused import
 
-**Message**: `Unused import: {module}`
+**Message**: `Unused import '{name}'`
+
+**Explanation**: An imported module or item is never referenced in the file.
+
+**Example**:
+```astra
+module example
+
+import std.math     # Warning: Unused import 'math'
+
+fn main() -> Int {
+  42
+}
+```
+
+**Fix**: Remove the import if it is no longer needed.
 
 ---
 
 ### W0003: Unreachable code
 
-**Message**: `Unreachable code after {statement}`
+**Message**: `Unreachable code after return statement`
+
+**Explanation**: Code appears after a `return` statement in the same block. It will never be executed.
+
+**Example**:
+```astra
+fn main() -> Int {
+  return 1
+  let x = 2   # Warning: Unreachable code after return statement
+  x
+}
+```
+
+**Fix**: Remove the unreachable code or restructure the control flow.
 
 ---
 
@@ -360,16 +406,81 @@ fn fetch() -> Text
 
 **Message**: `Deprecated: {feature}. Use {alternative} instead`
 
+**Explanation**: A language feature or API has been deprecated. This warning is not yet emitted by the compiler but the code is reserved for future use.
+
 ---
 
 ### W0005: Wildcard match could be more specific
 
-**Message**: `Wildcard match could be more specific`
+**Message**: `Wildcard pattern '_' on {type} type could hide unhandled variants`
+
+**Explanation**: A `match` expression uses a wildcard `_` pattern when the matched type is fully known (e.g., `Option`, `Result`, `Bool`, or a user-defined enum). While valid, this can silently swallow new variants added later.
+
+**Example**:
+```astra
+fn describe(x: Option[Int]) -> Text {
+  match x {
+    Some(n) => "got a number"
+    _ => "nothing"            # Warning: Wildcard on Option type
+  }
+}
+```
+
+**Fix**: Match all variants explicitly:
+```astra
+fn describe(x: Option[Int]) -> Text {
+  match x {
+    Some(n) => "got a number"
+    None => "nothing"         # No warning: all variants covered
+  }
+}
+```
 
 ---
 
 ### W0006: Shadowed binding
 
-**Message**: `Variable '{name}' shadows previous binding`
+**Message**: `Variable '{name}' shadows a previous binding in the same scope`
+
+**Explanation**: A `let` binding reuses a name that was already defined in the same scope. This can cause confusion about which value is being referenced.
+
+**Example**:
+```astra
+fn main() -> Int {
+  let x = 1
+  let x = 2   # Warning: Variable 'x' shadows a previous binding
+  x
+}
+```
+
+**Fix**: Use a different name for the second binding:
+```astra
+fn main() -> Int {
+  let x = 1
+  let y = 2
+  y
+}
+```
+
+---
+
+### W0007: Redundant type annotation
+
+**Message**: `Redundant type annotation on '{name}'`
+
+**Explanation**: An explicit type annotation matches the type that would be inferred. This warning is not yet emitted by the compiler but the code is reserved for future use.
+
+---
+
+## Strictness Mode
+
+Running `astra check --strict` treats all warnings as errors, causing the checker to exit with a non-zero status code if any warnings are present. This is recommended for CI pipelines and production codebases.
+
+The strictness level can also be configured per-project in `astra.toml`:
+
+```toml
+[lint]
+level = "deny"   # "warn" (default) or "deny" (treats warnings as errors)
+```
 
 ---
