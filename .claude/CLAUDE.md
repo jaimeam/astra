@@ -17,7 +17,9 @@
 # Development (Rust toolchain)
 cargo build              # Build the compiler/toolchain
 cargo test               # Run all tests
-cargo run -- fmt         # Run formatter
+cargo fmt                # Auto-format Rust code
+cargo clippy --all-targets --all-features -- -D warnings  # Lint check
+cargo run -- fmt         # Run Astra formatter
 cargo run -- check       # Run type checker
 cargo run -- test        # Run Astra tests
 cargo run -- run <file>  # Execute Astra program
@@ -25,12 +27,16 @@ cargo run -- run <file>  # Execute Astra program
 # Testing
 cargo test --lib         # Unit tests only
 cargo test --test golden # Golden file tests
+
+# Pre-commit setup (run once after clone)
+git config core.hooksPath .githooks
 ```
 
 ### Project Structure
 ```
 astra/
 ├── .claude/             # Agent documentation (you are here)
+├── .githooks/           # Git hooks (fmt, clippy, test pre-commit)
 ├── src/                 # Rust source for toolchain
 │   ├── main.rs          # CLI entrypoint
 │   ├── lib.rs           # Library root
@@ -94,11 +100,29 @@ See `.claude/patterns/` for recommended implementation patterns.
 
 ## Before You Start
 
-1. **Read the relevant contract** for your area of work
-2. **Check existing ADRs** in `docs/adr/` for design decisions
-3. **Run tests** before and after changes: `cargo test`
-4. **Follow formatting**: `cargo fmt` for Rust, canonical format for Astra
-5. **Document decisions**: Add ADRs for non-trivial choices
+1. **Set up git hooks**: `git config core.hooksPath .githooks`
+2. **Read the relevant contract** for your area of work
+3. **Check existing ADRs** in `docs/adr/` for design decisions
+4. **Run tests** before and after changes: `cargo test`
+5. **Follow formatting**: `cargo fmt` for Rust, canonical format for Astra
+6. **Document decisions**: Add ADRs for non-trivial choices
+
+## Pre-commit Checks
+
+A pre-commit hook (`.githooks/pre-commit`) runs automatically on every commit.
+It enforces three checks that must all pass before a commit is accepted:
+
+1. **`cargo fmt -- --check`** — Code must be formatted. Run `cargo fmt` to fix.
+2. **`cargo clippy --all-targets --all-features -- -D warnings`** — No clippy warnings allowed.
+3. **`cargo test`** — All tests must pass.
+
+Activate the hooks after cloning:
+```bash
+git config core.hooksPath .githooks
+```
+
+**Do not bypass these hooks** with `--no-verify`. If a check fails, fix the
+issue and try the commit again.
 
 ## Error Codes
 
