@@ -537,6 +537,16 @@ impl Formatter {
                 self.write(" ?else ");
                 self.format_expr(else_expr);
             }
+            Expr::ListLit { elements, .. } => {
+                self.write("[");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.format_expr(elem);
+                }
+                self.write("]");
+            }
             Expr::Hole { .. } => {
                 self.write("???");
             }

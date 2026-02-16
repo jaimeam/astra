@@ -365,6 +365,13 @@ pub enum Expr {
         else_expr: Box<Expr>,
     },
 
+    // Collections
+    ListLit {
+        id: NodeId,
+        span: Span,
+        elements: Vec<Expr>,
+    },
+
     // Special
     Hole {
         id: NodeId,
@@ -393,6 +400,7 @@ impl Expr {
             | Expr::Block { span, .. }
             | Expr::Try { span, .. }
             | Expr::TryElse { span, .. }
+            | Expr::ListLit { span, .. }
             | Expr::Hole { span, .. } => span,
         }
     }
