@@ -7,6 +7,60 @@ use crate::diagnostics::{Diagnostic, DiagnosticBag, Note, Span, Suggestion};
 use crate::parser::ast::*;
 use std::collections::{HashMap, HashSet};
 
+/// Compute Levenshtein edit distance between two strings.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let m = a.len();
+    let n = b.len();
+
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = i;
+    }
+    for (j, val) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *val = j;
+    }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            dp[i][j] = (dp[i - 1][j] + 1)
+                .min(dp[i][j - 1] + 1)
+                .min(dp[i - 1][j - 1] + cost);
+        }
+    }
+    dp[m][n]
+}
+
+/// Find the most similar name in the environment to the given unknown name.
+/// Returns `Some(name)` if a name within edit distance 3 exists, `None` otherwise.
+fn find_similar_name(name: &str, env: &TypeEnv) -> Option<String> {
+    let mut best: Option<(String, usize)> = None;
+    let max_distance = 3.min(name.len().div_ceil(2));
+
+    for candidate in env.bindings.keys() {
+        if candidate == name {
+            continue;
+        }
+        let dist = edit_distance(name, candidate);
+        if dist <= max_distance && best.as_ref().is_none_or(|(_, d)| dist < *d) {
+            best = Some((candidate.clone(), dist));
+        }
+    }
+
+    // Also check parent environments
+    if let Some(ref parent) = env.parent {
+        if let Some(parent_suggestion) = find_similar_name(name, parent) {
+            let parent_dist = edit_distance(name, &parent_suggestion);
+            if best.as_ref().is_none_or(|(_, d)| parent_dist < *d) {
+                return Some(parent_suggestion);
+            }
+        }
+    }
+
+    best.map(|(name, _)| name)
+}
+
 /// Tracks a variable definition for unused-variable lint (W0001)
 #[derive(Debug, Clone)]
 struct VarBinding {
@@ -181,6 +235,22 @@ enum MatchTypeKind {
     Other,
 }
 
+/// Known standard library module names (must correspond to stdlib/*.astra files)
+const KNOWN_STDLIB_MODULES: &[&str] = &[
+    "collections",
+    "core",
+    "error",
+    "io",
+    "iter",
+    "json",
+    "list",
+    "math",
+    "option",
+    "prelude",
+    "result",
+    "string",
+];
+
 /// Type checker
 pub struct TypeChecker {
     /// Current environment
@@ -208,6 +278,50 @@ impl TypeChecker {
     }
 
     /// Push a new lint scope
+    /// Validate that an import path resolves to a known module.
+    /// For `std.*` imports, checks against the known stdlib module list.
+    fn validate_import_path(&mut self, import: &ImportDecl) {
+        let segments = &import.path.segments;
+        if segments.len() >= 2 && segments[0] == "std" {
+            let module_name = &segments[1];
+            if !KNOWN_STDLIB_MODULES.contains(&module_name.as_str()) {
+                let available: Vec<&str> = KNOWN_STDLIB_MODULES
+                    .iter()
+                    .copied()
+                    .filter(|m| {
+                        // Suggest modules with similar names (simple prefix match)
+                        m.starts_with(&module_name[..1.min(module_name.len())])
+                    })
+                    .collect();
+                let mut diag =
+                    Diagnostic::error(crate::diagnostics::error_codes::syntax::MODULE_NOT_FOUND)
+                        .message(format!("Module not found: `std.{}`", module_name))
+                        .span(import.span.clone());
+
+                if !available.is_empty() {
+                    let suggestions_text = available
+                        .iter()
+                        .map(|m| format!("std.{}", m))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    diag = diag.note(Note::new(format!(
+                        "available std modules: {}",
+                        suggestions_text
+                    )));
+                } else {
+                    let all_modules = KNOWN_STDLIB_MODULES
+                        .iter()
+                        .map(|m| format!("std.{}", m))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    diag = diag.note(Note::new(format!("available std modules: {}", all_modules)));
+                }
+
+                self.diagnostics.push(diag.build());
+            }
+        }
+    }
+
     fn push_lint_scope(&mut self) {
         self.lint_scopes.push(LintScope::default());
     }
@@ -227,6 +341,7 @@ impl TypeChecker {
                             "prefix with `_` to suppress this warning: `_{}`",
                             binding.name
                         )))
+                        .suggestion(Suggestion::new(format!("Rename to `_{}`", binding.name)))
                         .build(),
                     );
                 }
@@ -289,6 +404,9 @@ impl TypeChecker {
         for item in &module.items {
             match item {
                 Item::Import(import) => {
+                    // Validate that the import path resolves to a known module
+                    self.validate_import_path(import);
+
                     // Track imports for W0002 (unused import)
                     let import_name = match &import.kind {
                         ImportKind::Module => {
@@ -381,6 +499,7 @@ impl TypeChecker {
                         .message(format!("Unused import `{}`", name))
                         .span(span.clone())
                         .note(Note::new("remove this import if it is no longer needed"))
+                        .suggestion(Suggestion::new("Remove this import"))
                         .build(),
                 );
             }
@@ -747,14 +866,23 @@ impl TypeChecker {
                         if let Some(ty) = env.lookup(name) {
                             ty.clone()
                         } else {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    crate::diagnostics::error_codes::types::UNKNOWN_IDENTIFIER,
-                                )
-                                .message(format!("Unknown identifier: {}", name))
-                                .span(span.clone())
-                                .build(),
-                            );
+                            let mut diag = Diagnostic::error(
+                                crate::diagnostics::error_codes::types::UNKNOWN_IDENTIFIER,
+                            )
+                            .message(format!("Unknown identifier: {}", name))
+                            .span(span.clone());
+
+                            // Suggest similar names from the environment
+                            if let Some(suggestion) = find_similar_name(name, env) {
+                                diag = diag
+                                    .note(Note::new(format!("did you mean `{}`?", suggestion)))
+                                    .suggestion(Suggestion::new(format!(
+                                        "Replace with `{}`",
+                                        suggestion
+                                    )));
+                            }
+
+                            self.diagnostics.push(diag.build());
                             Type::Unknown
                         }
                     }

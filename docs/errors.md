@@ -103,6 +103,24 @@ let match = 5  # Error: 'match' is a reserved keyword
 
 ---
 
+### E0011: Module not found
+
+**Message**: `Module not found: std.{name}`
+
+**Explanation**: An import references a standard library module that does not exist.
+
+**Example**:
+```astra
+import std.nonexistent  # Error: Module not found
+```
+
+**Fix**: Use a valid standard library module name. Available modules:
+`std.collections`, `std.core`, `std.error`, `std.io`, `std.iter`,
+`std.json`, `std.list`, `std.math`, `std.option`, `std.prelude`,
+`std.result`, `std.string`.
+
+---
+
 ## Type Errors (E1xxx)
 
 ### E1001: Type mismatch
