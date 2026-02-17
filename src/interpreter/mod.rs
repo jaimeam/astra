@@ -426,6 +426,8 @@ pub struct Interpreter {
     pub search_paths: Vec<PathBuf>,
     /// Already-loaded modules (to prevent circular imports)
     loaded_modules: std::collections::HashSet<String>,
+    /// Call stack for stack traces (P5.2)
+    call_stack: Vec<String>,
 }
 
 impl Interpreter {
@@ -436,6 +438,7 @@ impl Interpreter {
             capabilities: Capabilities::default(),
             search_paths: Vec::new(),
             loaded_modules: std::collections::HashSet::new(),
+            call_stack: Vec::new(),
         }
     }
 
@@ -446,6 +449,7 @@ impl Interpreter {
             capabilities,
             search_paths: Vec::new(),
             loaded_modules: std::collections::HashSet::new(),
+            call_stack: Vec::new(),
         }
     }
 
@@ -499,10 +503,30 @@ impl Interpreter {
     }
 
     pub fn load_module(&mut self, module: &Module) -> Result<(), RuntimeError> {
-        // Process imports first
+        self.load_module_with_filter(module, None)
+    }
+
+    /// Load a module, optionally filtering which names to import
+    fn load_module_with_filter(
+        &mut self,
+        module: &Module,
+        filter: Option<&[String]>,
+    ) -> Result<(), RuntimeError> {
+        // Process imports first (P4.1: named import resolution)
         for item in &module.items {
             if let Item::Import(import) = item {
-                self.load_import(&import.path.segments)?;
+                match &import.kind {
+                    ImportKind::Module => {
+                        self.load_import(&import.path.segments)?;
+                    }
+                    ImportKind::Items(names) => {
+                        self.load_import_filtered(&import.path.segments, names)?;
+                    }
+                    ImportKind::Alias(_alias) => {
+                        // For now, load the full module (alias support later)
+                        self.load_import(&import.path.segments)?;
+                    }
+                }
             }
         }
 
@@ -510,6 +534,12 @@ impl Interpreter {
         for item in &module.items {
             match item {
                 Item::FnDef(fn_def) => {
+                    // Apply filter if specified
+                    if let Some(names) = filter {
+                        if !names.contains(&fn_def.name) {
+                            continue;
+                        }
+                    }
                     let params: Vec<String> =
                         fn_def.params.iter().map(|p| p.name.clone()).collect();
                     let closure = Value::Closure {
@@ -527,6 +557,11 @@ impl Interpreter {
                 Item::EnumDef(enum_def) => {
                     // Register variant constructors
                     for variant in &enum_def.variants {
+                        if let Some(names) = filter {
+                            if !names.contains(&variant.name) {
+                                continue;
+                            }
+                        }
                         if !variant.fields.is_empty() {
                             let field_names: Vec<String> =
                                 variant.fields.iter().map(|f| f.name.clone()).collect();
@@ -543,6 +578,41 @@ impl Interpreter {
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    /// Load an imported module, only bringing specific names into scope
+    fn load_import_filtered(
+        &mut self,
+        segments: &[String],
+        names: &[String],
+    ) -> Result<(), RuntimeError> {
+        let module_key = segments.join(".");
+        if self.loaded_modules.contains(&module_key) {
+            return Ok(()); // Already loaded
+        }
+        self.loaded_modules.insert(module_key);
+
+        let file_path = match self.resolve_module_path(segments) {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        let source = std::fs::read_to_string(&file_path).map_err(|e| {
+            RuntimeError::new("E4016", format!("Failed to read module file: {}", e))
+        })?;
+
+        let source_file = crate::parser::span::SourceFile::new(file_path.clone(), source.clone());
+        let lexer = crate::parser::lexer::Lexer::new(&source_file);
+        let mut parser = crate::parser::parser::Parser::new(lexer, source_file.clone());
+        let imported_module = parser.parse_module().map_err(|_| {
+            RuntimeError::new(
+                "E4017",
+                format!("Failed to parse module: {}", file_path.display()),
+            )
+        })?;
+
+        self.load_module_with_filter(&imported_module, Some(names))?;
         Ok(())
     }
 
@@ -1426,7 +1496,7 @@ impl Interpreter {
     }
 
     /// Call a function value with arguments
-    fn call_function(&mut self, func: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    pub fn call_function(&mut self, func: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
         match func {
             Value::VariantConstructor { name, field_names } => {
                 if args.len() != field_names.len() {
@@ -1477,6 +1547,9 @@ impl Interpreter {
 
                 let fn_name = name.as_deref().unwrap_or("<anonymous>");
 
+                // Push call stack frame (P5.2: stack traces)
+                self.call_stack.push(fn_name.to_string());
+
                 // Check preconditions (requires clauses)
                 if !body.requires.is_empty() {
                     let old_env = std::mem::replace(&mut self.env, call_env.clone());
@@ -1516,6 +1589,17 @@ impl Interpreter {
                 let result = match result {
                     Err(e) if e.is_return => Ok(e.get_early_return().unwrap_or(Value::Unit)),
                     Err(e) if e.is_early_return() => Ok(e.get_early_return().unwrap()),
+                    Err(mut e) => {
+                        // Attach stack trace to error (P5.2)
+                        if !e.is_break && !e.is_continue {
+                            let trace = self.format_stack_trace();
+                            if !trace.is_empty() {
+                                e.message = format!("{}\n{}", e.message, trace);
+                            }
+                        }
+                        self.call_stack.pop();
+                        return Err(e);
+                    }
                     other => other,
                 }?;
 
@@ -1545,10 +1629,24 @@ impl Interpreter {
                     self.env = old_env;
                 }
 
+                // Pop call stack frame
+                self.call_stack.pop();
                 Ok(result)
             }
             _ => Err(RuntimeError::not_callable()),
         }
+    }
+
+    /// Get the current call stack as a formatted string
+    pub fn format_stack_trace(&self) -> String {
+        if self.call_stack.is_empty() {
+            return String::new();
+        }
+        let mut trace = String::from("Stack trace:\n");
+        for (i, frame) in self.call_stack.iter().rev().enumerate() {
+            trace.push_str(&format!("  {}: {}\n", i, frame));
+        }
+        trace
     }
 
     /// Call a method on a receiver (for effects like Console.println)
@@ -2666,7 +2764,7 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
 }
 
 /// Format a value for display
-fn format_value(value: &Value) -> String {
+pub fn format_value(value: &Value) -> String {
     match value {
         Value::Unit => "()".to_string(),
         Value::Int(n) => n.to_string(),

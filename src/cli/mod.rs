@@ -68,6 +68,9 @@ pub enum Command {
         args: Vec<String>,
     },
 
+    /// Start interactive REPL
+    Repl,
+
     /// Create a distributable package
     Package {
         /// Output directory
@@ -97,6 +100,9 @@ impl Cli {
             }
             Command::Run { file, args } => {
                 run_program(&file, &args)?;
+            }
+            Command::Repl => {
+                run_repl()?;
             }
             Command::Package { output, target } => {
                 run_package(&output, &target)?;
@@ -598,6 +604,122 @@ impl EnvCapability for RealEnv {
     fn args(&self) -> Vec<String> {
         self.args.clone()
     }
+}
+
+fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::interpreter::format_value;
+    use std::io::{self, Write};
+
+    println!("Astra REPL v0.1.0");
+    println!("Type expressions to evaluate. Use :quit to exit, :help for help.");
+    println!();
+
+    // Keep track of definitions (accumulated source)
+    let mut definitions = String::from("module repl\n");
+    let mut line_num = 0u32;
+
+    let make_interpreter = || {
+        Interpreter::with_capabilities(Capabilities {
+            console: Some(Box::new(RealConsole)),
+            ..Default::default()
+        })
+    };
+
+    loop {
+        print!("astra> ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                continue;
+            }
+        }
+
+        let input = input.trim();
+        if input.is_empty() {
+            continue;
+        }
+
+        // Handle REPL commands
+        match input {
+            ":quit" | ":q" | ":exit" => break,
+            ":help" | ":h" => {
+                println!("Commands:");
+                println!("  :quit, :q    Exit the REPL");
+                println!("  :help, :h    Show this help");
+                println!("  :clear       Clear all definitions");
+                println!();
+                println!("Enter expressions, let bindings, or function definitions.");
+                continue;
+            }
+            ":clear" => {
+                definitions = String::from("module repl\n");
+                println!("Cleared.");
+                continue;
+            }
+            _ => {}
+        }
+
+        line_num += 1;
+
+        // Try to evaluate as expression first: wrap in a temp main function
+        let expr_source = format!("{}\nfn __repl__() -> Unit {{ {} }}", definitions, input);
+
+        let source_file = SourceFile::new(PathBuf::from("repl.astra"), expr_source.clone());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = AstraParser::new(lexer, source_file.clone());
+
+        match parser.parse_module() {
+            Ok(module) => {
+                let mut interp = make_interpreter();
+                if let Err(e) = interp.load_module(&module) {
+                    eprintln!("Error: {}", e);
+                    continue;
+                }
+                if let Some(func) = interp.env.lookup("__repl__").cloned() {
+                    match interp.call_function(func, vec![]) {
+                        Ok(value) => {
+                            if !matches!(value, crate::interpreter::Value::Unit) {
+                                println!("{}", format_value(&value));
+                            }
+                        }
+                        Err(e) if e.is_return => {
+                            if let Some(val) = e.early_return {
+                                println!("{}", format_value(&val));
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // Try as a top-level definition (fn, type, enum)
+                let def_source = format!("{}\n{}", definitions, input);
+                let source_file2 = SourceFile::new(PathBuf::from("repl.astra"), def_source.clone());
+                let lexer2 = Lexer::new(&source_file2);
+                let mut parser2 = AstraParser::new(lexer2, source_file2.clone());
+
+                match parser2.parse_module() {
+                    Ok(_) => {
+                        definitions = def_source;
+                        println!("Defined. ({} definitions)", line_num);
+                    }
+                    Err(e) => {
+                        eprintln!("{}", e.format_text(&def_source));
+                    }
+                }
+            }
+        }
+    }
+
+    println!("Bye!");
+    Ok(())
 }
 
 fn run_package(output: &PathBuf, target: &str) -> Result<(), Box<dyn std::error::Error>> {
