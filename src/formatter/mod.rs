@@ -83,6 +83,7 @@ impl Formatter {
             Item::FnDef(fndef) => self.format_fndef(fndef),
             Item::TraitDef(trait_def) => self.format_trait_def(trait_def),
             Item::ImplBlock(impl_block) => self.format_impl_block(impl_block),
+            Item::EffectDef(effect_def) => self.format_effect_def(effect_def),
             Item::Test(test) => self.format_test(test),
             Item::Property(property) => self.format_property(property),
         }
@@ -90,6 +91,9 @@ impl Formatter {
 
     fn format_import(&mut self, import: &ImportDecl) {
         self.write_indent();
+        if import.public {
+            self.write("public ");
+        }
         self.write("import ");
         self.format_module_path(&import.path);
 
@@ -278,6 +282,39 @@ impl Formatter {
         self.indent_level += 1;
         for method in &impl_block.methods {
             self.format_fndef(method);
+            self.newline();
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.write("}");
+        self.newline();
+    }
+
+    fn format_effect_def(&mut self, effect_def: &EffectDecl) {
+        self.write_indent();
+        self.write("effect ");
+        self.write(&effect_def.name);
+        self.write(" {");
+        self.newline();
+        self.indent_level += 1;
+        for op in &effect_def.operations {
+            self.write_indent();
+            self.write("fn ");
+            self.write(&op.name);
+            self.write("(");
+            for (i, param) in op.params.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&param.name);
+                self.write(": ");
+                self.format_type_expr(&param.ty);
+            }
+            self.write(")");
+            if let Some(ret) = &op.return_type {
+                self.write(" -> ");
+                self.format_type_expr(ret);
+            }
             self.newline();
         }
         self.indent_level -= 1;
@@ -715,6 +752,10 @@ impl Formatter {
                     self.write(")");
                 }
                 self.write("])");
+            }
+            Expr::Await { expr, .. } => {
+                self.write("await ");
+                self.format_expr(expr);
             }
             Expr::Hole { .. } => {
                 self.write("???");

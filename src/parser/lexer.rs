@@ -80,6 +80,12 @@ pub enum TokenKind {
     Trait,
     #[token("impl")]
     Impl,
+    #[token("effect")]
+    Effect,
+    #[token("await")]
+    Await,
+    #[token("async")]
+    Async,
 
     // Literals
     #[regex(r"[0-9]+\.[0-9]+", priority = 3, callback = |lex| lex.slice().parse::<f64>().ok())]

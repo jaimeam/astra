@@ -54,6 +54,7 @@ pub enum Item {
     FnDef(FnDef),
     TraitDef(TraitDef),
     ImplBlock(ImplBlock),
+    EffectDef(EffectDecl),
     Test(TestBlock),
     Property(PropertyBlock),
 }
@@ -65,6 +66,8 @@ pub struct ImportDecl {
     pub span: Span,
     pub path: ModulePath,
     pub kind: ImportKind,
+    /// P4.3: Re-exports (public import)
+    pub public: bool,
 }
 
 /// Kind of import
@@ -145,6 +148,15 @@ pub struct ImplBlock {
     pub trait_name: String,
     pub target_type: TypeExpr,
     pub methods: Vec<FnDef>,
+}
+
+/// Effect definition (e.g., `effect Logger { fn log(msg: Text) -> Unit }`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectDecl {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub operations: Vec<TraitMethod>,
 }
 
 /// Function definition
@@ -475,6 +487,13 @@ pub enum Expr {
         parts: Vec<StringPart>,
     },
 
+    // Await expression (P6.5: async/await)
+    Await {
+        id: NodeId,
+        span: Span,
+        expr: Box<Expr>,
+    },
+
     // Special
     Hole {
         id: NodeId,
@@ -513,6 +532,7 @@ impl Expr {
             | Expr::Break { span, .. }
             | Expr::Continue { span, .. }
             | Expr::StringInterp { span, .. }
+            | Expr::Await { span, .. }
             | Expr::Hole { span, .. } => span,
         }
     }

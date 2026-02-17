@@ -362,6 +362,9 @@ impl TypeChecker {
                     self.check_fndef(method);
                 }
             }
+            Item::EffectDef(_) => {
+                // Effect definitions are structurally valid if parsed
+            }
             Item::Test(test) => self.check_test(test),
             Item::Property(prop) => self.check_property(prop),
         }
@@ -882,6 +885,10 @@ impl TypeChecker {
                     self.check_expr_with_effects(v, env, effects);
                 }
                 Type::Unknown // Map type not fully tracked yet
+            }
+            Expr::Await { expr, .. } => {
+                // P6.5: await just checks the inner expression
+                self.check_expr_with_effects(expr, env, effects)
             }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(

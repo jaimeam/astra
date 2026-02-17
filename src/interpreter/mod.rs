@@ -416,6 +416,15 @@ pub struct Capabilities {
     pub env: Option<Box<dyn EnvCapability>>,
 }
 
+/// Result of evaluating an expression with TCO awareness (P6.4)
+#[allow(clippy::large_enum_variant)]
+enum TcoResult {
+    /// Normal value
+    Value(Value),
+    /// Self-recursive tail call with new arguments
+    TailCall(Vec<Value>),
+}
+
 /// Interpreter for Astra programs
 pub struct Interpreter {
     /// Global environment
@@ -430,6 +439,13 @@ pub struct Interpreter {
     loading_modules: std::collections::HashSet<String>,
     /// Call stack for stack traces (P5.2)
     call_stack: Vec<String>,
+    /// Type definitions for invariant enforcement (P2.3)
+    type_defs: HashMap<String, TypeDef>,
+    /// Effect definitions (P6.2)
+    effect_defs: HashMap<String, EffectDecl>,
+    /// Re-exported module keys for public imports (P4.3)
+    #[allow(dead_code)]
+    reexport_modules: Vec<String>,
 }
 
 impl Interpreter {
@@ -442,6 +458,9 @@ impl Interpreter {
             loaded_modules: std::collections::HashSet::new(),
             loading_modules: std::collections::HashSet::new(),
             call_stack: Vec::new(),
+            type_defs: HashMap::new(),
+            effect_defs: HashMap::new(),
+            reexport_modules: Vec::new(),
         }
     }
 
@@ -454,6 +473,9 @@ impl Interpreter {
             loaded_modules: std::collections::HashSet::new(),
             loading_modules: std::collections::HashSet::new(),
             call_stack: Vec::new(),
+            type_defs: HashMap::new(),
+            effect_defs: HashMap::new(),
+            reexport_modules: Vec::new(),
         }
     }
 
@@ -609,10 +631,56 @@ impl Interpreter {
                         self.env.define(qualified_name, closure);
                     }
                 }
+                Item::TypeDef(type_def) => {
+                    // P2.3: Store type definitions for invariant enforcement
+                    self.type_defs
+                        .insert(type_def.name.clone(), type_def.clone());
+                }
+                Item::EffectDef(effect_def) => {
+                    // P6.2: Store user-defined effect declarations
+                    self.effect_defs
+                        .insert(effect_def.name.clone(), effect_def.clone());
+                }
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    /// P2.3: Check type invariant for a value against a named type
+    fn check_type_invariant(&mut self, type_name: &str, value: &Value) -> Result<(), RuntimeError> {
+        if let Some(type_def) = self.type_defs.get(type_name).cloned() {
+            if let Some(invariant) = &type_def.invariant {
+                let invariant = invariant.clone();
+                // Evaluate invariant with `self` bound to the value
+                let old_env = self.env.clone();
+                self.env = self.env.child();
+                self.env.define("self".to_string(), value.clone());
+                let result = self.eval_expr(&invariant);
+                self.env = old_env;
+
+                match result {
+                    Ok(Value::Bool(true)) => Ok(()),
+                    Ok(Value::Bool(false)) => Err(RuntimeError::new(
+                        "E3003",
+                        format!(
+                            "Type invariant violated for {}: {} does not satisfy invariant",
+                            type_name,
+                            format_value(value)
+                        ),
+                    )),
+                    Ok(_) => Err(RuntimeError::new(
+                        "E3003",
+                        "Type invariant must evaluate to Bool",
+                    )),
+                    Err(e) => Err(e),
+                }
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     /// Load an imported module, only bringing specific names into scope
@@ -1351,6 +1419,9 @@ impl Interpreter {
             }
 
             // Hole (incomplete code)
+            // P6.5: Await evaluates the inner expression (single-threaded execution)
+            Expr::Await { expr, .. } => self.eval_expr(expr),
+
             Expr::Hole { .. } => Err(RuntimeError::hole_encountered()),
         }
     }
@@ -1358,8 +1429,17 @@ impl Interpreter {
     /// Evaluate a statement
     pub fn eval_stmt(&mut self, stmt: &Stmt) -> Result<(), RuntimeError> {
         match stmt {
-            Stmt::Let { name, value, .. } => {
+            Stmt::Let {
+                name, value, ty, ..
+            } => {
                 let val = self.eval_expr(value)?;
+                // P2.3: Check type invariant if type annotation matches a type with invariant
+                if let Some(TypeExpr::Named {
+                    name: type_name, ..
+                }) = ty
+                {
+                    self.check_type_invariant(type_name, &val)?;
+                }
                 self.env.define(name.clone(), val);
                 Ok(())
             }
@@ -1564,60 +1644,111 @@ impl Interpreter {
                     return Err(RuntimeError::arity_mismatch(params.len(), args.len()));
                 }
 
-                // Determine parent environment:
-                // - For module-level functions (empty captured env), use current env
-                // - For closures (non-empty captured env), use captured env
-                let parent_env = if env.bindings.is_empty() && env.parent.is_none() {
-                    &self.env
-                } else {
-                    &env
-                };
-
-                // Create new environment with appropriate parent
-                let mut call_env = parent_env.child();
-                for (param, arg) in params.iter().zip(args) {
-                    call_env.define(param.clone(), arg);
-                }
-
                 let fn_name = name.as_deref().unwrap_or("<anonymous>");
 
                 // Push call stack frame (P5.2: stack traces)
                 self.call_stack.push(fn_name.to_string());
 
-                // Check preconditions (requires clauses)
-                if !body.requires.is_empty() {
-                    let old_env = std::mem::replace(&mut self.env, call_env.clone());
-                    for req_expr in &body.requires {
-                        let cond = self.eval_expr(req_expr)?;
-                        match cond {
-                            Value::Bool(true) => {}
-                            Value::Bool(false) => {
-                                self.env = old_env;
-                                return Err(RuntimeError::precondition_violated(fn_name));
-                            }
-                            _ => {
-                                self.env = old_env;
-                                return Err(RuntimeError::type_mismatch(
-                                    "Bool",
-                                    &format!("{:?}", cond),
-                                ));
+                // P6.4: TCO - detect simple self-recursive tail calls
+                let use_tco = name.is_some()
+                    && body.requires.is_empty()
+                    && body.ensures.is_empty()
+                    && Self::has_self_tail_call(&body.block, fn_name);
+
+                let mut current_args = args;
+                let mut last_call_env: Option<Environment> = None;
+
+                let result = 'tco: loop {
+                    // Determine parent environment
+                    let parent_env = if env.bindings.is_empty() && env.parent.is_none() {
+                        &self.env
+                    } else {
+                        &env
+                    };
+
+                    // Create new environment with appropriate parent
+                    let mut call_env = parent_env.child();
+                    for (param, arg) in params.iter().zip(current_args.iter().cloned()) {
+                        call_env.define(param.clone(), arg);
+                    }
+
+                    // Check preconditions (requires clauses)
+                    if !body.requires.is_empty() {
+                        let old_env = std::mem::replace(&mut self.env, call_env.clone());
+                        for req_expr in &body.requires {
+                            let cond = self.eval_expr(req_expr)?;
+                            match cond {
+                                Value::Bool(true) => {}
+                                Value::Bool(false) => {
+                                    self.env = old_env;
+                                    return Err(RuntimeError::precondition_violated(fn_name));
+                                }
+                                _ => {
+                                    self.env = old_env;
+                                    return Err(RuntimeError::type_mismatch(
+                                        "Bool",
+                                        &format!("{:?}", cond),
+                                    ));
+                                }
                             }
                         }
+                        self.env = old_env;
                     }
-                    self.env = old_env;
-                }
 
-                // Save call_env for postcondition checking (has param bindings)
-                let saved_call_env = if !body.ensures.is_empty() {
-                    Some(call_env.clone())
-                } else {
-                    None
+                    // Save call_env for postcondition checking
+                    if !body.ensures.is_empty() {
+                        last_call_env = Some(call_env.clone());
+                    }
+
+                    // Execute the body
+                    let old_env = std::mem::replace(&mut self.env, call_env);
+
+                    if use_tco {
+                        // TCO path: execute statements, then check tail expression
+                        let mut stmt_result = Ok(());
+                        for stmt in &body.block.stmts {
+                            stmt_result = self.eval_stmt(stmt);
+                            if stmt_result.is_err() {
+                                break;
+                            }
+                        }
+
+                        match stmt_result {
+                            Ok(()) => {
+                                // Evaluate trailing expression with TCO awareness
+                                if let Some(expr) = &body.block.expr {
+                                    match self.eval_expr_tco(expr, fn_name) {
+                                        Ok(TcoResult::Value(val)) => {
+                                            self.env = old_env;
+                                            break 'tco Ok(val);
+                                        }
+                                        Ok(TcoResult::TailCall(new_args)) => {
+                                            self.env = old_env;
+                                            current_args = new_args;
+                                            continue 'tco;
+                                        }
+                                        Err(e) => {
+                                            self.env = old_env;
+                                            break 'tco Err(e);
+                                        }
+                                    }
+                                } else {
+                                    self.env = old_env;
+                                    break 'tco Ok(Value::Unit);
+                                }
+                            }
+                            Err(e) => {
+                                self.env = old_env;
+                                break 'tco Err(e);
+                            }
+                        }
+                    } else {
+                        // Normal path
+                        let result = self.eval_block(&body.block);
+                        self.env = old_env;
+                        break 'tco result;
+                    }
                 };
-
-                // Execute the body
-                let old_env = std::mem::replace(&mut self.env, call_env);
-                let result = self.eval_block(&body.block);
-                self.env = old_env;
 
                 // Handle early returns from ? operator and return statements
                 let result = match result {
@@ -1640,7 +1771,7 @@ impl Interpreter {
                 // Check postconditions (ensures clauses)
                 if !body.ensures.is_empty() {
                     // Use the call env (which has param bindings) and add `result`
-                    let mut ensures_env = saved_call_env.unwrap();
+                    let mut ensures_env = last_call_env.unwrap();
                     ensures_env.define("result".to_string(), result.clone());
                     let old_env = std::mem::replace(&mut self.env, ensures_env);
                     for ens_expr in &body.ensures {
@@ -1668,6 +1799,111 @@ impl Interpreter {
                 Ok(result)
             }
             _ => Err(RuntimeError::not_callable()),
+        }
+    }
+
+    /// P6.4: Check if a block ends with a self-recursive tail call
+    fn has_self_tail_call(block: &Block, fn_name: &str) -> bool {
+        match &block.expr {
+            Some(expr) => Self::expr_has_tail_call(expr, fn_name),
+            None => false,
+        }
+    }
+
+    /// P6.4: Check if an expression contains a self-recursive tail call
+    fn expr_has_tail_call(expr: &Expr, fn_name: &str) -> bool {
+        match expr {
+            Expr::Call { func, .. } => {
+                matches!(func.as_ref(), Expr::Ident { name, .. } if name == fn_name)
+            }
+            Expr::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let then_has = Self::has_self_tail_call(then_branch, fn_name);
+                let else_has = else_branch
+                    .as_ref()
+                    .is_some_and(|e| Self::expr_has_tail_call(e, fn_name));
+                then_has || else_has
+            }
+            Expr::Block { block, .. } => Self::has_self_tail_call(block, fn_name),
+            _ => false,
+        }
+    }
+
+    /// P6.4: Evaluate an expression with TCO awareness
+    fn eval_expr_tco(&mut self, expr: &Expr, fn_name: &str) -> Result<TcoResult, RuntimeError> {
+        match expr {
+            Expr::Call { func, args, .. } => {
+                if let Expr::Ident { name, .. } = func.as_ref() {
+                    if name == fn_name {
+                        // Self-recursive tail call - extract args without recursing
+                        let eval_args: Vec<Value> = args
+                            .iter()
+                            .map(|a| self.eval_expr(a))
+                            .collect::<Result<_, _>>()?;
+                        return Ok(TcoResult::TailCall(eval_args));
+                    }
+                }
+                // Not a self-call, evaluate normally
+                let val = self.eval_expr(expr)?;
+                Ok(TcoResult::Value(val))
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let cond_val = self.eval_expr(cond)?;
+                match cond_val {
+                    Value::Bool(true) => {
+                        // Execute then branch with TCO awareness
+                        let old_env = self.env.clone();
+                        self.env = self.env.child();
+                        for stmt in &then_branch.stmts {
+                            self.eval_stmt(stmt)?;
+                        }
+                        let result = if let Some(tail_expr) = &then_branch.expr {
+                            self.eval_expr_tco(tail_expr, fn_name)
+                        } else {
+                            Ok(TcoResult::Value(Value::Unit))
+                        };
+                        self.env = old_env;
+                        result
+                    }
+                    Value::Bool(false) => {
+                        if let Some(else_expr) = else_branch {
+                            self.eval_expr_tco(else_expr, fn_name)
+                        } else {
+                            Ok(TcoResult::Value(Value::Unit))
+                        }
+                    }
+                    _ => Err(RuntimeError::type_mismatch(
+                        "Bool",
+                        &format!("{:?}", cond_val),
+                    )),
+                }
+            }
+            Expr::Block { block, .. } => {
+                let old_env = self.env.clone();
+                self.env = self.env.child();
+                for stmt in &block.stmts {
+                    self.eval_stmt(stmt)?;
+                }
+                let result = if let Some(tail_expr) = &block.expr {
+                    self.eval_expr_tco(tail_expr, fn_name)
+                } else {
+                    Ok(TcoResult::Value(Value::Unit))
+                };
+                self.env = old_env;
+                result
+            }
+            _ => {
+                let val = self.eval_expr(expr)?;
+                Ok(TcoResult::Value(val))
+            }
         }
     }
 
@@ -5594,5 +5830,163 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(3)));
+    }
+
+    // === P2.3: Type invariant enforcement ===
+
+    #[test]
+    fn test_type_invariant_pass() {
+        let source = r#"
+module example
+type Positive = Int invariant self > 0
+
+fn main() -> Int {
+  let x: Positive = 5
+  x
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_type_invariant_fail() {
+        let source = r#"
+module example
+type Positive = Int invariant self > 0
+
+fn main() -> Int {
+  let x: Positive = -1
+  x
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, "E3003");
+    }
+
+    // === P4.3: Re-export parsing ===
+
+    #[test]
+    fn test_public_import_parsing() {
+        let source = r#"
+module example
+public import std.math
+
+fn main() -> Int {
+  42
+}
+"#;
+        // Should parse and run without error
+        let result = parse_and_eval(source);
+        assert!(result.is_ok());
+    }
+
+    // === P5.4: Custom assert messages ===
+
+    #[test]
+    fn test_assert_custom_message() {
+        let source = r#"
+module example
+fn main() -> Unit {
+  assert(false, "custom error message")
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("custom error message"));
+    }
+
+    // === P6.1: Pipe operator (already tested, verify still works) ===
+
+    #[test]
+    fn test_pipe_operator() {
+        let source = r#"
+module example
+fn double(x: Int) -> Int { x * 2 }
+fn add_one(x: Int) -> Int { x + 1 }
+fn main() -> Int {
+  5 |> double |> add_one
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(11)));
+    }
+
+    // === P6.2: User-defined effects ===
+
+    #[test]
+    fn test_effect_definition() {
+        let source = r#"
+module example
+
+effect Logger {
+  fn log(msg: Text) -> Unit
+  fn get_logs() -> Text
+}
+
+fn main() -> Text {
+  "effects defined"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(s) if s == "effects defined"));
+    }
+
+    // === P6.4: Tail call optimization ===
+
+    #[test]
+    fn test_tco_simple_recursion() {
+        let source = r#"
+module example
+fn sum_acc(n: Int, acc: Int) -> Int {
+  if n <= 0 {
+    acc
+  } else {
+    sum_acc(n - 1, acc + n)
+  }
+}
+fn main() -> Int {
+  sum_acc(1000, 0)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(500500)));
+    }
+
+    #[test]
+    fn test_tco_factorial() {
+        let source = r#"
+module example
+fn fact(n: Int, acc: Int) -> Int {
+  if n <= 1 {
+    acc
+  } else {
+    fact(n - 1, n * acc)
+  }
+}
+fn main() -> Int {
+  fact(10, 1)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3628800)));
+    }
+
+    // === P6.5: Await expression ===
+
+    #[test]
+    fn test_await_expression() {
+        let source = r#"
+module example
+fn async_value() -> Int { 42 }
+fn main() -> Int {
+  await async_value()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
     }
 }

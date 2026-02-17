@@ -82,20 +82,39 @@ impl<'a> Parser<'a> {
     fn parse_item(&mut self) -> Result<Item, Diagnostic> {
         let token = self.peek();
         match &token.kind {
-            TokenKind::Import => self.parse_import().map(Item::Import),
+            TokenKind::Import => self.parse_import_item().map(Item::Import),
             TokenKind::Type => self.parse_type_def().map(Item::TypeDef),
             TokenKind::Enum => self.parse_enum_def().map(Item::EnumDef),
-            TokenKind::Fn | TokenKind::Public => self.parse_fn_def().map(Item::FnDef),
+            TokenKind::Public => {
+                // public can precede fn or import
+                // Parser already has Public in peeked, so lexer.peek() is the next token
+                let ahead = self.lexer.peek();
+                match ahead.kind {
+                    TokenKind::Import => self.parse_import_item().map(Item::Import),
+                    _ => self.parse_fn_def().map(Item::FnDef),
+                }
+            }
+            TokenKind::Fn => self.parse_fn_def().map(Item::FnDef),
             TokenKind::Trait => self.parse_trait_def().map(Item::TraitDef),
             TokenKind::Impl => self.parse_impl_block().map(Item::ImplBlock),
+            TokenKind::Effect => self.parse_effect_def().map(Item::EffectDef),
             TokenKind::Test => self.parse_test().map(Item::Test),
             TokenKind::Property => self.parse_property().map(Item::Property),
             _ => Err(self.error_unexpected("item")),
         }
     }
 
-    fn parse_import(&mut self) -> Result<ImportDecl, Diagnostic> {
+    fn parse_import_item(&mut self) -> Result<ImportDecl, Diagnostic> {
         let start_span = self.current_span();
+
+        // P4.3: Check for public import (re-export)
+        let public = if self.check(TokenKind::Public) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         self.expect(TokenKind::Import)?;
         let path = self.parse_module_path()?;
 
@@ -125,6 +144,7 @@ impl<'a> Parser<'a> {
             span: start_span.merge(&end_span),
             path,
             kind,
+            public,
         })
     }
 
@@ -306,6 +326,58 @@ impl<'a> Parser<'a> {
             trait_name,
             target_type,
             methods,
+        })
+    }
+
+    fn parse_effect_def(&mut self) -> Result<EffectDecl, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::Effect)?;
+        let name = self.expect_ident()?;
+        self.expect(TokenKind::LBrace)?;
+
+        let mut operations = Vec::new();
+        while !self.check(TokenKind::RBrace) && !self.is_eof() {
+            self.expect(TokenKind::Fn)?;
+            let op_start = self.current_span();
+            let op_name = self.expect_ident()?;
+            self.expect(TokenKind::LParen)?;
+            let mut params = Vec::new();
+            if !self.check(TokenKind::RParen) {
+                params.push(self.parse_param()?);
+                while self.check(TokenKind::Comma) {
+                    self.advance();
+                    if self.check(TokenKind::RParen) {
+                        break;
+                    }
+                    params.push(self.parse_param()?);
+                }
+            }
+            self.expect(TokenKind::RParen)?;
+
+            let return_type = if self.check(TokenKind::Arrow) {
+                self.advance();
+                Some(self.parse_type_expr()?)
+            } else {
+                None
+            };
+            let op_end = self.current_span();
+
+            operations.push(TraitMethod {
+                id: NodeId::new(),
+                span: op_start.merge(&op_end),
+                name: op_name,
+                params,
+                return_type,
+            });
+        }
+        self.expect(TokenKind::RBrace)?;
+        let end_span = self.current_span();
+
+        Ok(EffectDecl {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            name,
+            operations,
         })
     }
 
@@ -814,6 +886,18 @@ impl<'a> Parser<'a> {
                 id: NodeId::new(),
                 span: start_span.merge(&end_span),
                 op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
+        }
+        // P6.5: await expression
+        if self.check(TokenKind::Await) {
+            let start_span = self.current_span();
+            self.advance();
+            let expr = self.parse_unary_expr()?;
+            let end_span = self.expr_span(&expr);
+            return Ok(Expr::Await {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
                 expr: Box::new(expr),
             });
         }
@@ -1696,6 +1780,7 @@ impl<'a> Parser<'a> {
             | Expr::Break { span, .. }
             | Expr::Continue { span, .. }
             | Expr::StringInterp { span, .. }
+            | Expr::Await { span, .. }
             | Expr::Hole { span, .. } => span.clone(),
         }
     }
@@ -1707,6 +1792,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::Type
                 | TokenKind::Enum
                 | TokenKind::Fn
+                | TokenKind::Effect
                 | TokenKind::Public
                 | TokenKind::Trait
                 | TokenKind::Impl

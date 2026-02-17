@@ -766,7 +766,80 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_package(output: &PathBuf, target: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Packaging to {:?} (target: {})...", output, target);
-    // TODO: Implement packaging
+    // P7.2: Basic package command
+    println!("Packaging project...");
+
+    // Read project manifest
+    let manifest_path = std::env::current_dir()?.join("astra.toml");
+    if !manifest_path.exists() {
+        return Err(
+            "No astra.toml found in current directory. Run `astra init` to create one.".into(),
+        );
+    }
+
+    let manifest_content = std::fs::read_to_string(&manifest_path)?;
+    println!("  Found manifest: astra.toml");
+
+    // Collect all .astra source files
+    let current_dir = std::env::current_dir()?;
+    let source_files = walkdir(&current_dir)?
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|ext| ext == "astra"))
+        .collect::<Vec<_>>();
+
+    println!("  Found {} source files", source_files.len());
+
+    // Validate all files parse and type-check
+    let mut errors = 0;
+    for file in &source_files {
+        let source = std::fs::read_to_string(file)?;
+        let source_file = SourceFile::new(file.clone(), source.clone());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = AstraParser::new(lexer, source_file.clone());
+        match parser.parse_module() {
+            Ok(module) => {
+                let mut checker = crate::typechecker::TypeChecker::new();
+                if checker.check_module(&module).is_err() {
+                    eprintln!("  Type error in {:?}", file);
+                    errors += 1;
+                }
+            }
+            Err(_) => {
+                eprintln!("  Parse error in {:?}", file);
+                errors += 1;
+            }
+        }
+    }
+
+    if errors > 0 {
+        return Err(format!("{} file(s) have errors. Fix them before packaging.", errors).into());
+    }
+
+    // Create output directory
+    std::fs::create_dir_all(output)?;
+
+    // Copy source files to output
+    for file in &source_files {
+        let relative = file.strip_prefix(&current_dir).unwrap_or(file);
+        let dest = output.join(relative);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(file, &dest)?;
+    }
+
+    // Copy manifest
+    std::fs::copy(&manifest_path, output.join("astra.toml"))?;
+
+    // Write package metadata
+    let metadata = format!(
+        "# Astra Package\n# Target: {}\n# Manifest:\n{}\n",
+        target, manifest_content
+    );
+    std::fs::write(output.join("PACKAGE.md"), metadata)?;
+
+    println!("  Package created at {:?} (target: {})", output, target);
+    println!("  {} files packaged successfully", source_files.len());
+
     Ok(())
 }
