@@ -94,6 +94,9 @@ pub enum TokenKind {
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     IntLit(i64),
 
+    #[token(r#"""""#, priority = 4, callback = multiline_string_callback)]
+    MultilineTextLit(String),
+
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
         Some(s[1..s.len()-1].to_string())
@@ -161,6 +164,10 @@ pub enum TokenKind {
     PipeArrow,
     #[token("|")]
     Pipe,
+    #[token("..=")]
+    DotDotEq,
+    #[token("..")]
+    DotDot,
     #[token(".")]
     Dot,
     #[token("_", priority = 3)]
@@ -177,6 +184,20 @@ pub enum TokenKind {
 
     // End of file
     Eof,
+}
+
+/// Callback for lexing multiline triple-quoted strings.
+/// Scans forward from after the opening `"""` to find the closing `"""`.
+fn multiline_string_callback(lex: &mut logos::Lexer<TokenKind>) -> Option<String> {
+    let remainder = lex.remainder();
+    // Find the closing """
+    if let Some(end) = remainder.find("\"\"\"") {
+        let content = &remainder[..end];
+        lex.bump(end + 3); // consume content + closing """
+        Some(content.to_string())
+    } else {
+        None // unterminated — logos will report an error token
+    }
 }
 
 /// A token with its span
@@ -379,6 +400,35 @@ mod tests {
                 TokenKind::Arrow,
                 TokenKind::FatArrow,
                 TokenKind::Pipe,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_range_tokens() {
+        assert_eq!(
+            lex("0..10"),
+            vec![
+                TokenKind::IntLit(0),
+                TokenKind::DotDot,
+                TokenKind::IntLit(10)
+            ]
+        );
+        assert_eq!(
+            lex("0..=10"),
+            vec![
+                TokenKind::IntLit(0),
+                TokenKind::DotDotEq,
+                TokenKind::IntLit(10)
+            ]
+        );
+        // Dot should still work for field access
+        assert_eq!(
+            lex("x.y"),
+            vec![
+                TokenKind::Ident("x".to_string()),
+                TokenKind::Dot,
+                TokenKind::Ident("y".to_string()),
             ]
         );
     }

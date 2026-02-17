@@ -1111,6 +1111,28 @@ impl Interpreter {
                 Ok(Value::Text(result))
             }
 
+            // Range expressions: 0..10 or 0..=10
+            Expr::Range {
+                start,
+                end,
+                inclusive,
+                ..
+            } => {
+                let start_val = self.eval_expr(start)?;
+                let end_val = self.eval_expr(end)?;
+                match (&start_val, &end_val) {
+                    (Value::Int(s), Value::Int(e)) => {
+                        let range_end = if *inclusive { *e + 1 } else { *e };
+                        let items: Vec<Value> = (*s..range_end).map(Value::Int).collect();
+                        Ok(Value::List(items))
+                    }
+                    _ => Err(RuntimeError::type_mismatch(
+                        "Int",
+                        &format!("{:?} and {:?}", start_val, end_val),
+                    )),
+                }
+            }
+
             // Hole (incomplete code)
             // P6.5: Await evaluates the inner expression (single-threaded execution)
             Expr::Await { expr, .. } => self.eval_expr(expr),
@@ -5797,5 +5819,103 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(10)));
+    }
+
+    // === Range expression syntax (0..10 and 0..=10) ===
+
+    #[test]
+    fn test_range_expr_exclusive() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = 0..5
+  len(xs)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_range_expr_inclusive() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = 0..=5
+  len(xs)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(6)));
+    }
+
+    #[test]
+    fn test_range_expr_for_loop() {
+        let source = r#"
+module example
+fn main() -> Int effects(Console) {
+  let mut total = 0
+  for i in 1..=10 {
+    total = total + i
+  }
+  total
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(55)));
+    }
+
+    #[test]
+    fn test_range_expr_with_arithmetic() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = 2 + 3..10 - 2
+  len(xs)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    // === Multiline strings (triple-quoted) ===
+
+    #[test]
+    fn test_multiline_string_basic() {
+        let source = r####"
+module example
+fn main() -> Text {
+  let s = """
+    hello
+    world
+    """
+  s
+}
+"####;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "hello\nworld"),
+            other => panic!("Expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_multiline_string_preserves_relative_indent() {
+        let source = r####"
+module example
+fn main() -> Text {
+  let s = """
+    line one
+      indented
+    line three
+    """
+  s
+}
+"####;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "line one\n  indented\nline three"),
+            other => panic!("Expected Text, got {:?}", other),
+        }
     }
 }

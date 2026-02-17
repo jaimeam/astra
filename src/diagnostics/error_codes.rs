@@ -32,6 +32,7 @@ pub mod types {
     pub const EXPECTED_FUNCTION: &str = "E1013";
     pub const EXPECTED_RECORD: &str = "E1014";
     pub const EXPECTED_ENUM: &str = "E1015";
+    pub const TRAIT_CONSTRAINT_NOT_SATISFIED: &str = "E1016";
 }
 
 /// Effect errors (E2xxx)

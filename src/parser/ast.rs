@@ -167,6 +167,10 @@ pub struct FnDef {
     pub visibility: Visibility,
     pub name: String,
     pub type_params: Vec<String>,
+    /// Trait bounds for type parameters (e.g., `T: Show` maps "T" -> "Show").
+    /// Empty if no bounds are specified.
+    #[serde(default)]
+    pub type_param_bounds: Vec<(String, String)>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
     pub effects: Vec<String>,
@@ -495,6 +499,15 @@ pub enum Expr {
         parts: Vec<StringPart>,
     },
 
+    // Range expression (e.g., `0..10` or `0..=10`)
+    Range {
+        id: NodeId,
+        span: Span,
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
+    },
+
     // Await expression (P6.5: async/await)
     Await {
         id: NodeId,
@@ -540,6 +553,7 @@ impl Expr {
             | Expr::Break { span, .. }
             | Expr::Continue { span, .. }
             | Expr::StringInterp { span, .. }
+            | Expr::Range { span, .. }
             | Expr::Await { span, .. }
             | Expr::Hole { span, .. } => span,
         }
