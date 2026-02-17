@@ -76,4 +76,5 @@ pub mod warnings {
     pub const WILDCARD_MATCH: &str = "W0005";
     pub const SHADOWED_BINDING: &str = "W0006";
     pub const REDUNDANT_TYPE_ANNOTATION: &str = "W0007";
+    pub const UNUSED_FUNCTION: &str = "W0008";
 }

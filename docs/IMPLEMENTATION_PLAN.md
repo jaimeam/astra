@@ -48,13 +48,13 @@
 | Effect System   | Complete  | 196   | 6 built-in effects, custom defs  |
 | Interpreter     | Complete  | 6,700 | All core features, TCO, ranges   |
 | Diagnostics     | Complete  | 750   | Stable codes, JSON output, edit suggestions |
-| CLI             | Complete  | 1,600 | fmt/check/test/run/repl/lsp/pkg/init/doc |
+| CLI             | Complete  | 2,600 | fmt/check/test/run/fix/explain/repl/lsp/pkg/init/doc |
 | LSP             | Complete  | 1,000 | Diagnostics, hover, completion, code actions |
 | Testing         | Complete  | 366   | Deterministic, property-based    |
 | Cache           | Complete  | 170   | File-level incremental checking  |
 | Stdlib          | Complete  | 12 files | All modules loadable            |
 
-**Tests: 312 unit + 4 golden = 316 total, all passing.**
+**Tests: 320 unit + 4 golden = 324 total, all passing. 103 Astra tests passing.**
 
 ---
 
@@ -106,24 +106,42 @@
 
 ## Prioritized Feature Plan (Remaining)
 
-### Phase 2: Improve the Feedback Loop (P2)
+### ✅ Phase 2.4: Watch Mode (DONE)
 
-#### P2.4: Watch Mode
+Implemented with the `notify` crate. `astra check --watch` and
+`astra test --watch` re-run on `.astra` file changes with 200ms debounce.
+Clear screen on each run. Ctrl+C cleanly exits.
 
-**Rationale**: LLM agents benefit from continuous feedback. `--watch` lets
-the compiler report errors immediately after file changes.
+### ✅ Phase 2.5: Auto-Fix Command (DONE — `astra fix`)
 
-**Scope**:
-- Add `notify` crate for filesystem watching
-- `astra check --watch` re-runs check on `.astra` file changes
-- `astra test --watch` re-runs tests on changes
-- Debounce rapid changes (100ms)
-- Clear terminal and show fresh output on each run
+**Rationale**: THE killer feature for LLM agents. Instead of parsing error
+messages and manually applying fixes, agents run `astra fix` and it applies
+all suggested fixes automatically.
 
-**Acceptance criteria**:
-- Saving a file triggers re-check within 200ms
-- Only changed files are re-parsed (builds on P2.3 incremental cache)
-- Ctrl+C cleanly exits watch mode
+**Features**:
+- `astra fix .` — auto-apply all diagnostic suggestions
+- `astra fix --dry-run .` — preview fixes without modifying files
+- `astra fix --only W0001,E1002 .` — filter by error code
+- `astra fix --json .` — structured JSON output
+- Edits applied from end-to-start to avoid offset invalidation
+
+### ✅ Phase 2.6: Error Explanations (DONE — `astra explain`)
+
+**Rationale**: LLM agents can look up any error code and get a detailed
+explanation with examples and fix instructions.
+
+**Features**:
+- `astra explain E1001` — detailed explanation with code examples
+- All 55 error/warning codes covered (E0001-E4008, W0001-W0008)
+
+### ✅ Phase 2.7: Unused Function Detection (DONE — W0008)
+
+**Rationale**: Dead code detection helps keep codebases clean. Particularly
+useful for LLM agents that may leave behind helper functions.
+
+**Features**:
+- W0008 warning for private functions that are never called
+- No warning for `main`, public functions, or `_`-prefixed names
 
 ---
 
@@ -159,7 +177,10 @@ outputs a flame graph or summary table.
 | P2.1 Better suggestions | **Critical** | Medium | Medium | ✅ Done |
 | P2.2 Import validation | **High** | High | Low | ✅ Done |
 | P2.3 Incremental check | Medium | **High** | High | ✅ Done |
-| P2.4 Watch mode | Medium | **High** | Medium | 📋 Planned |
+| P2.4 Watch mode | Medium | **High** | Medium | ✅ Done |
+| P2.5 `astra fix` | **Critical** | **High** | Medium | ✅ Done |
+| P2.6 `astra explain` | **High** | Medium | Low | ✅ Done |
+| P2.7 W0008 unused fn | Medium | Medium | Low | ✅ Done |
 | P3.1 Tuple destructure | Medium | Medium | Low | ✅ Done (v0.1) |
 | P3.2 Range expressions | Medium | Medium | Low | ✅ Done |
 | P3.3 Trait enforcement | **High** | Medium | Medium | ✅ Done |
@@ -177,13 +198,15 @@ outputs a flame graph or summary table.
 
 The highest-value remaining work is:
 
-1. **P2.4: Watch mode** — Continuous feedback via `astra check --watch`
-2. **P4.3: LSP rename/find references** — Improved IDE experience
+1. **P4.3: LSP rename/find references** — Improved IDE experience
+2. **Full HM type inference** — More precise type checking for generic code
 3. **P4.2: Package registry design** — ADR for library sharing protocol
 4. **P4.4: Performance profiling** — `astra run --profile`
 
-These items improve developer experience and the LLM agent feedback loop,
-which is Astra's core differentiator.
+The LLM agent feedback loop is now strong: `astra check --watch` catches
+issues automatically, `astra fix` applies suggested corrections, and
+`astra explain` provides detailed error guidance. The remaining work
+focuses on type system maturity and ecosystem.
 
 ## Error Code Registry (Updated)
 
@@ -194,5 +217,5 @@ which is Astra's core differentiator.
 | E2xxx | 7 | Effect errors |
 | E3xxx | 5 | Contract violations |
 | E4xxx | 8 | Runtime errors |
-| W0xxx | 7 | Warnings |
-| **Total** | **54** | All with stable codes |
+| W0xxx | 8 | Warnings (including W0008 unused function) |
+| **Total** | **55** | All with stable codes + `astra explain` docs |

@@ -29,6 +29,9 @@ logos = "0.14"
 # HTTP client (for Net capability)
 ureq = "2"
 
+# File watching (for --watch mode)
+notify = "6"
+
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
 proptest = "1"
