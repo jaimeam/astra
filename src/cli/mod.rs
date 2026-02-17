@@ -50,7 +50,7 @@ pub enum Command {
 
     /// Run tests
     Test {
-        /// Filter tests by name
+        /// File, directory, or test name filter
         #[arg()]
         filter: Option<String>,
 
@@ -71,6 +71,13 @@ pub enum Command {
 
     /// Start interactive REPL
     Repl,
+
+    /// Initialize a new Astra project
+    Init {
+        /// Project name (defaults to current directory name)
+        #[arg()]
+        name: Option<String>,
+    },
 
     /// Create a distributable package
     Package {
@@ -104,6 +111,9 @@ impl Cli {
             }
             Command::Repl => {
                 run_repl()?;
+            }
+            Command::Init { name } => {
+                run_init(name.as_deref())?;
             }
             Command::Package { output, target } => {
                 run_package(&output, &target)?;
@@ -283,9 +293,10 @@ fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::er
         Ok(module) => {
             // Run type checking (includes exhaustiveness + effect + lint enforcement)
             let mut checker = crate::typechecker::TypeChecker::new();
-            let type_result = checker.check_module(&module);
+            let _type_result = checker.check_module(&module);
 
-            // Always retrieve all diagnostics (errors + warnings)
+            // Use checker.diagnostics() as the single source of truth
+            // (it contains both errors and warnings)
             let all_diags = checker.diagnostics();
             let errors: Vec<_> = all_diags
                 .diagnostics()
@@ -298,23 +309,12 @@ fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::er
                 .filter(|d| matches!(d.severity, crate::diagnostics::Severity::Warning))
                 .collect();
 
-            // Display errors (from Err result or from diagnostics bag)
-            if let Err(ref bag) = type_result {
+            // Display all diagnostics (errors + warnings) once
+            for diag in all_diags.diagnostics() {
                 if json {
-                    println!("{}", bag.to_json());
+                    println!("{}", diag.to_json());
                 } else {
-                    eprintln!("{}", bag.format_text(&source));
-                }
-            }
-
-            // Display warnings
-            if !warnings.is_empty() {
-                for w in &warnings {
-                    if json {
-                        println!("{}", w.to_json());
-                    } else {
-                        eprintln!("{}", w.to_human_readable(&source));
-                    }
+                    eprintln!("{}", diag.to_human_readable(&source));
                 }
             }
 
@@ -359,13 +359,37 @@ fn run_test(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::parser::ast::Item;
 
-    // Find all .astra files in current directory
-    let current_dir = std::env::current_dir()?;
-    let files = walkdir(&current_dir)?;
-    let astra_files: Vec<_> = files
-        .into_iter()
-        .filter(|p| p.extension().is_some_and(|ext| ext == "astra"))
-        .collect();
+    // Determine if filter is a file/directory path or a test name filter
+    let (astra_files, name_filter) = if let Some(f) = filter {
+        let path = PathBuf::from(f);
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "astra") {
+            // Filter is a specific .astra file
+            (vec![path], None)
+        } else if path.is_dir() {
+            // Filter is a directory — find all .astra files in it
+            let files = walkdir(&path)?
+                .into_iter()
+                .filter(|p| p.extension().is_some_and(|ext| ext == "astra"))
+                .collect();
+            (files, None)
+        } else {
+            // Filter is a test name substring filter — search current directory
+            let current_dir = std::env::current_dir()?;
+            let files = walkdir(&current_dir)?
+                .into_iter()
+                .filter(|p| p.extension().is_some_and(|ext| ext == "astra"))
+                .collect();
+            (files, Some(f))
+        }
+    } else {
+        // No filter — find all .astra files in current directory
+        let current_dir = std::env::current_dir()?;
+        let files = walkdir(&current_dir)?
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|ext| ext == "astra"))
+            .collect();
+        (files, None)
+    };
 
     let mut total_tests = 0;
     let mut passed = 0;
@@ -390,8 +414,8 @@ fn run_test(
         // Find and run all test blocks
         for item in &module.items {
             if let Item::Test(test) = item {
-                // Apply filter if specified
-                if let Some(f) = filter {
+                // Apply name filter if specified
+                if let Some(f) = name_filter {
                     if !test.name.contains(f) {
                         continue;
                     }
@@ -426,7 +450,7 @@ fn run_test(
 
             // P5.1: Property-based tests
             if let Item::Property(prop) = item {
-                if let Some(f) = filter {
+                if let Some(f) = name_filter {
                     if !prop.name.contains(f) {
                         continue;
                     }
@@ -844,6 +868,80 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Bye!");
+    Ok(())
+}
+
+fn run_init(name: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let current_dir = std::env::current_dir()?;
+
+    let project_name = name.map(String::from).unwrap_or_else(|| {
+        current_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("my_project")
+            .to_string()
+    });
+
+    // Check if astra.toml already exists
+    let manifest_path = current_dir.join("astra.toml");
+    if manifest_path.exists() {
+        return Err("astra.toml already exists in this directory".into());
+    }
+
+    // Create astra.toml
+    let manifest = format!(
+        r#"[package]
+name = "{}"
+version = "0.1.0"
+description = ""
+authors = []
+license = "MIT"
+
+[targets]
+default = "interpreter"
+
+[dependencies]
+
+[features]
+default = ["std"]
+std = []
+
+[lint]
+level = "warn"
+"#,
+        project_name
+    );
+    std::fs::write(&manifest_path, &manifest)?;
+    println!("  Created astra.toml");
+
+    // Create main source file
+    let src_dir = current_dir.join("src");
+    std::fs::create_dir_all(&src_dir)?;
+
+    let main_file = src_dir.join("main.astra");
+    if !main_file.exists() {
+        let main_source = format!(
+            r#"module {project_name}
+
+fn main()
+  effects(Console)
+{{
+  Console.println("Hello from {project_name}!")
+}}
+"#,
+            project_name = project_name
+        );
+        std::fs::write(&main_file, main_source)?;
+        println!("  Created src/main.astra");
+    }
+
+    println!("\nInitialized Astra project `{}`", project_name);
+    println!("\nNext steps:");
+    println!("  astra run src/main.astra    # Run the program");
+    println!("  astra check src/            # Check for errors");
+    println!("  astra fmt src/              # Format code");
+    println!("  astra test                  # Run tests");
+
     Ok(())
 }
 

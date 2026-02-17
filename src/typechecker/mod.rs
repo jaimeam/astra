@@ -625,6 +625,7 @@ impl TypeChecker {
                                 "Expected type {:?}, found {:?}",
                                 declared, value_type
                             ))
+                            .span(span.clone())
                             .suggestion(Suggestion::new(format!(
                                 "Change the type annotation to match the value type `{:?}`",
                                 value_type
@@ -750,6 +751,7 @@ impl TypeChecker {
                 cond,
                 then_branch,
                 else_branch,
+                span,
                 ..
             } => {
                 let cond_ty = self.check_expr_with_effects(cond, env, effects);
@@ -757,6 +759,7 @@ impl TypeChecker {
                     self.diagnostics.push(
                         Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
                             .message("Condition must be Bool")
+                            .span(cond.span().clone())
                             .build(),
                     );
                 }
@@ -772,6 +775,7 @@ impl TypeChecker {
                                 crate::diagnostics::error_codes::types::TYPE_MISMATCH,
                             )
                             .message("If branches have different types")
+                            .span(span.clone())
                             .build(),
                         );
                     }

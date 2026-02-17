@@ -104,10 +104,12 @@ test "rejects zero amount" {
 
 | Command | Description |
 |---------|-------------|
+| `astra init [name]` | Initialize a new Astra project |
 | `astra fmt [files...]` | Format files canonically |
 | `astra check [files...]` | Parse + typecheck + lint |
-| `astra test [filter]` | Run tests deterministically |
+| `astra test [path\|filter]` | Run tests (accepts file, directory, or name filter) |
 | `astra run <target>` | Run main entrypoint |
+| `astra repl` | Start interactive REPL |
 | `astra package` | Create distributable artifact |
 
 ## Documentation

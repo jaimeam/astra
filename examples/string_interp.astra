@@ -17,6 +17,14 @@ fn format_list(items: List[Int]) -> Text
   "List has ${count} items: ${to_text(items)}"
 }
 
+fn main()
+  effects(Console)
+{
+  Console.println(greet("Astra"))
+  Console.println(describe(21))
+  Console.println(format_list([1, 2, 3]))
+}
+
 test "basic interpolation" {
   assert_eq(greet("Astra"), "Hello, Astra!")
 }

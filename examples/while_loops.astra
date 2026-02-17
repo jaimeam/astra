@@ -40,6 +40,14 @@ fn fibonacci(n: Int) -> Int
   b
 }
 
+fn main()
+  effects(Console)
+{
+  Console.println("Countdown 1..5 sum: " + to_text(countdown(5)))
+  Console.println("Smallest divisor of 15: " + to_text(find_divisor(15)))
+  Console.println("Fibonacci(10): " + to_text(fibonacci(10)))
+}
+
 test "countdown sums correctly" {
   assert_eq(countdown(5), 15)
   assert_eq(countdown(0), 0)
