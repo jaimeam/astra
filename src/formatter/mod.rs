@@ -183,7 +183,11 @@ impl Formatter {
             if i > 0 {
                 self.write(", ");
             }
-            self.write(&param.name);
+            if let Some(ref pattern) = param.pattern {
+                self.format_pattern(pattern);
+            } else {
+                self.write(&param.name);
+            }
             self.write(": ");
             self.format_type_expr(&param.ty);
         }

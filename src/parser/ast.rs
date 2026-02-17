@@ -189,6 +189,8 @@ pub struct Param {
     pub span: Span,
     pub name: String,
     pub ty: TypeExpr,
+    /// If set, this parameter is destructured via a pattern
+    pub pattern: Option<Pattern>,
 }
 
 /// Test block

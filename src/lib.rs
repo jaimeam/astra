@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod effects;
 pub mod formatter;
 pub mod interpreter;
+pub mod lsp;
 pub mod manifest;
 pub mod parser;
 pub mod testing;

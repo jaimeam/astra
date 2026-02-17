@@ -16,7 +16,7 @@
 | **Exhaustive match checking** | Compiler catches forgotten cases | ✅ Implemented |
 | **One canonical format** | No style choices to make | ✅ Formatter wired to CLI |
 | **Contracts (requires/ensures)** | LLMs get pre/postcondition verification | ✅ Parsed + enforced at runtime |
-| **Generic functions** | Type-safe reusable code | 🟡 Parsed + executed; checker treats type params as opaque |
+| **Generic functions** | Type-safe reusable code | ✅ Parsed + executed; type params unified at call sites |
 | **For loops** | Practical iteration over collections | ✅ `for x in list { ... }` |
 | **Multi-field variants** | Ergonomic enum destructuring | ✅ `Rectangle(w, h)` |
 | **Module system** | Cross-file code organization | ✅ Imports resolve and execute cross-file; stdlib importable |
@@ -319,13 +319,20 @@ cargo run -- package -o dist             # Package project
 | **R10** | Type checker import resolution | Registers imported names as known bindings | ✅ Done |
 | **R11** | Add missing stdlib modules | `json`, `io`, `iter`, `error` modules | ✅ Done |
 
-### V2 Roadmap (Future)
+### ✅ V2 Features (Completed)
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Generic type checking with unification** | Type parameter inference and substitution during function calls; binds type params to concrete types from arguments and substitutes in return types | ✅ Done |
+| **Trait method dispatch** | `impl TraitName for Type { methods }` registers methods; `value.method()` dispatches through trait impls based on receiver runtime type | ✅ Done |
+| **Parameter destructuring** | `fn foo({x, y}: {x: Int, y: Int})` and `fn foo((a, b): (Int, Int))` — record and tuple patterns in function signatures, desugared at load time | ✅ Done |
+| **LSP Server** | Full Language Server Protocol over stdio with diagnostics, hover, go-to-definition, document symbols, and completion. CLI: `astra lsp` | ✅ Done |
+
+### V3 Roadmap (Future)
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **Full generic type checking** | Hindley-Milner unification for type params | High |
-| **Trait method dispatch** | Resolve `impl` methods on trait-typed values | High |
-| **Parameter destructuring** | `fn foo({x, y}: {x: Int, y: Int})` in function signatures | Medium |
+| **Full HM type inference** | Complete Hindley-Milner with constraint solving | High |
+| **Trait constraint bounds** | `fn sort[T: Ord](items: List[T])` — require traits on type params | High |
 | **True async/await** | Concurrent execution with effect-based scheduling | Medium |
-| **LSP Server** | Language Server Protocol for IDE integration | Medium |
 | **WASM Target** | Compile to WebAssembly for browser/edge deployment | Low |
 | **Incremental Compilation** | Cache and reuse compilation artifacts | Low |
