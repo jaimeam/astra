@@ -85,8 +85,8 @@
 - [x] CLI (run, check, test, fmt commands)
 - [x] Test block parsing and execution
 - [x] assert/assert_eq builtins
-- [x] All 9 examples pass check and run
-- [x] 148 unit tests, 4 golden tests, 42+ Astra tests
+- [x] All 11 examples pass check and run
+- [x] 177 unit tests, 4 golden tests, 48+ Astra tests
 - [x] Option/Result runtime (C1)
 - [x] ? operator for Option/Result (H1)
 - [x] Exhaustive match checking for Option/Result/Bool/enums (C2)
@@ -115,20 +115,98 @@
 - [x] Multi-field variant destructuring `Rectangle(w, h)` (L9)
 - [x] Basic module system with file imports (L10)
 - [x] Assignment statements in blocks `x = x + 1` (L11)
+- [x] `range()` builtin for counting loops `for i in range(0, 10)` (P1.1)
+- [x] `break` / `continue` in for and while loops (P1.2)
+- [x] `while` loops with condition-based iteration (P1.3)
+- [x] `else if` chains (P1.4 - was already in parser, verified working)
+- [x] String interpolation `"Hello, ${name}!"` (P1.5)
+- [x] `return` statement with proper early exit propagation (P1.10)
+- [x] Math builtins: `abs`, `min`, `max`, `pow` (P1.11)
+- [x] List methods: `tail`, `reverse`, `sort`, `take`, `drop`, `slice`, `enumerate`, `zip`, `find`, `join` (P3.1+P3.2)
+- [x] String methods: `repeat`, `index_of`, `substring` (P3.3)
 
-### Not Started 🔴
-- [ ] Full generic type inference (currently type params are dynamic at runtime)
-- [ ] Traits / type classes
-- [ ] `for` with `range()` function
-- [ ] `break` / `continue` in loops
-- [ ] Mutable references / borrowing
-- [ ] Named import filtering (`import foo.{bar, baz}` - parsed but not resolved)
-- [ ] `invariant` blocks on types
-- [ ] `property` test blocks (parsed but not fully executed)
-- [ ] `package` command (`astra package`)
-- [ ] WASM compilation target
-- [ ] Incremental compilation
-- [ ] LSP / language server protocol
+### 🟠 Phase 1: Core Language Gaps (Practical programming essentials)
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P1.1** | `range()` builtin + for-range loops | Counting loops `for i in range(0, 10)` | ✅ Done |
+| **P1.2** | `break` / `continue` in loops | Essential loop control flow | ✅ Done |
+| **P1.3** | `while` loops | Condition-based iteration | ✅ Done |
+| **P1.4** | `else if` chains | `if {} else if {} else {}` | ✅ Done |
+| **P1.5** | String interpolation | `"Hello, ${name}!"` | ✅ Done |
+| **P1.6** | `Float` type | 64-bit floating point numbers | 🔴 Not started |
+| **P1.7** | Tuple types | `(Int, Text)` with destructuring | 🔴 Not started |
+| **P1.8** | `Map[K, V]` type | Hash map with literal syntax `{k: v}` | 🔴 Not started |
+| **P1.9** | Type alias resolution | `type Name = Text` evaluated in checker + runtime | 🔴 Not started |
+| **P1.10** | `return` statement | Early return from functions | ✅ Done |
+| **P1.11** | Math builtins | `abs`, `min`, `max`, `pow`, `mod` | ✅ Done |
+| **P1.12** | Negative number literals | `-42` parsed as literal not unary op | 🔴 Not started |
+
+### 🟣 Phase 2: Type System Maturity
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P2.1** | Full generic type inference | Type unification + substitution | 🔴 Not started |
+| **P2.2** | Traits / type classes | `trait Show { fn to_text(self) -> Text }` | 🔴 Not started |
+| **P2.3** | Type invariants enforcement | `type Positive = Int invariant self > 0` | 🔴 Not started |
+| **P2.4** | Generic type constraints | `fn sort[T: Ord](list: List[T])` | 🔴 Not started |
+| **P2.5** | Recursive / self-referential types | Trees, linked lists | 🔴 Not started |
+
+### 🔵 Phase 3: Standard Library Expansion
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P3.1** | List methods: `tail`, `last`, `reverse`, `sort` | Core list operations | ✅ Done |
+| **P3.2** | List methods: `zip`, `enumerate`, `find`, `take`, `drop` | Advanced list operations | ✅ Done |
+| **P3.3** | String methods: `join`, `repeat`, `index_of`, `substring` | Additional text manipulation | ✅ Done |
+| **P3.4** | Conversion functions | `Int.parse("42")`, `Float.parse("3.14")` | 🔴 Not started |
+| **P3.5** | `Set[T]` type | Unique collection with set operations | 🔴 Not started |
+| **P3.6** | Math module | `std.math` with trig, sqrt, etc. for Float | 🔴 Not started |
+
+### 🟤 Phase 4: Module System & Imports
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P4.1** | Named import resolution | `import foo.{bar, baz}` runtime filtering | 🔴 Not started |
+| **P4.2** | Circular import detection | Proper error on cycles | 🔴 Not started |
+| **P4.3** | Re-exports | `public import std.math` | 🔴 Not started |
+| **P4.4** | Stdlib as importable modules | `import std.list`, `import std.math` | 🔴 Not started |
+
+### ⚪ Phase 5: Testing & Diagnostics
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P5.1** | Property-based testing execution | `property` blocks with random input gen | 🔴 Not started |
+| **P5.2** | Stack traces with source locations | Show call stack on runtime errors | 🔴 Not started |
+| **P5.3** | Parser error recovery | Continue after errors for multi-error reporting | 🔴 Not started |
+| **P5.4** | `expect` with custom error messages | `assert(x > 0, "x must be positive")` | 🔴 Not started |
+
+### 🟡 Phase 6: Advanced Features
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P6.1** | Pipe operator `\|>` | `x \|> f \|> g` chaining | 🔴 Not started |
+| **P6.2** | User-defined effects | Custom effect declarations beyond builtins | 🔴 Not started |
+| **P6.3** | Mutable references / borrowing | Controlled mutation | 🔴 Not started |
+| **P6.4** | Tail call optimization | Efficient recursion | 🔴 Not started |
+| **P6.5** | Async/await with effects | `effects(Async)` for concurrent code | 🔴 Not started |
+
+### ⬛ Phase 7: Tooling & Distribution
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P7.1** | REPL (`astra repl`) | Interactive development | 🔴 Not started |
+| **P7.2** | `package` command | `astra package` for distribution | 🔴 Not started |
+| **P7.3** | LSP / language server | IDE integration | 🔴 Not started |
+| **P7.4** | WASM compilation target | Browser/edge deployment | 🔴 Not started |
+| **P7.5** | Incremental compilation | Fast rebuilds | 🔴 Not started |
+
+### Estimated Completion: ~65%
+- **Done**: 44 features (C1-C5, H1-H5, N1-N4, L1-L11, P1.1-P1.5, P1.10-P1.11, P3.1-P3.3) + infrastructure
+- **Remaining**: ~30 features across 7 phases
+- **Phase 1** partially done (6/12) — Float, tuples, maps, type aliases remaining
+- **Phases 2-3** make it production-worthy
+- **Phases 4-7** are polish and ecosystem
 
 ---
 
@@ -181,39 +259,33 @@ cargo run -- fmt .                       # Format all .astra files
 | 2026-02-16 | claude | L9: Multi-field variant destructuring `Rectangle(w, h)` |
 | 2026-02-16 | claude | L10: Basic module system (import resolution + loading) |
 | 2026-02-16 | claude | L11: Assignment statements in blocks |
+| 2026-02-17 | claude | P1.1: `range()` builtin for counting loops |
+| 2026-02-17 | claude | P1.2: `break` / `continue` in for and while loops |
+| 2026-02-17 | claude | P1.3: `while` loops with break/continue support |
+| 2026-02-17 | claude | P1.4: Verified `else if` chains working |
+| 2026-02-17 | claude | P1.5: String interpolation `"${expr}"` |
+| 2026-02-17 | claude | P1.10: `return` statement with proper propagation |
+| 2026-02-17 | claude | P1.11: Math builtins (abs, min, max, pow) |
+| 2026-02-17 | claude | P3.1+P3.2: List methods (tail, reverse, sort, take, drop, slice, enumerate, zip, find) |
+| 2026-02-17 | claude | P3.3: String methods (repeat, index_of, substring) + List.join |
+| 2026-02-17 | claude | Updated full implementation roadmap with ~40 remaining tasks |
 
 ---
 
 ## For Next Agent
 
-**Recommended tasks** (in priority order):
+**Priority**: Complete Phase 1 (core language gaps) first. These are the features
+that any developer trying Astra would expect to "just work".
 
-1. **`range()` builtin + for-range loops**
-   - `for i in range(0, 10) { ... }`
-   - Enables counting loops, very common pattern
-   - Needs: `range` function returning `List[Int]` (or lazy iterator)
+**Implementation order within Phase 1**:
+1. P1.1 `range()` + P1.10 `return` + P1.11 math builtins (independent, parallelize)
+2. P1.2 `break`/`continue` + P1.3 `while` loops (related loop features)
+3. P1.4 `else if` + P1.5 string interpolation (parser changes)
+4. P1.6 `Float` + P1.12 negative literals (type system additions)
+5. P1.7 tuples + P1.8 `Map` (new collection types)
+6. P1.9 type alias resolution (type checker)
 
-2. **`break` / `continue` in loops**
-   - Essential control flow for for-loops
-   - Needs: special `RuntimeError` variant for early loop exit (like `?` operator)
-
-3. **Full generic type inference**
-   - Currently generic type params are `Unknown` at check time
-   - Needs: type unification, substitution during checking
-   - Impact: Better error messages, type-safe generic collections
-
-4. **Traits / type classes**
-   - `trait Printable { fn to_text(self) -> Text }`
-   - Enables ad-hoc polymorphism
-   - Big feature, should be designed carefully first (see ADR pattern)
-
-5. **Named import resolution**
-   - `import std.math.{sqrt, abs}` - already parsed, needs runtime resolution
-   - Currently imports load all definitions; need selective import
-
-6. **Property-based testing execution**
-   - `property` blocks are parsed but not fully executed
-   - Needs: integration with `proptest` for random input generation
+**After Phase 1**: Phase 2 (type system) and Phase 3 (stdlib) can be parallelized.
 
 **Avoid getting distracted by**:
 - Performance optimizations (premature at this stage)
@@ -228,10 +300,10 @@ The goal is to make Astra demonstrably better for LLMs than Python/JS/Rust as qu
 
 | Category | Count | Type |
 |----------|-------|------|
-| Unit tests (Rust) | 148 | `#[test]` in source |
+| Unit tests (Rust) | 177 | `#[test]` in source |
 | Golden tests | 4 | Snapshot comparisons |
-| Astra tests | 42+ | `test` blocks in .astra |
-| **Total** | **194+** | All passing ✅ |
+| Astra tests | 48+ | `test` blocks in .astra |
+| **Total** | **229+** | All passing ✅ |
 
 ---
 
@@ -251,7 +323,7 @@ The goal is to make Astra demonstrably better for LLMs than Python/JS/Rust as qu
 | Manifest | `src/manifest/mod.rs` | In-file |
 | Testing | `src/testing/mod.rs` | In-file |
 
-### Examples (9 working programs)
+### Examples (11 working programs)
 | Example | Features Demonstrated |
 |---------|----------------------|
 | `hello.astra` | Hello world, Console effect |
@@ -263,3 +335,5 @@ The goal is to make Astra demonstrably better for LLMs than Python/JS/Rust as qu
 | `contracts.astra` | requires/ensures contracts |
 | `for_loops.astra` | For loops, mutable state |
 | `generics.astra` | Generic functions, higher-order |
+| `while_loops.astra` | While loops, break, return, fibonacci |
+| `string_interp.astra` | String interpolation `"${expr}"` |

@@ -69,6 +69,12 @@ pub enum TokenKind {
     Type,
     #[token("using")]
     Using,
+    #[token("while")]
+    While,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
 
     // Literals
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]

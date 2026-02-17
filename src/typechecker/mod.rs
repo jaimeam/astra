@@ -829,6 +829,23 @@ impl TypeChecker {
                 self.pop_lint_scope();
                 Type::Unit
             }
+            Expr::While { cond, body, .. } => {
+                self.check_expr_with_effects(cond, env, effects);
+                let mut loop_env = env.clone();
+                self.push_lint_scope();
+                self.check_block_with_effects(body, &mut loop_env, effects);
+                self.pop_lint_scope();
+                Type::Unit
+            }
+            Expr::Break { .. } | Expr::Continue { .. } => Type::Unit,
+            Expr::StringInterp { parts, .. } => {
+                for part in parts {
+                    if let StringPart::Expr(expr) = part {
+                        self.check_expr_with_effects(expr, env, effects);
+                    }
+                }
+                Type::Text
+            }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(
                     Diagnostic::info("H0001")

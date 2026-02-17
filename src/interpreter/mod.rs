@@ -17,6 +17,12 @@ pub struct RuntimeError {
     pub message: String,
     /// Early return value (for ? operator propagation)
     pub early_return: Option<Box<Value>>,
+    /// Loop break signal
+    pub is_break: bool,
+    /// Loop continue signal
+    pub is_continue: bool,
+    /// Function return signal
+    pub is_return: bool,
 }
 
 impl RuntimeError {
@@ -26,6 +32,9 @@ impl RuntimeError {
             code,
             message: message.into(),
             early_return: None,
+            is_break: false,
+            is_continue: false,
+            is_return: false,
         }
     }
 
@@ -35,12 +44,56 @@ impl RuntimeError {
             code: "EARLY_RETURN",
             message: String::new(),
             early_return: Some(Box::new(value)),
+            is_break: false,
+            is_continue: false,
+            is_return: false,
+        }
+    }
+
+    /// Create a break signal
+    pub fn loop_break() -> Self {
+        Self {
+            code: "BREAK",
+            message: String::new(),
+            early_return: None,
+            is_break: true,
+            is_continue: false,
+            is_return: false,
+        }
+    }
+
+    /// Create a continue signal
+    pub fn loop_continue() -> Self {
+        Self {
+            code: "CONTINUE",
+            message: String::new(),
+            early_return: None,
+            is_break: false,
+            is_continue: true,
+            is_return: false,
+        }
+    }
+
+    /// Create a function return signal
+    pub fn function_return(value: Value) -> Self {
+        Self {
+            code: "RETURN",
+            message: String::new(),
+            early_return: Some(Box::new(value)),
+            is_break: false,
+            is_continue: false,
+            is_return: true,
         }
     }
 
     /// Check if this is an early return
     pub fn is_early_return(&self) -> bool {
-        self.early_return.is_some()
+        self.early_return.is_some() && !self.is_return
+    }
+
+    /// Check if this is a control flow signal (break/continue/return)
+    pub fn is_control_flow(&self) -> bool {
+        self.is_break || self.is_continue || self.is_return || self.early_return.is_some()
     }
 
     /// Get the early return value
@@ -230,6 +283,16 @@ fn values_equal(left: &Value, right: &Value) -> bool {
         (Value::Closure { .. }, Value::Closure { .. }) => false,
         (Value::VariantConstructor { .. }, Value::VariantConstructor { .. }) => false,
         _ => false,
+    }
+}
+
+/// Compare two values for ordering (used by sort)
+fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => a.cmp(b),
+        (Value::Text(a), Value::Text(b)) => a.cmp(b),
+        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        _ => std::cmp::Ordering::Equal,
     }
 }
 
@@ -660,6 +723,74 @@ impl Interpreter {
                             let val = self.eval_expr(&args[0])?;
                             return Ok(Value::Text(format_value(&val)));
                         }
+                        // P1.1: range builtin
+                        "range" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let start = self.eval_expr(&args[0])?;
+                            let end = self.eval_expr(&args[1])?;
+                            return match (start, end) {
+                                (Value::Int(s), Value::Int(e)) => {
+                                    let items: Vec<Value> = (s..e).map(Value::Int).collect();
+                                    Ok(Value::List(items))
+                                }
+                                _ => Err(RuntimeError::type_mismatch("(Int, Int)", "other")),
+                            };
+                        }
+                        // P1.11: math builtins
+                        "abs" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Int(n) => Ok(Value::Int(n.abs())),
+                                _ => Err(RuntimeError::type_mismatch("Int", &format!("{:?}", val))),
+                            };
+                        }
+                        "min" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let a = self.eval_expr(&args[0])?;
+                            let b = self.eval_expr(&args[1])?;
+                            return match (a, b) {
+                                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.min(b))),
+                                _ => Err(RuntimeError::type_mismatch("(Int, Int)", "other")),
+                            };
+                        }
+                        "max" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let a = self.eval_expr(&args[0])?;
+                            let b = self.eval_expr(&args[1])?;
+                            return match (a, b) {
+                                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.max(b))),
+                                _ => Err(RuntimeError::type_mismatch("(Int, Int)", "other")),
+                            };
+                        }
+                        "pow" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let base = self.eval_expr(&args[0])?;
+                            let exp = self.eval_expr(&args[1])?;
+                            return match (base, exp) {
+                                (Value::Int(b), Value::Int(e)) => {
+                                    if e < 0 {
+                                        Err(RuntimeError::new(
+                                            "E4016",
+                                            "pow: negative exponent not supported for Int",
+                                        ))
+                                    } else {
+                                        Ok(Value::Int(b.pow(e as u32)))
+                                    }
+                                }
+                                _ => Err(RuntimeError::type_mismatch("(Int, Int)", "other")),
+                            };
+                        }
                         _ => {}
                     }
                 }
@@ -833,25 +964,33 @@ impl Interpreter {
                 let iter_val = self.eval_expr(iter)?;
                 match iter_val {
                     Value::List(items) => {
-                        for item in &items {
-                            // Define/update loop binding directly (no child scope)
+                        'for_loop: for item in &items {
                             self.env.define(binding.clone(), item.clone());
-                            // Evaluate body statements inline (not via eval_block)
-                            // to preserve assignment visibility
                             for stmt in &body.stmts {
-                                if let Stmt::Return { value, .. } = stmt {
-                                    let result = if let Some(val_expr) = value {
-                                        self.eval_expr(val_expr)?
-                                    } else {
-                                        Value::Unit
-                                    };
-                                    self.env.bindings.remove(binding);
-                                    return Ok(result);
+                                match self.eval_stmt(stmt) {
+                                    Ok(()) => {}
+                                    Err(e) if e.is_break => break 'for_loop,
+                                    Err(e) if e.is_continue => continue 'for_loop,
+                                    Err(e) if e.is_return => {
+                                        self.env.bindings.remove(binding);
+                                        return Err(e);
+                                    }
+                                    Err(e) => {
+                                        self.env.bindings.remove(binding);
+                                        return Err(e);
+                                    }
                                 }
-                                self.eval_stmt(stmt)?;
                             }
                             if let Some(expr) = &body.expr {
-                                self.eval_expr(expr)?;
+                                match self.eval_expr(expr) {
+                                    Ok(_) => {}
+                                    Err(e) if e.is_break => break 'for_loop,
+                                    Err(e) if e.is_continue => continue 'for_loop,
+                                    Err(e) => {
+                                        self.env.bindings.remove(binding);
+                                        return Err(e);
+                                    }
+                                }
                             }
                         }
                         self.env.bindings.remove(binding);
@@ -862,6 +1001,62 @@ impl Interpreter {
                         &format!("{:?}", iter_val),
                     )),
                 }
+            }
+
+            // While loop
+            Expr::While { cond, body, .. } => {
+                loop {
+                    let condition = self.eval_expr(cond)?;
+                    match condition {
+                        Value::Bool(true) => {
+                            for stmt in &body.stmts {
+                                match self.eval_stmt(stmt) {
+                                    Ok(()) => {}
+                                    Err(e) if e.is_break => return Ok(Value::Unit),
+                                    Err(e) if e.is_continue => break,
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                            if let Some(expr) = &body.expr {
+                                match self.eval_expr(expr) {
+                                    Ok(_) => {}
+                                    Err(e) if e.is_break => return Ok(Value::Unit),
+                                    Err(e) if e.is_continue => {}
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                        }
+                        Value::Bool(false) => break,
+                        _ => {
+                            return Err(RuntimeError::type_mismatch(
+                                "Bool",
+                                &format!("{:?}", condition),
+                            ))
+                        }
+                    }
+                }
+                Ok(Value::Unit)
+            }
+
+            // Break
+            Expr::Break { .. } => Err(RuntimeError::loop_break()),
+
+            // Continue
+            Expr::Continue { .. } => Err(RuntimeError::loop_continue()),
+
+            // String interpolation
+            Expr::StringInterp { parts, .. } => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        StringPart::Literal(s) => result.push_str(s),
+                        StringPart::Expr(expr) => {
+                            let val = self.eval_expr(expr)?;
+                            result.push_str(&format_value(&val));
+                        }
+                    }
+                }
+                Ok(Value::Text(result))
             }
 
             // Hole (incomplete code)
@@ -908,12 +1103,12 @@ impl Interpreter {
                 Ok(())
             }
             Stmt::Return { value, .. } => {
-                // Return is handled by early exit in eval_block
-                // For now, evaluate the value if present
-                if let Some(val_expr) = value {
-                    let _val = self.eval_expr(val_expr)?;
-                }
-                Ok(())
+                let val = if let Some(val_expr) = value {
+                    self.eval_expr(val_expr)?
+                } else {
+                    Value::Unit
+                };
+                Err(RuntimeError::function_return(val))
             }
         }
     }
@@ -926,17 +1121,17 @@ impl Interpreter {
 
         // Execute all statements
         for stmt in &block.stmts {
-            // Handle return statements
-            if let Stmt::Return { value, .. } = stmt {
-                let result = if let Some(val_expr) = value {
-                    self.eval_expr(val_expr)?
-                } else {
-                    Value::Unit
-                };
-                self.env = old_env;
-                return Ok(result);
+            match self.eval_stmt(stmt) {
+                Ok(()) => {}
+                Err(e) if e.is_return => {
+                    self.env = old_env;
+                    return Err(e);
+                }
+                Err(e) => {
+                    self.env = old_env;
+                    return Err(e);
+                }
             }
-            self.eval_stmt(stmt)?;
         }
 
         // Evaluate trailing expression or return Unit
@@ -1098,8 +1293,9 @@ impl Interpreter {
                 let result = self.eval_block(&body.block);
                 self.env = old_env;
 
-                // Handle early returns from ? operator
+                // Handle early returns from ? operator and return statements
                 let result = match result {
+                    Err(e) if e.is_return => Ok(e.get_early_return().unwrap_or(Value::Unit)),
                     Err(e) if e.is_early_return() => Ok(e.get_early_return().unwrap()),
                     other => other,
                 }?;
@@ -1423,6 +1619,10 @@ impl Interpreter {
                 let items = items.clone();
                 Some(self.ho_list_flat_map(&items, args))
             }
+            (Value::List(items), "find") => {
+                let items = items.clone();
+                Some(self.ho_list_find(&items, args))
+            }
             (Value::Some(inner), "map") => {
                 let inner = (**inner).clone();
                 Some(self.ho_option_map(inner, args))
@@ -1537,6 +1737,19 @@ impl Interpreter {
             }
         }
         Ok(Value::List(result))
+    }
+
+    fn ho_list_find(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let func = args
+            .into_iter()
+            .next()
+            .ok_or_else(|| RuntimeError::arity_mismatch(1, 0))?;
+        for item in items {
+            if let Value::Bool(true) = self.call_function(func.clone(), vec![item.clone()])? {
+                return Ok(Value::Some(Box::new(item.clone())));
+            }
+        }
+        Ok(Value::None)
     }
 
     fn ho_option_map(&mut self, inner: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1667,6 +1880,91 @@ impl Interpreter {
                     Err(RuntimeError::type_mismatch("List", "other"))
                 }
             }
+            // P3.1: tail, reverse, sort
+            (Value::List(items), "tail") => {
+                if items.is_empty() {
+                    Ok(Value::List(vec![]))
+                } else {
+                    Ok(Value::List(items[1..].to_vec()))
+                }
+            }
+            (Value::List(items), "reverse") => {
+                let mut rev = items.clone();
+                rev.reverse();
+                Ok(Value::List(rev))
+            }
+            (Value::List(items), "sort") => {
+                let mut sorted = items.clone();
+                sorted.sort_by(compare_values);
+                Ok(Value::List(sorted))
+            }
+            // P3.2: take, drop, slice, enumerate, zip
+            (Value::List(items), "take") => {
+                if let Some(Value::Int(n)) = args.first() {
+                    let n = (*n).max(0) as usize;
+                    Ok(Value::List(items.iter().take(n).cloned().collect()))
+                } else {
+                    Err(RuntimeError::type_mismatch("Int", "other"))
+                }
+            }
+            (Value::List(items), "drop") => {
+                if let Some(Value::Int(n)) = args.first() {
+                    let n = (*n).max(0) as usize;
+                    Ok(Value::List(items.iter().skip(n).cloned().collect()))
+                } else {
+                    Err(RuntimeError::type_mismatch("Int", "other"))
+                }
+            }
+            (Value::List(items), "slice") => {
+                if args.len() == 2 {
+                    if let (Some(Value::Int(start)), Some(Value::Int(end))) =
+                        (args.first(), args.get(1))
+                    {
+                        let start = (*start).max(0) as usize;
+                        let end = (*end).max(0) as usize;
+                        let end = end.min(items.len());
+                        if start <= end {
+                            Ok(Value::List(items[start..end].to_vec()))
+                        } else {
+                            Ok(Value::List(vec![]))
+                        }
+                    } else {
+                        Err(RuntimeError::type_mismatch("(Int, Int)", "other"))
+                    }
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            (Value::List(items), "enumerate") => {
+                let pairs: Vec<Value> = items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let mut fields = HashMap::new();
+                        fields.insert("index".to_string(), Value::Int(i as i64));
+                        fields.insert("value".to_string(), v.clone());
+                        Value::Record(fields)
+                    })
+                    .collect();
+                Ok(Value::List(pairs))
+            }
+            (Value::List(items), "zip") => {
+                if let Some(Value::List(other)) = args.first() {
+                    let pairs: Vec<Value> = items
+                        .iter()
+                        .zip(other.iter())
+                        .map(|(a, b)| {
+                            let mut fields = HashMap::new();
+                            fields.insert("first".to_string(), a.clone());
+                            fields.insert("second".to_string(), b.clone());
+                            Value::Record(fields)
+                        })
+                        .collect();
+                    Ok(Value::List(pairs))
+                } else {
+                    Err(RuntimeError::type_mismatch("List", "other"))
+                }
+            }
 
             // Text methods
             (Value::Text(s), "len") => Ok(Value::Int(s.len() as i64)),
@@ -1721,6 +2019,53 @@ impl Interpreter {
             (Value::Text(s), "chars") => {
                 let chars: Vec<Value> = s.chars().map(|c| Value::Text(c.to_string())).collect();
                 Ok(Value::List(chars))
+            }
+            // P3.3: join, repeat, index_of, substring
+            (Value::Text(s), "repeat") => {
+                if let Some(Value::Int(n)) = args.first() {
+                    Ok(Value::Text(s.repeat((*n).max(0) as usize)))
+                } else {
+                    Err(RuntimeError::type_mismatch("Int", "other"))
+                }
+            }
+            (Value::Text(s), "index_of") => {
+                if let Some(Value::Text(needle)) = args.first() {
+                    match s.find(needle.as_str()) {
+                        Some(pos) => Ok(Value::Some(Box::new(Value::Int(pos as i64)))),
+                        None => Ok(Value::None),
+                    }
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "substring") => {
+                if args.len() == 2 {
+                    if let (Some(Value::Int(start)), Some(Value::Int(end))) =
+                        (args.first(), args.get(1))
+                    {
+                        let start = (*start).max(0) as usize;
+                        let end = (*end).max(0) as usize;
+                        let end = end.min(s.len());
+                        if start <= end && start <= s.len() {
+                            Ok(Value::Text(s[start..end].to_string()))
+                        } else {
+                            Ok(Value::Text(String::new()))
+                        }
+                    } else {
+                        Err(RuntimeError::type_mismatch("(Int, Int)", "other"))
+                    }
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            // List join method (on List[Text])
+            (Value::List(items), "join") => {
+                if let Some(Value::Text(sep)) = args.first() {
+                    let strs: Vec<String> = items.iter().map(format_value).collect();
+                    Ok(Value::Text(strs.join(sep.as_str())))
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
             }
 
             _ => Err(RuntimeError::unknown_method(
@@ -3620,5 +3965,469 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(3)));
+    }
+
+    // === P1.1: range() builtin ===
+
+    #[test]
+    fn test_range_basic() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = range(0, 5)
+  len(xs)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_range_for_loop() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let mut sum = 0
+  for i in range(1, 6) {
+    sum = sum + i
+  }
+  sum
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(15)));
+    }
+
+    #[test]
+    fn test_range_empty() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = range(5, 5)
+  len(xs)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(0)));
+    }
+
+    // === P1.2: break/continue ===
+
+    #[test]
+    fn test_break_in_for_loop() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let mut sum = 0
+  for i in range(1, 100) {
+    if i > 5 { break }
+    sum = sum + i
+  }
+  sum
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(15)));
+    }
+
+    #[test]
+    fn test_continue_in_for_loop() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let mut sum = 0
+  for i in range(1, 6) {
+    if i == 3 { continue }
+    sum = sum + i
+  }
+  sum
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        // 1 + 2 + 4 + 5 = 12 (skipping 3)
+        assert!(matches!(result, Value::Int(12)));
+    }
+
+    // === P1.3: while loops ===
+
+    #[test]
+    fn test_while_basic() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let mut i = 0
+  let mut sum = 0
+  while i < 5 {
+    sum = sum + i
+    i = i + 1
+  }
+  sum
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        // 0+1+2+3+4 = 10
+        assert!(matches!(result, Value::Int(10)));
+    }
+
+    #[test]
+    fn test_while_with_break() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let mut i = 0
+  while true {
+    if i == 5 { break }
+    i = i + 1
+  }
+  i
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_while_with_continue() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let mut i = 0
+  let mut sum = 0
+  while i < 10 {
+    i = i + 1
+    if i % 2 == 0 { continue }
+    sum = sum + i
+  }
+  sum
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        // 1+3+5+7+9 = 25
+        assert!(matches!(result, Value::Int(25)));
+    }
+
+    #[test]
+    fn test_while_false() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let mut x = 42
+  while false {
+    x = 0
+  }
+  x
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    // === P1.5: String interpolation ===
+
+    #[test]
+    fn test_string_interp_basic() {
+        let source = r#"
+module example
+fn main() -> Text {
+  let name = "world"
+  "hello, ${name}!"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "hello, world!"));
+    }
+
+    #[test]
+    fn test_string_interp_expr() {
+        let source = r#"
+module example
+fn main() -> Text {
+  let x = 21
+  "answer is ${x * 2}"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "answer is 42"));
+    }
+
+    #[test]
+    fn test_string_interp_multiple() {
+        let source = r#"
+module example
+fn main() -> Text {
+  let a = 1
+  let b = 2
+  "${a} + ${b} = ${a + b}"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "1 + 2 = 3"));
+    }
+
+    // === P1.10: return statement ===
+
+    #[test]
+    fn test_return_early() {
+        let source = r#"
+module example
+fn check(x: Int) -> Text {
+  if x > 10 {
+    return "big"
+  }
+  "small"
+}
+fn main() -> Text {
+  check(15)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "big"));
+    }
+
+    #[test]
+    fn test_return_fallthrough() {
+        let source = r#"
+module example
+fn check(x: Int) -> Text {
+  if x > 10 {
+    return "big"
+  }
+  "small"
+}
+fn main() -> Text {
+  check(5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "small"));
+    }
+
+    #[test]
+    fn test_return_in_loop() {
+        let source = r#"
+module example
+fn find_first_even(xs: List[Int]) -> Option[Int] {
+  for x in xs {
+    if x % 2 == 0 {
+      return Some(x)
+    }
+  }
+  None
+}
+fn main() -> Int {
+  match find_first_even([1, 3, 4, 6]) {
+    Some(n) => n,
+    None => 0,
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(4)));
+    }
+
+    // === P1.11: math builtins ===
+
+    #[test]
+    fn test_abs() {
+        let source = r#"
+module example
+fn main() -> Int {
+  abs(-42)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_min_max() {
+        let source = r#"
+module example
+fn main() -> Int {
+  min(3, 7) + max(3, 7)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(10)));
+    }
+
+    #[test]
+    fn test_pow() {
+        let source = r#"
+module example
+fn main() -> Int {
+  pow(2, 10)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(1024)));
+    }
+
+    // === P3.1: List methods (tail, reverse, sort) ===
+
+    #[test]
+    fn test_list_tail() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = [1, 2, 3, 4]
+  len(xs.tail())
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_list_reverse() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = [3, 1, 2]
+  let rev = xs.reverse()
+  match rev.head() {
+    Some(n) => n,
+    None => 0,
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(2)));
+    }
+
+    #[test]
+    fn test_list_sort() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let xs = [3, 1, 4, 1, 5, 9]
+  let sorted = xs.sort()
+  match sorted.head() {
+    Some(n) => n,
+    None => 0,
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(1)));
+    }
+
+    // === P3.2: List methods (take, drop, slice, enumerate, zip, find) ===
+
+    #[test]
+    fn test_list_take() {
+        let source = r#"
+module example
+fn main() -> Int {
+  len([1, 2, 3, 4, 5].take(3))
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_list_drop() {
+        let source = r#"
+module example
+fn main() -> Int {
+  len([1, 2, 3, 4, 5].drop(2))
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_list_find() {
+        let source = r#"
+module example
+fn main() -> Int {
+  match [1, 2, 3, 4].find(fn(x) { x > 2 }) {
+    Some(n) => n,
+    None => 0,
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    // === P3.3: String methods (repeat, index_of, substring, join) ===
+
+    #[test]
+    fn test_string_repeat() {
+        let source = r#"
+module example
+fn main() -> Text {
+  "ha".repeat(3)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "hahaha"));
+    }
+
+    #[test]
+    fn test_string_index_of() {
+        let source = r#"
+module example
+fn main() -> Int {
+  match "hello world".index_of("world") {
+    Some(n) => n,
+    None => -1,
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(6)));
+    }
+
+    #[test]
+    fn test_string_substring() {
+        let source = r#"
+module example
+fn main() -> Text {
+  "hello world".substring(0, 5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "hello"));
+    }
+
+    #[test]
+    fn test_list_join() {
+        let source = r#"
+module example
+fn main() -> Text {
+  ["a", "b", "c"].join(", ")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "a, b, c"));
+    }
+
+    // === Else-if chains (P1.4 - already implemented in parser) ===
+
+    #[test]
+    fn test_else_if_chain() {
+        let source = r#"
+module example
+fn classify(n: Int) -> Text {
+  if n < 0 {
+    "negative"
+  } else if n == 0 {
+    "zero"
+  } else if n < 10 {
+    "small"
+  } else {
+    "large"
+  }
+}
+fn main() -> Text {
+  classify(5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "small"));
     }
 }

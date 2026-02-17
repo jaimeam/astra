@@ -604,6 +604,32 @@ impl Formatter {
                 self.write(" ");
                 self.format_block(body);
             }
+            Expr::While { cond, body, .. } => {
+                self.write("while ");
+                self.format_expr(cond);
+                self.write(" ");
+                self.format_block(body);
+            }
+            Expr::Break { .. } => {
+                self.write("break");
+            }
+            Expr::Continue { .. } => {
+                self.write("continue");
+            }
+            Expr::StringInterp { parts, .. } => {
+                self.write("\"");
+                for part in parts {
+                    match part {
+                        StringPart::Literal(s) => self.write(&s.replace('"', "\\\"")),
+                        StringPart::Expr(expr) => {
+                            self.write("${");
+                            self.format_expr(expr);
+                            self.write("}");
+                        }
+                    }
+                }
+                self.write("\"");
+            }
             Expr::Hole { .. } => {
                 self.write("???");
             }

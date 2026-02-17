@@ -399,6 +399,31 @@ pub enum Expr {
         body: Box<Block>,
     },
 
+    // While loop
+    While {
+        id: NodeId,
+        span: Span,
+        cond: Box<Expr>,
+        body: Box<Block>,
+    },
+
+    // Loop control
+    Break {
+        id: NodeId,
+        span: Span,
+    },
+    Continue {
+        id: NodeId,
+        span: Span,
+    },
+
+    // String interpolation
+    StringInterp {
+        id: NodeId,
+        span: Span,
+        parts: Vec<StringPart>,
+    },
+
     // Special
     Hole {
         id: NodeId,
@@ -430,6 +455,10 @@ impl Expr {
             | Expr::ListLit { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::ForIn { span, .. }
+            | Expr::While { span, .. }
+            | Expr::Break { span, .. }
+            | Expr::Continue { span, .. }
+            | Expr::StringInterp { span, .. }
             | Expr::Hole { span, .. } => span,
         }
     }
@@ -554,6 +583,15 @@ pub enum Pattern {
         name: String,
         fields: Vec<Pattern>,
     },
+}
+
+/// Part of an interpolated string
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StringPart {
+    /// Literal text segment
+    Literal(String),
+    /// Interpolated expression `${expr}`
+    Expr(Box<Expr>),
 }
 
 /// Comment (preserved for formatter)

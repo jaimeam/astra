@@ -840,11 +840,16 @@ impl<'a> Parser<'a> {
             TokenKind::TextLit(s) => {
                 let value = s.clone();
                 self.advance();
-                Ok(Expr::TextLit {
-                    id: NodeId::new(),
-                    span: token.span,
-                    value,
-                })
+                // Check for string interpolation: "${...}"
+                if value.contains("${") {
+                    self.parse_string_interp(&value, &token.span)
+                } else {
+                    Ok(Expr::TextLit {
+                        id: NodeId::new(),
+                        span: token.span,
+                        value: unescape_string(&value),
+                    })
+                }
             }
             TokenKind::Ident(name) => {
                 let name = name.clone();
@@ -872,9 +877,24 @@ impl<'a> Parser<'a> {
             TokenKind::LBracket => self.parse_list_expr(),
             TokenKind::Fn => self.parse_lambda_expr(),
             TokenKind::For => self.parse_for_expr(),
+            TokenKind::While => self.parse_while_expr(),
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
             TokenKind::Assert => self.parse_assert_expr(),
+            TokenKind::Break => {
+                self.advance();
+                Ok(Expr::Break {
+                    id: NodeId::new(),
+                    span: token.span,
+                })
+            }
+            TokenKind::Continue => {
+                self.advance();
+                Ok(Expr::Continue {
+                    id: NodeId::new(),
+                    span: token.span,
+                })
+            }
             TokenKind::Hole => {
                 self.advance();
                 Ok(Expr::Hole {
@@ -1016,6 +1036,21 @@ impl<'a> Parser<'a> {
             span: start_span.merge(&end_span),
             binding,
             iter,
+            body,
+        })
+    }
+
+    fn parse_while_expr(&mut self) -> Result<Expr, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::While)?;
+        let cond = Box::new(self.parse_expr()?);
+        let body = Box::new(self.parse_block()?);
+        let end_span = self.current_span();
+
+        Ok(Expr::While {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            cond,
             body,
         })
     }
@@ -1364,6 +1399,93 @@ impl<'a> Parser<'a> {
             .build()
     }
 
+    fn parse_string_interp(&mut self, raw: &str, span: &Span) -> Result<Expr, Diagnostic> {
+        let mut parts = Vec::new();
+        let mut remaining = raw;
+
+        while let Some(dollar_pos) = remaining.find("${") {
+            // Add literal part before ${
+            if dollar_pos > 0 {
+                parts.push(StringPart::Literal(unescape_string(
+                    &remaining[..dollar_pos],
+                )));
+            }
+
+            // Find the matching closing brace
+            let expr_start = dollar_pos + 2;
+            let mut brace_depth = 1;
+            let mut end_pos = expr_start;
+            let chars: Vec<char> = remaining[expr_start..].chars().collect();
+            for ch in &chars {
+                match ch {
+                    '{' => brace_depth += 1,
+                    '}' => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                end_pos += ch.len_utf8();
+            }
+
+            if brace_depth != 0 {
+                return Err(Diagnostic::error(
+                    crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN,
+                )
+                .message("Unclosed string interpolation: missing '}'")
+                .span(span.clone())
+                .build());
+            }
+
+            let expr_str = &remaining[expr_start..end_pos];
+            // Parse the expression string
+            let source_file = crate::parser::span::SourceFile::new(
+                std::path::PathBuf::from("<interp>"),
+                format!("module __interp\nfn __x() -> Int {{ {} }}", expr_str),
+            );
+            let lexer = Lexer::new(&source_file);
+            let mut parser = Parser::new(lexer, source_file.clone());
+            // Parse module, extract the expression from the function body
+            match parser.parse_module() {
+                Ok(module) => {
+                    if let Some(Item::FnDef(f)) = module.items.first() {
+                        if let Some(expr) = &f.body.expr {
+                            parts.push(StringPart::Expr(expr.clone()));
+                        } else if let Some(Stmt::Expr { expr, .. }) = f.body.stmts.first() {
+                            parts.push(StringPart::Expr(expr.clone()));
+                        }
+                    }
+                }
+                Err(_) => {
+                    return Err(Diagnostic::error(
+                        crate::diagnostics::error_codes::syntax::UNEXPECTED_TOKEN,
+                    )
+                    .message(format!(
+                        "Invalid expression in string interpolation: {}",
+                        expr_str
+                    ))
+                    .span(span.clone())
+                    .build());
+                }
+            }
+
+            remaining = &remaining[end_pos + 1..]; // skip past '}'
+        }
+
+        // Add remaining literal
+        if !remaining.is_empty() {
+            parts.push(StringPart::Literal(unescape_string(remaining)));
+        }
+
+        Ok(Expr::StringInterp {
+            id: NodeId::new(),
+            span: span.clone(),
+            parts,
+        })
+    }
+
     fn expr_span(&self, expr: &Expr) -> Span {
         match expr {
             Expr::IntLit { span, .. }
@@ -1386,6 +1508,10 @@ impl<'a> Parser<'a> {
             | Expr::ListLit { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::ForIn { span, .. }
+            | Expr::While { span, .. }
+            | Expr::Break { span, .. }
+            | Expr::Continue { span, .. }
+            | Expr::StringInterp { span, .. }
             | Expr::Hole { span, .. } => span.clone(),
         }
     }
@@ -1406,4 +1532,29 @@ impl<'a> Parser<'a> {
             }
         }
     }
+}
+
+/// Process escape sequences in a string literal
+fn unescape_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('r') => result.push('\r'),
+                Some('t') => result.push('\t'),
+                Some('\\') => result.push('\\'),
+                Some('"') => result.push('"'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
