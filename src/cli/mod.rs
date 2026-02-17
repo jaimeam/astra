@@ -353,7 +353,7 @@ fn walkdir(path: &PathBuf) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
 fn run_test(
     filter: Option<&str>,
-    _seed: Option<u64>,
+    seed: Option<u64>,
     _json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::parser::ast::Item;
@@ -402,6 +402,7 @@ fn run_test(
                 let capabilities = build_test_capabilities(&test.using);
 
                 let mut interpreter = Interpreter::with_capabilities(capabilities);
+                configure_search_paths(&mut interpreter, path.parent());
                 // Load the module functions first
                 if let Err(e) = interpreter.load_module(&module) {
                     eprintln!("  FAIL: {} - {}", test.name, e);
@@ -432,7 +433,7 @@ fn run_test(
 
                 total_tests += 1;
                 let num_iterations = 100;
-                let seed = _seed.unwrap_or(42);
+                let seed = seed.unwrap_or(42);
                 let mut all_passed = true;
 
                 for i in 0..num_iterations {
@@ -441,6 +442,7 @@ fn run_test(
                     capabilities.rand = Some(Box::new(SeededRand::new(iter_seed)));
 
                     let mut interpreter = Interpreter::with_capabilities(capabilities);
+                    configure_search_paths(&mut interpreter, path.parent());
                     if let Err(e) = interpreter.load_module(&module) {
                         eprintln!("  FAIL: {} (iteration {}) - {}", prop.name, i, e);
                         all_passed = false;
@@ -506,12 +508,87 @@ impl ConsoleCapability for TestConsole {
     }
 }
 
+/// Configure standard search paths for module resolution.
+///
+/// Adds the following search paths in order:
+/// 1. The given base directory (usually the source file's parent)
+/// 2. The current working directory
+/// 3. The executable's directory (for finding stdlib relative to the binary)
+fn configure_search_paths(interpreter: &mut Interpreter, base_dir: Option<&std::path::Path>) {
+    // Add the base directory first (usually the source file's parent)
+    if let Some(base) = base_dir {
+        interpreter.add_search_path(base.to_path_buf());
+    }
+
+    // Add the current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        interpreter.add_search_path(cwd.clone());
+
+        // Also check for astra.toml to find the project root
+        // Walk up from cwd to find it
+        let mut dir = cwd.as_path();
+        loop {
+            if dir.join("astra.toml").exists() {
+                interpreter.add_search_path(dir.to_path_buf());
+                break;
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+    }
+
+    // Add the executable's directory as a search path
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            interpreter.add_search_path(exe_dir.to_path_buf());
+        }
+    }
+}
+
+/// Mock filesystem capability for tests
+struct MockFs;
+
+impl crate::interpreter::FsCapability for MockFs {
+    fn read(&self, _path: &str) -> Result<String, String> {
+        Ok("mocked content".to_string())
+    }
+
+    fn write(&self, _path: &str, _content: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn exists(&self, _path: &str) -> bool {
+        true
+    }
+}
+
+/// Mock network capability for tests
+struct MockNet;
+
+impl crate::interpreter::NetCapability for MockNet {
+    fn get(&self, _url: &str) -> Result<crate::interpreter::Value, String> {
+        Ok(crate::interpreter::Value::Text(
+            "mocked response".to_string(),
+        ))
+    }
+
+    fn post(&self, _url: &str, _body: &str) -> Result<crate::interpreter::Value, String> {
+        Ok(crate::interpreter::Value::Text(
+            "mocked response".to_string(),
+        ))
+    }
+}
+
 /// Build capabilities for a test based on its `using effects(...)` clause.
 ///
 /// Supports:
-/// - `Rand = Rand.seeded(<seed>)` -> SeededRand
+/// - `Rand = Rand.seeded(<seed>)` or `Rand = seeded_rand(<seed>)` -> SeededRand
 /// - `Clock = Clock.fixed(<time>)` -> FixedClock
-/// - Console is always provided (captured)
+/// - `Fs = mock_fs` or `Fs = ...` -> MockFs
+/// - `Net = mock_net` or `Net = ...` -> MockNet
+/// - `Console = ...` -> TestConsole (always provided)
 fn build_test_capabilities(using: &Option<crate::parser::ast::UsingClause>) -> Capabilities {
     let mut capabilities = Capabilities {
         console: Some(Box::new(TestConsole::new())),
@@ -522,9 +599,14 @@ fn build_test_capabilities(using: &Option<crate::parser::ast::UsingClause>) -> C
         for binding in &clause.bindings {
             match binding.effect.as_str() {
                 "Rand" => {
-                    // Expect: Rand.seeded(<int>)
+                    // Expect: Rand.seeded(<int>) or seeded_rand(<int>)
                     if let Some(seed) = extract_method_int_arg(&binding.value, "Rand", "seeded") {
                         capabilities.rand = Some(Box::new(SeededRand::new(seed as u64)));
+                    } else if let Some(seed) = extract_call_int_arg(&binding.value, "seeded_rand") {
+                        capabilities.rand = Some(Box::new(SeededRand::new(seed as u64)));
+                    } else {
+                        // Default seeded rand with seed 42
+                        capabilities.rand = Some(Box::new(SeededRand::new(42)));
                     }
                 }
                 "Clock" => {
@@ -532,6 +614,17 @@ fn build_test_capabilities(using: &Option<crate::parser::ast::UsingClause>) -> C
                     if let Some(time) = extract_method_int_arg(&binding.value, "Clock", "fixed") {
                         capabilities.clock = Some(Box::new(FixedClock::new(time)));
                     }
+                }
+                "Fs" => {
+                    // Provide mock filesystem
+                    capabilities.fs = Some(Box::new(MockFs));
+                }
+                "Net" => {
+                    // Provide mock network
+                    capabilities.net = Some(Box::new(MockNet));
+                }
+                "Console" => {
+                    // Console is always provided (already set above)
                 }
                 _ => {
                     // Unknown effect binding - ignore for now
@@ -571,6 +664,22 @@ fn extract_method_int_arg(
     None
 }
 
+/// Extract an integer argument from a function call expression like `foo(42)`.
+fn extract_call_int_arg(expr: &crate::parser::ast::Expr, expected_fn: &str) -> Option<i64> {
+    use crate::parser::ast::Expr;
+
+    if let Expr::Call { func, args, .. } = expr {
+        if let Expr::Ident { name, .. } = func.as_ref() {
+            if name == expected_fn {
+                if let Some(Expr::IntLit { value, .. }) = args.first() {
+                    return Some(*value);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // Read the source file
     let source = std::fs::read_to_string(file)
@@ -596,10 +705,7 @@ fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error
 
     // Create interpreter and run
     let mut interpreter = Interpreter::with_capabilities(capabilities);
-    // Add the file's parent directory as a search path for imports
-    if let Some(parent) = file.parent() {
-        interpreter.add_search_path(parent.to_path_buf());
-    }
+    configure_search_paths(&mut interpreter, file.parent());
     match interpreter.eval_module(&module) {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Runtime error: {}", e).into()),
@@ -662,10 +768,12 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
     let mut line_num = 0u32;
 
     let make_interpreter = || {
-        Interpreter::with_capabilities(Capabilities {
+        let mut interp = Interpreter::with_capabilities(Capabilities {
             console: Some(Box::new(RealConsole)),
             ..Default::default()
-        })
+        });
+        configure_search_paths(&mut interp, None);
+        interp
     };
 
     loop {
