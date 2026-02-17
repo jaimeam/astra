@@ -334,6 +334,10 @@ pub struct TypeChecker {
     current_type_params: HashSet<String>,
     /// Trait implementations: maps (trait_name, type_name) -> true
     trait_impls: HashSet<(String, String)>,
+    /// Defined private function names and their spans (for unused function detection)
+    defined_fns: Vec<(String, Span, Visibility)>,
+    /// Functions that have been referenced/called
+    called_fns: HashSet<String>,
 }
 
 impl TypeChecker {
@@ -346,6 +350,8 @@ impl TypeChecker {
             imports: Vec::new(),
             current_type_params: HashSet::new(),
             trait_impls: HashSet::new(),
+            defined_fns: Vec::new(),
+            called_fns: HashSet::new(),
         }
     }
 
@@ -529,6 +535,11 @@ impl TypeChecker {
                 }
                 Item::FnDef(def) => {
                     self.env.register_fn(def.clone());
+                    // Track for unused function lint
+                    if def.name != "main" {
+                        self.defined_fns
+                            .push((def.name.clone(), def.span.clone(), def.visibility));
+                    }
                     // Resolve param types with type params in scope
                     let old_params = self.current_type_params.clone();
                     for tp in &def.type_params {
@@ -584,6 +595,25 @@ impl TypeChecker {
                             Suggestion::new("Remove this import")
                                 .with_edit(Edit::new(span.clone(), "")),
                         )
+                        .build(),
+                );
+            }
+        }
+
+        // W0008: Emit warnings for unused private functions
+        for (name, span, visibility) in &self.defined_fns {
+            // Only warn about private functions — public ones may be used externally
+            if matches!(visibility, Visibility::Private)
+                && !self.called_fns.contains(name)
+                && !name.starts_with('_')
+            {
+                self.diagnostics.push(
+                    Diagnostic::warning(crate::diagnostics::error_codes::warnings::UNUSED_FUNCTION)
+                        .message(format!("Function `{}` is defined but never used", name))
+                        .span(span.clone())
+                        .note(Note::new(
+                            "if this is intentional, prefix the name with `_` or make it `public`",
+                        ))
                         .build(),
                 );
             }
@@ -953,6 +983,8 @@ impl TypeChecker {
                     _ => {
                         // Mark variable as used for W0001 lint
                         self.lint_use_var(name);
+                        // Track function references for unused function lint
+                        self.called_fns.insert(name.clone());
 
                         if let Some(ty) = env.lookup(name) {
                             ty.clone()
@@ -3006,5 +3038,109 @@ fn main() -> List[Text] {
         assert!(constraint_errors[0]
             .message
             .contains("does not implement trait"));
+    }
+
+    // W0008: Unused function tests
+
+    #[test]
+    fn test_lint_unused_private_function_warns() {
+        let source = r#"
+module example
+
+fn unused_helper() -> Int {
+  42
+}
+
+fn main() -> Int {
+  0
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0008")
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "should warn about unused private function"
+        );
+        assert!(warnings[0].message.contains("unused_helper"));
+    }
+
+    #[test]
+    fn test_lint_used_function_no_warning() {
+        let source = r#"
+module example
+
+fn helper() -> Int {
+  42
+}
+
+fn main() -> Int {
+  helper()
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0008")
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "should not warn about called function: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_lint_public_function_no_warning() {
+        let source = r#"
+module example
+
+public fn api_endpoint() -> Int {
+  42
+}
+
+fn main() -> Int {
+  0
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0008")
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "should not warn about public functions"
+        );
+    }
+
+    #[test]
+    fn test_lint_underscore_function_no_warning() {
+        let source = r#"
+module example
+
+fn _internal() -> Int {
+  42
+}
+
+fn main() -> Int {
+  0
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let warnings: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "W0008")
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "should not warn about _-prefixed functions"
+        );
     }
 }

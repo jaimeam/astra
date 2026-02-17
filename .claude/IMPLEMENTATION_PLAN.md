@@ -158,21 +158,34 @@
 | **P7.4** | WASM compilation target | Browser/edge deployment | 📋 Planned |
 | **P7.5** | Incremental compilation | Fast rebuilds | 📋 Planned |
 
+### ✅ Phase 8: v0.3 — LLM Agent Workflow Features (100% Complete)
+
+| # | Task | Impact | Status |
+|---|------|--------|--------|
+| **P8.1** | `astra fix` command | Auto-apply diagnostic suggestions (the killer LLM-agent feature) | ✅ Done |
+| **P8.2** | `astra explain <code>` | Detailed error code explanations with examples | ✅ Done |
+| **P8.3** | Watch mode (`--watch`) | `astra check --watch` and `astra test --watch` for continuous feedback | ✅ Done |
+| **P8.4** | Unused function detection (W0008) | Warn on private functions never called within their module | ✅ Done |
+
 ---
 
 ## Estimated Completion
 
-- **Fully working**: Parser (block expressions, local functions, 2-token lookahead, range expressions, multiline strings, string escape validation), lexer, formatter, interpreter runtime (split into submodules), diagnostics (with concrete Edit objects), CLI (run/check/test/fmt/repl/package/lsp/init)
+- **Fully working**: Parser (block expressions, local functions, 2-token lookahead, range expressions, multiline strings, string escape validation), lexer, formatter, interpreter runtime (split into submodules), diagnostics (with concrete Edit objects), CLI (run/check/test/fmt/fix/explain/repl/package/lsp/init/doc)
 - **Partially working**: Type checker (basic types + effects + exhaustiveness + typedef/enumdef validation + import resolution + generics + traits + trait constraint enforcement)
-- **Not started**: WASM target, incremental compilation, watch mode
+- **Not started**: WASM target
 - All 14 examples parse, format, type-check, run correctly, and produce visible output
 - 12 stdlib modules (8 original + 4 new: json, io, iter, error)
 - Complete standard library documentation (docs/stdlib.md) covering all 137 built-in methods and functions
-- 305 Rust unit tests + 4 golden tests = 309 total, all passing
-- 95+/95+ Astra-level tests passing (0 failures)
+- 320 Rust unit tests + 4 golden tests = 324 total, all passing
+- 103 Astra-level tests passing (0 failures)
 - All 11 refactoring tasks (R1-R11) completed
-- 54 error/warning codes registered (E0xxx-E4xxx, W0xxx)
+- 55 error/warning codes registered (E0xxx-E4xxx, W0xxx including W0008)
 - Full documentation suite: spec, getting-started, effects, testing, stdlib, errors, formatting, examples, why-astra, 4 ADRs
+- `astra fix` auto-applies diagnostic suggestions (the killer LLM-agent feature)
+- `astra explain E1001` provides detailed error explanations for all 55 codes
+- `astra check --watch` and `astra test --watch` for continuous feedback loops
+- W0008: Unused function detection for private functions
 
 ### Known Limitations
 
@@ -181,10 +194,7 @@
 | Generic type params treated as opaque | Type checker doesn't catch type errors in generic code | Programs run correctly via dynamic typing; errors caught at runtime |
 | Traits not resolved on method calls | `impl Show for Int` is parsed but method calls aren't dispatched via trait | Use direct method calls or pattern matching |
 | Trait constraint enforcement is name-based | `T: Show` checks if `impl Show for Int` exists, not structural compatibility | Define trait impls for types you use with bounded generics |
-| Parameter destructuring not supported | `fn foo({x, y}: {x: Int, y: Int})` doesn't parse | Use `let {x, y} = param` inside the function body |
 | Async/await is synchronous | `await expr` evaluates `expr` directly with no concurrency | Suitable for single-threaded use cases |
-| No incremental checking | `astra check` re-parses everything from scratch | Only noticeable on large projects |
-| No watch mode | Must manually re-run `astra check` | Use external file watcher |
 
 ---
 
@@ -192,17 +202,25 @@
 
 ```bash
 cargo build                              # Build
-cargo test                               # Run all tests (277)
+cargo test                               # Run all tests (324)
 cargo run -- run examples/hello.astra    # Run a program
 cargo run -- check examples/             # Check syntax + types + effects (0 errors, 14 files)
-cargo run -- test                        # Run test blocks (95/95 pass)
+cargo run -- check --watch .             # Watch mode: re-check on file changes
+cargo run -- test                        # Run test blocks (103/103 pass)
+cargo run -- test --watch                # Watch mode: re-run tests on changes
 cargo run -- test "filter"               # Run matching tests
 cargo run -- check --json file.astra     # JSON diagnostics with suggestions
+cargo run -- fix .                       # Auto-apply diagnostic suggestions
+cargo run -- fix --dry-run .             # Preview fixes without applying
+cargo run -- fix --only W0001 .          # Fix only specific diagnostic codes
+cargo run -- explain E1001               # Detailed error explanation
 cargo run -- fmt file.astra              # Format a file
 cargo run -- fmt --check file.astra      # Check formatting without modifying
 cargo run -- fmt .                       # Format all .astra files
 cargo run -- repl                        # Interactive REPL
 cargo run -- package -o dist             # Package project
+cargo run -- doc .                       # Generate API documentation
+cargo run -- init my_project             # Scaffold a new Astra project
 ```
 
 ---
@@ -239,6 +257,7 @@ cargo run -- package -o dist             # Package project
 | 2026-02-17 | claude | **Code review & bug fixes**: Fixed `Rand.float()` returning Int instead of Float, fixed `Env.args()` returning Record instead of List, fixed `stdlib/list.astra` calling `length()` instead of `len()`, fixed `stdlib/collections.astra` syntax error, removed dead code (`check_ident`, `reexport_modules`), deduplicated `Interpreter::new()`, fixed `_seed` parameter naming in CLI. Added 11 refactoring tasks to implementation plan. |
 | 2026-02-17 | claude | **Refactoring session (R1-R11)**: Split interpreter/mod.rs into 4 submodules (value.rs, environment.rs, capabilities.rs, error.rs — reduced from 6206 to 5654 lines). Deduplicated parse_block/parse_block_body via shared `parse_block_stmts()`. Deduplicated parse_trait_def/parse_effect_def via shared `parse_fn_signatures()`. Removed TestConsole duplication in CLI (reuses MockConsole from interpreter). Extracted `check_arity<T>()` helper replacing 24 arity-check patterns. Added 21 formatter unit tests, 6 CLI unit tests, 10 diagnostics tests, 7 type checker tests. Implemented `check_typedef`/`check_enumdef` well-formedness checks (invariant type validation, duplicate variant/field detection). Implemented type checker import resolution (registers imported names to prevent false E1002 errors). Added 4 new stdlib modules (json, io, iter, error). Fixed `stdlib/collections.astra` call-continuation parse ambiguity. |
 | 2026-02-17 | claude | **v0.1 completion review**: Comprehensive project audit. Completed stdlib.md documentation (from ~30% to 100%: all 137 built-in methods/functions, all 12 stdlib modules, all effect methods, all type methods). Added main() functions to string_interp.astra and while_loops.astra so all 14 examples produce visible output. Updated plan to 100% v0.1 completion. |
+| 2026-02-17 | claude | **v0.3 LLM Agent Workflow features**: Implemented `astra fix` (auto-apply diagnostic suggestions with `--dry-run`, `--only` filter, JSON output), `astra explain <code>` (detailed explanations for all 55 error/warning codes), watch mode (`--watch` on check/test using `notify` crate with debounce), W0008 unused function detection for private functions. Added 8 new unit tests. Total: 320 Rust + 4 golden + 103 Astra tests. |
 
 ---
 
@@ -246,10 +265,10 @@ cargo run -- package -o dist             # Package project
 
 | Category | Count | Type |
 |----------|-------|------|
-| Unit tests (Rust) | 273 | `#[test]` in source |
+| Unit tests (Rust) | 320 | `#[test]` in source |
 | Golden tests | 4 | Snapshot comparisons |
-| Astra tests | 95/95 | `test` blocks in .astra files |
-| **Total** | **372** | 277 Rust + 95 Astra passing |
+| Astra tests | 103/103 | `test` blocks in .astra files |
+| **Total** | **427** | 324 Rust + 103 Astra passing |
 
 ---
 
@@ -336,7 +355,8 @@ cargo run -- package -o dist             # Package project
 | Feature | Description | Priority |
 |---------|-------------|----------|
 | **Full HM type inference** | Complete Hindley-Milner with constraint solving | High |
-| **Trait constraint bounds** | `fn sort[T: Ord](items: List[T])` — require traits on type params | High |
+| **LSP rename / find references** | IDE-quality symbol rename and reference lookup | High |
+| **Package registry** | Protocol design for sharing Astra libraries (ADR needed) | Medium |
 | **True async/await** | Concurrent execution with effect-based scheduling | Medium |
+| **Performance profiling** | `astra run --profile` for function call timing | Medium |
 | **WASM Target** | Compile to WebAssembly for browser/edge deployment | Low |
-| **Incremental Compilation** | Cache and reuse compilation artifacts | Low |
