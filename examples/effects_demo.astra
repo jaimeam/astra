@@ -22,8 +22,8 @@ fn log_sum(a: Int, b: Int) -> Int
 fn main()
   effects(Console)
 {
-  let sum = add(2, 3)
+  let _sum = add(2, 3)
   greet("Astra")
-  let logged_result = log_sum(10, 20)
+  let _logged_result = log_sum(10, 20)
   Console.println("Done!")
 }

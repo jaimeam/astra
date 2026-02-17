@@ -38,7 +38,9 @@ Create a file named `hello.astra`:
 ```astra
 module hello
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println("Hello, Astra!")
 }
 ```
@@ -86,7 +88,9 @@ Variables are declared with `let`. They are immutable by default:
 ```astra
 module variables
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   # Immutable binding (default)
   let x = 42
   let name = "Alice"
@@ -100,7 +104,7 @@ fn main() effects(Console) {
 
 **Key difference from Python**: Variables are immutable by default. You cannot reassign `x` after binding.
 
-**Key difference from Rust**: No `let mut` syntax yet. All bindings are immutable.
+**Key difference from Rust**: Use `let mut` for mutable bindings. All bindings are immutable by default.
 
 ### Functions
 
@@ -119,7 +123,9 @@ fn multiply(x: Int, y: Int) -> Int {
   x * y
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   let result = add(3, 4)
   Console.println("3 + 4 = 7")
 }
@@ -163,7 +169,9 @@ fn create_point(x: Int, y: Int) -> { x: Int, y: Int } {
   { x = x, y = y }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   let p = { x = 10, y = 20 }
   Console.println("Point created")
 }
@@ -197,7 +205,9 @@ fn describe_color(c: Color) -> Text {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println("Colors defined")
 }
 ```
@@ -217,7 +227,9 @@ fn find_user(id: Int) -> Option[{ name: Text, age: Int }] {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   let user = find_user(1)
   match user {
     Some(u) => Console.println("Found user")
@@ -243,7 +255,9 @@ fn parse_number(s: Text) -> Result[Int, ParseError] {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   match parse_number("42") {
     Ok(n) => Console.println("Parsed successfully")
     Err(e) => Console.println("Parse failed")
@@ -280,11 +294,15 @@ fn add(a: Int, b: Int) -> Int {
 }
 
 # Function that prints - must declare Console effect
-fn greet(name: Text) effects(Console) {
+fn greet(name: Text)
+  effects(Console)
+{
   Console.println("Hello, " + name + "!")
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   let sum = add(2, 3)
   greet("World")
 }
@@ -317,7 +335,9 @@ fn fetch_and_log(url: Text) -> Text
   response
 }
 
-fn main() effects(Net, Console) {
+fn main()
+  effects(Net, Console)
+{
   let data = fetch_and_log("https://example.com")
   Console.println("Received data")
 }
@@ -342,7 +362,9 @@ fn describe_number(n: Int) -> Text {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println(describe_number(0))
   Console.println(describe_number(1))
   Console.println(describe_number(42))
@@ -367,7 +389,9 @@ fn describe_status(s: Status) -> Text {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   let s = Pending(reason = "awaiting verification")
   Console.println(describe_status(s))
 }
@@ -386,7 +410,9 @@ fn safe_divide(a: Int, b: Int) -> Option[Int] {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   match safe_divide(10, 2) {
     Some(result) => Console.println("Result: 5")
     None => Console.println("Cannot divide by zero")
@@ -526,7 +552,9 @@ fn fib(n: Int) -> Int {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println("Fibonacci sequence:")
   Console.println("fib(0) = 0")
   Console.println("fib(1) = 1")
@@ -573,7 +601,9 @@ fn add(a: Int, b: Int) -> Int {
 }
 
 # Function with effects
-fn greet(name: Text) effects(Console) {
+fn greet(name: Text)
+  effects(Console)
+{
   Console.println("Hello, " + name)
 }
 
@@ -648,7 +678,7 @@ Err(error)
 |------|-------|
 | `fn func() -> i32 { }` | `fn func() -> Int { }` |
 | `struct Point { x: i32 }` | `type Point = { x: Int }` |
-| `let mut x = 5;` | `let x = 5` (no mut yet) |
+| `let mut x = 5;` | `let mut x = 5` |
 | Semicolons required | No semicolons |
 | `// comment` | `# comment` |
 | Ownership/borrowing | Garbage collected |

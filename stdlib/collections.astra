@@ -2,8 +2,12 @@ module std.collections
 
 fn group_by_even(items: List[Int]) -> (List[Int], List[Int])
 {
-  let evens = items.filter(fn(x) { x % 2 == 0 })
-  let odds = items.filter(fn(x) { x % 2 != 0 })
+  let evens = items.filter(fn(x) {
+    x % 2 == 0
+  })
+  let odds = items.filter(fn(x) {
+    x % 2 != 0
+  })
   let result = (evens, odds)
   result
 }

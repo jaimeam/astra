@@ -1,31 +1,37 @@
 module std.io
 
-fn print_line(text: Text) effects(Console)
+fn print_line(text: Text)
+  effects(Console)
 {
   Console.println(text)
 }
 
-fn print_text(text: Text) effects(Console)
+fn print_text(text: Text)
+  effects(Console)
 {
   Console.print(text)
 }
 
-fn read_line() -> Option[Text] effects(Console)
+fn read_line() -> Option[Text]
+  effects(Console)
 {
   Console.read_line()
 }
 
-fn read_file(path: Text) -> Text effects(Fs)
+fn read_file(path: Text) -> Text
+  effects(Fs)
 {
   Fs.read(path)
 }
 
-fn write_file(path: Text, content: Text) effects(Fs)
+fn write_file(path: Text, content: Text)
+  effects(Fs)
 {
   Fs.write(path, content)
 }
 
-fn file_exists(path: Text) -> Bool effects(Fs)
+fn file_exists(path: Text) -> Bool
+  effects(Fs)
 {
   Fs.exists(path)
 }
