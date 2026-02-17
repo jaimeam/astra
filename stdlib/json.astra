@@ -29,8 +29,5 @@ fn parse_bool(s: Text) -> Result[Bool, Text]
 
 fn escape(s: Text) -> Text
 {
-  s.replace("\\", "\\\\")
-    .replace("\"", "\\\"")
-    .replace("\n", "\\n")
-    .replace("\t", "\\t")
+  s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t")
 }

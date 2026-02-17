@@ -17,7 +17,8 @@ fn format_list(items: List[Int]) -> Text
   "List has ${count} items: ${to_text(items)}"
 }
 
-fn main() effects(Console)
+fn main()
+  effects(Console)
 {
   println(greet("Astra"))
   println(describe(21))
