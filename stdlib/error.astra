@@ -1,0 +1,32 @@
+module std.error
+
+fn wrap(msg: Text, cause: Text) -> Text
+{
+  msg + ": " + cause
+}
+
+fn from_text(msg: Text) -> Result[Unit, Text]
+{
+  Err(msg)
+}
+
+fn ok_unit() -> Result[Unit, Text]
+{
+  Ok(())
+}
+
+fn map_error[T](result: Result[T, Text], prefix: Text) -> Result[T, Text]
+{
+  match result {
+    Ok(v) => Ok(v)
+    Err(e) => Err(prefix + ": " + e)
+  }
+}
+
+fn or_else[T](result: Result[T, Text], fallback: () -> Result[T, Text]) -> Result[T, Text]
+{
+  match result {
+    Ok(v) => Ok(v)
+    Err(_) => fallback()
+  }
+}

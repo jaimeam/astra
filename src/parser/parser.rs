@@ -257,42 +257,7 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
         let type_params = self.parse_optional_type_params()?;
         self.expect(TokenKind::LBrace)?;
-
-        let mut methods = Vec::new();
-        while !self.check(TokenKind::RBrace) && !self.is_eof() {
-            self.expect(TokenKind::Fn)?;
-            let method_start = self.current_span();
-            let method_name = self.expect_ident()?;
-            self.expect(TokenKind::LParen)?;
-            let mut params = Vec::new();
-            if !self.check(TokenKind::RParen) {
-                params.push(self.parse_param()?);
-                while self.check(TokenKind::Comma) {
-                    self.advance();
-                    if self.check(TokenKind::RParen) {
-                        break;
-                    }
-                    params.push(self.parse_param()?);
-                }
-            }
-            self.expect(TokenKind::RParen)?;
-
-            let return_type = if self.check(TokenKind::Arrow) {
-                self.advance();
-                Some(self.parse_type_expr()?)
-            } else {
-                None
-            };
-            let method_end = self.current_span();
-
-            methods.push(TraitMethod {
-                id: NodeId::new(),
-                span: method_start.merge(&method_end),
-                name: method_name,
-                params,
-                return_type,
-            });
-        }
+        let methods = self.parse_fn_signatures()?;
         self.expect(TokenKind::RBrace)?;
         let end_span = self.current_span();
 
@@ -336,12 +301,26 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::Effect)?;
         let name = self.expect_ident()?;
         self.expect(TokenKind::LBrace)?;
+        let operations = self.parse_fn_signatures()?;
+        self.expect(TokenKind::RBrace)?;
+        let end_span = self.current_span();
 
-        let mut operations = Vec::new();
+        Ok(EffectDecl {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            name,
+            operations,
+        })
+    }
+
+    /// Parse a block of function signatures (used by trait and effect definitions).
+    /// Parses `fn name(params) -> RetType` entries until `}`.
+    fn parse_fn_signatures(&mut self) -> Result<Vec<TraitMethod>, Diagnostic> {
+        let mut methods = Vec::new();
         while !self.check(TokenKind::RBrace) && !self.is_eof() {
             self.expect(TokenKind::Fn)?;
-            let op_start = self.current_span();
-            let op_name = self.expect_ident()?;
+            let method_start = self.current_span();
+            let method_name = self.expect_ident()?;
             self.expect(TokenKind::LParen)?;
             let mut params = Vec::new();
             if !self.check(TokenKind::RParen) {
@@ -362,25 +341,17 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let op_end = self.current_span();
+            let method_end = self.current_span();
 
-            operations.push(TraitMethod {
+            methods.push(TraitMethod {
                 id: NodeId::new(),
-                span: op_start.merge(&op_end),
-                name: op_name,
+                span: method_start.merge(&method_end),
+                name: method_name,
                 params,
                 return_type,
             });
         }
-        self.expect(TokenKind::RBrace)?;
-        let end_span = self.current_span();
-
-        Ok(EffectDecl {
-            id: NodeId::new(),
-            span: start_span.merge(&end_span),
-            name,
-            operations,
-        })
+        Ok(methods)
     }
 
     fn parse_fn_def(&mut self) -> Result<FnDef, Diagnostic> {
@@ -729,7 +700,21 @@ impl<'a> Parser<'a> {
     fn parse_block(&mut self) -> Result<Block, Diagnostic> {
         let start_span = self.current_span();
         self.expect(TokenKind::LBrace)?;
+        let (stmts, expr) = self.parse_block_stmts()?;
+        self.expect(TokenKind::RBrace)?;
 
+        let end_span = self.current_span();
+        Ok(Block {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            stmts,
+            expr,
+        })
+    }
+
+    /// Parse the interior statements and optional trailing expression of a block.
+    /// Assumes the opening `{` has already been consumed.
+    fn parse_block_stmts(&mut self) -> Result<(Vec<Stmt>, Option<Box<Expr>>), Diagnostic> {
         let mut stmts = Vec::new();
         let mut expr = None;
 
@@ -771,15 +756,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.expect(TokenKind::RBrace)?;
-
-        let end_span = self.current_span();
-        Ok(Block {
-            id: NodeId::new(),
-            span: start_span.merge(&end_span),
-            stmts,
-            expr,
-        })
+        Ok((stmts, expr))
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, Diagnostic> {
@@ -1231,43 +1208,7 @@ impl<'a> Parser<'a> {
 
     /// Parse the body of a block expression after `{` has already been consumed.
     fn parse_block_body(&mut self, start_span: Span) -> Result<Expr, Diagnostic> {
-        let mut stmts = Vec::new();
-        let mut expr = None;
-
-        while !self.check(TokenKind::RBrace) && !self.is_eof() {
-            if self.check(TokenKind::Let) || self.check(TokenKind::Return) {
-                stmts.push(self.parse_stmt()?);
-            } else if self.check(TokenKind::Fn) && matches!(self.peek2().kind, TokenKind::Ident(_))
-            {
-                // Local named function definition: `fn name(...) { ... }`
-                stmts.push(self.parse_local_fn_stmt()?);
-            } else {
-                let e = self.parse_expr()?;
-
-                if self.check(TokenKind::Eq) {
-                    self.advance();
-                    let value = self.parse_expr()?;
-                    let span = e.span().merge(value.span());
-                    stmts.push(Stmt::Assign {
-                        id: NodeId::new(),
-                        span,
-                        target: Box::new(e),
-                        value: Box::new(value),
-                    });
-                } else if self.check(TokenKind::RBrace) {
-                    expr = Some(Box::new(e));
-                    break;
-                } else {
-                    let span = e.span().clone();
-                    stmts.push(Stmt::Expr {
-                        id: NodeId::new(),
-                        span,
-                        expr: Box::new(e),
-                    });
-                }
-            }
-        }
-
+        let (stmts, expr) = self.parse_block_stmts()?;
         self.expect(TokenKind::RBrace)?;
         let end_span = self.current_span();
 

@@ -2,419 +2,20 @@
 //!
 //! Executes Astra code with capability-controlled effects.
 
+pub mod capabilities;
+pub mod environment;
+pub mod error;
+pub mod value;
+
 use std::collections::HashMap;
-use std::fmt;
 use std::path::PathBuf;
 
 use crate::parser::ast::*;
 
-/// Runtime error with error code and message
-#[derive(Debug, Clone)]
-pub struct RuntimeError {
-    /// Error code (E4xxx series for runtime errors)
-    pub code: &'static str,
-    /// Human-readable error message
-    pub message: String,
-    /// Early return value (for ? operator propagation)
-    pub early_return: Option<Box<Value>>,
-    /// Loop break signal
-    pub is_break: bool,
-    /// Loop continue signal
-    pub is_continue: bool,
-    /// Function return signal
-    pub is_return: bool,
-}
-
-impl RuntimeError {
-    /// Create a new runtime error
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            early_return: None,
-            is_break: false,
-            is_continue: false,
-            is_return: false,
-        }
-    }
-
-    /// Create an early return (for ? operator)
-    pub fn early_return(value: Value) -> Self {
-        Self {
-            code: "EARLY_RETURN",
-            message: String::new(),
-            early_return: Some(Box::new(value)),
-            is_break: false,
-            is_continue: false,
-            is_return: false,
-        }
-    }
-
-    /// Create a break signal
-    pub fn loop_break() -> Self {
-        Self {
-            code: "BREAK",
-            message: String::new(),
-            early_return: None,
-            is_break: true,
-            is_continue: false,
-            is_return: false,
-        }
-    }
-
-    /// Create a continue signal
-    pub fn loop_continue() -> Self {
-        Self {
-            code: "CONTINUE",
-            message: String::new(),
-            early_return: None,
-            is_break: false,
-            is_continue: true,
-            is_return: false,
-        }
-    }
-
-    /// Create a function return signal
-    pub fn function_return(value: Value) -> Self {
-        Self {
-            code: "RETURN",
-            message: String::new(),
-            early_return: Some(Box::new(value)),
-            is_break: false,
-            is_continue: false,
-            is_return: true,
-        }
-    }
-
-    /// Check if this is an early return
-    pub fn is_early_return(&self) -> bool {
-        self.early_return.is_some() && !self.is_return
-    }
-
-    /// Check if this is a control flow signal (break/continue/return)
-    pub fn is_control_flow(&self) -> bool {
-        self.is_break || self.is_continue || self.is_return || self.early_return.is_some()
-    }
-
-    /// Get the early return value
-    pub fn get_early_return(self) -> Option<Value> {
-        self.early_return.map(|v| *v)
-    }
-
-    /// Undefined variable error
-    pub fn undefined_variable(name: &str) -> Self {
-        Self::new("E4001", format!("undefined variable: {}", name))
-    }
-
-    /// Type mismatch error
-    pub fn type_mismatch(expected: &str, got: &str) -> Self {
-        Self::new(
-            "E4002",
-            format!("type mismatch: expected {}, got {}", expected, got),
-        )
-    }
-
-    /// Division by zero error
-    pub fn division_by_zero() -> Self {
-        Self::new("E4003", "division by zero")
-    }
-
-    /// Capability not available error
-    pub fn capability_not_available(cap: &str) -> Self {
-        Self::new("E4004", format!("capability not available: {}", cap))
-    }
-
-    /// Unknown function error
-    pub fn unknown_function(name: &str) -> Self {
-        Self::new("E4005", format!("unknown function: {}", name))
-    }
-
-    /// Unknown method error
-    pub fn unknown_method(receiver: &str, method: &str) -> Self {
-        Self::new("E4006", format!("unknown method: {}.{}", receiver, method))
-    }
-
-    /// Pattern match failure error
-    pub fn match_failure() -> Self {
-        Self::new("E4007", "no pattern matched")
-    }
-
-    /// Invalid field access error
-    pub fn invalid_field_access(field: &str) -> Self {
-        Self::new("E4008", format!("invalid field access: {}", field))
-    }
-
-    /// Not callable error
-    pub fn not_callable() -> Self {
-        Self::new("E4009", "value is not callable")
-    }
-
-    /// Arity mismatch error
-    pub fn arity_mismatch(expected: usize, got: usize) -> Self {
-        Self::new(
-            "E4010",
-            format!("expected {} arguments, got {}", expected, got),
-        )
-    }
-
-    /// Unwrap None error
-    pub fn unwrap_none() -> Self {
-        Self::new("E4011", "tried to unwrap None")
-    }
-
-    /// Unwrap Err error
-    pub fn unwrap_err(msg: &str) -> Self {
-        Self::new("E4012", format!("tried to unwrap Err: {}", msg))
-    }
-
-    /// Hole encountered error
-    pub fn hole_encountered() -> Self {
-        Self::new("E4013", "encountered incomplete code (hole)")
-    }
-
-    /// Precondition violation error
-    pub fn precondition_violated(fn_name: &str) -> Self {
-        Self::new(
-            "E3001",
-            format!("precondition violated in function `{}`", fn_name),
-        )
-    }
-
-    /// Postcondition violation error
-    pub fn postcondition_violated(fn_name: &str) -> Self {
-        Self::new(
-            "E3002",
-            format!("postcondition violated in function `{}`", fn_name),
-        )
-    }
-}
-
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for RuntimeError {}
-
-/// Runtime value
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum Value {
-    /// Unit value
-    Unit,
-    /// Integer
-    Int(i64),
-    /// Float
-    Float(f64),
-    /// Boolean
-    Bool(bool),
-    /// Text string
-    Text(String),
-    /// Record value
-    Record(HashMap<String, Value>),
-    /// Enum variant
-    Variant {
-        name: String,
-        data: Option<Box<Value>>,
-    },
-    /// Function closure
-    Closure {
-        name: Option<String>,
-        params: Vec<String>,
-        body: ClosureBody,
-        env: Environment,
-    },
-    /// Option::Some
-    Some(Box<Value>),
-    /// Option::None
-    None,
-    /// Result::Ok
-    Ok(Box<Value>),
-    /// Result::Err
-    Err(Box<Value>),
-    /// List of values
-    List(Vec<Value>),
-    /// Tuple of values
-    Tuple(Vec<Value>),
-    /// Map of key-value pairs
-    Map(Vec<(Value, Value)>),
-    /// Set of unique values
-    Set(Vec<Value>),
-    /// Variant constructor for multi-field enums
-    VariantConstructor {
-        name: String,
-        field_names: Vec<String>,
-    },
-}
-
-/// Closure body containing the AST block and optional contracts
-#[derive(Debug, Clone)]
-pub struct ClosureBody {
-    /// The block to execute when called
-    pub block: Block,
-    /// Preconditions (requires clauses)
-    pub requires: Vec<Expr>,
-    /// Postconditions (ensures clauses)
-    pub ensures: Vec<Expr>,
-}
-
-/// Compare two values for equality
-fn values_equal(left: &Value, right: &Value) -> bool {
-    match (left, right) {
-        (Value::Unit, Value::Unit) => true,
-        (Value::Int(a), Value::Int(b)) => a == b,
-        (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Text(a), Value::Text(b)) => a == b,
-        (Value::None, Value::None) => true,
-        (Value::Some(a), Value::Some(b)) => values_equal(a, b),
-        (Value::Ok(a), Value::Ok(b)) => values_equal(a, b),
-        (Value::Err(a), Value::Err(b)) => values_equal(a, b),
-        (Value::Variant { name: n1, data: d1 }, Value::Variant { name: n2, data: d2 }) => {
-            n1 == n2
-                && match (d1, d2) {
-                    (None, None) => true,
-                    (Some(a), Some(b)) => values_equal(a, b),
-                    _ => false,
-                }
-        }
-        (Value::Record(r1), Value::Record(r2)) => {
-            r1.len() == r2.len()
-                && r1
-                    .iter()
-                    .all(|(k, v)| r2.get(k).is_some_and(|v2| values_equal(v, v2)))
-        }
-        (Value::List(a), Value::List(b))
-        | (Value::Tuple(a), Value::Tuple(b))
-        | (Value::Set(a), Value::Set(b)) => {
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
-        }
-        (Value::Map(a), Value::Map(b)) => {
-            a.len() == b.len()
-                && a.iter().all(|(k, v)| {
-                    b.iter()
-                        .any(|(k2, v2)| values_equal(k, k2) && values_equal(v, v2))
-                })
-        }
-        // Closures and constructors are never equal
-        (Value::Closure { .. }, Value::Closure { .. }) => false,
-        (Value::VariantConstructor { .. }, Value::VariantConstructor { .. }) => false,
-        _ => false,
-    }
-}
-
-/// Compare two values for ordering (used by sort)
-fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Int(a), Value::Int(b)) => a.cmp(b),
-        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
-        (Value::Text(a), Value::Text(b)) => a.cmp(b),
-        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-        _ => std::cmp::Ordering::Equal,
-    }
-}
-
-/// Execution environment
-#[derive(Debug, Clone, Default)]
-pub struct Environment {
-    /// Variable bindings
-    bindings: HashMap<String, Value>,
-    /// Parent environment for lexical scoping
-    parent: Option<Box<Environment>>,
-}
-
-impl Environment {
-    /// Create a new empty environment
-    pub fn new() -> Self {
-        Self {
-            bindings: HashMap::new(),
-            parent: None,
-        }
-    }
-
-    /// Create a child environment
-    pub fn child(&self) -> Self {
-        Self {
-            bindings: HashMap::new(),
-            parent: Some(Box::new(self.clone())),
-        }
-    }
-
-    /// Define a variable
-    pub fn define(&mut self, name: String, value: Value) {
-        self.bindings.insert(name, value);
-    }
-
-    /// Look up a variable
-    pub fn lookup(&self, name: &str) -> Option<&Value> {
-        self.bindings
-            .get(name)
-            .or_else(|| self.parent.as_ref().and_then(|p| p.lookup(name)))
-    }
-
-    /// Update a mutable variable
-    pub fn update(&mut self, name: &str, value: Value) -> bool {
-        if self.bindings.contains_key(name) {
-            self.bindings.insert(name.to_string(), value);
-            true
-        } else if let Some(parent) = &mut self.parent {
-            parent.update(name, value)
-        } else {
-            false
-        }
-    }
-}
-
-/// Capability interface for Net effect
-pub trait NetCapability {
-    fn get(&self, url: &str) -> Result<Value, String>;
-    fn post(&self, url: &str, body: &str) -> Result<Value, String>;
-}
-
-/// Capability interface for Fs effect
-pub trait FsCapability {
-    fn read(&self, path: &str) -> Result<String, String>;
-    fn write(&self, path: &str, content: &str) -> Result<(), String>;
-    fn exists(&self, path: &str) -> bool;
-}
-
-/// Capability interface for Clock effect
-pub trait ClockCapability {
-    fn now(&self) -> i64;
-    fn sleep(&self, millis: u64);
-}
-
-/// Capability interface for Rand effect
-pub trait RandCapability {
-    fn int(&self, min: i64, max: i64) -> i64;
-    fn bool(&self) -> bool;
-    fn float(&self) -> f64;
-}
-
-/// Capability interface for Console effect
-pub trait ConsoleCapability {
-    fn print(&self, text: &str);
-    fn println(&self, text: &str);
-    fn read_line(&self) -> Option<String>;
-}
-
-/// Capability interface for Env effect
-pub trait EnvCapability {
-    fn get(&self, name: &str) -> Option<String>;
-    fn args(&self) -> Vec<String>;
-}
-
-/// Runtime capabilities
-#[derive(Default)]
-pub struct Capabilities {
-    pub net: Option<Box<dyn NetCapability>>,
-    pub fs: Option<Box<dyn FsCapability>>,
-    pub clock: Option<Box<dyn ClockCapability>>,
-    pub rand: Option<Box<dyn RandCapability>>,
-    pub console: Option<Box<dyn ConsoleCapability>>,
-    pub env: Option<Box<dyn EnvCapability>>,
-}
+pub use capabilities::*;
+pub use environment::Environment;
+pub use error::{check_arity, RuntimeError};
+pub use value::*;
 
 /// Result of evaluating an expression with TCO awareness (P6.4)
 #[allow(clippy::large_enum_variant)]
@@ -863,9 +464,7 @@ impl Interpreter {
                             };
                         }
                         "assert_eq" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let left = self.eval_expr(&args[0])?;
                             let right = self.eval_expr(&args[1])?;
                             return if values_equal(&left, &right) {
@@ -879,23 +478,17 @@ impl Interpreter {
                         }
                         // Option/Result constructors
                         "Some" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return Ok(Value::Some(Box::new(val)));
                         }
                         "Ok" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return Ok(Value::Ok(Box::new(val)));
                         }
                         "Err" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return Ok(Value::Err(Box::new(val)));
                         }
@@ -931,9 +524,7 @@ impl Interpreter {
                         }
                         // N3: len builtin
                         "len" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Text(s) => Ok(Value::Int(s.len() as i64)),
@@ -949,17 +540,13 @@ impl Interpreter {
                         }
                         // N3: to_text builtin
                         "to_text" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return Ok(Value::Text(format_value(&val)));
                         }
                         // P1.1: range builtin
                         "range" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let start = self.eval_expr(&args[0])?;
                             let end = self.eval_expr(&args[1])?;
                             return match (start, end) {
@@ -972,9 +559,7 @@ impl Interpreter {
                         }
                         // P1.11: math builtins
                         "abs" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Int(n) => Ok(Value::Int(n.abs())),
@@ -986,9 +571,7 @@ impl Interpreter {
                             };
                         }
                         "min" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let a = self.eval_expr(&args[0])?;
                             let b = self.eval_expr(&args[1])?;
                             return match (a, b) {
@@ -1001,9 +584,7 @@ impl Interpreter {
                             };
                         }
                         "max" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let a = self.eval_expr(&args[0])?;
                             let b = self.eval_expr(&args[1])?;
                             return match (a, b) {
@@ -1016,9 +597,7 @@ impl Interpreter {
                             };
                         }
                         "pow" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let base = self.eval_expr(&args[0])?;
                             let exp = self.eval_expr(&args[1])?;
                             return match (base, exp) {
@@ -1044,9 +623,7 @@ impl Interpreter {
                         }
                         // P3.4: Conversion functions
                         "to_int" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Int(n) => Ok(Value::Int(n)),
@@ -1063,9 +640,7 @@ impl Interpreter {
                             };
                         }
                         "to_float" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Int(n) => Ok(Value::Float(n as f64)),
@@ -1082,9 +657,7 @@ impl Interpreter {
                         }
                         // P3.6: Math functions for Float
                         "sqrt" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Float(f) => Ok(Value::Float(f.sqrt())),
@@ -1096,9 +669,7 @@ impl Interpreter {
                             };
                         }
                         "floor" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Float(f) => Ok(Value::Float(f.floor())),
@@ -1109,9 +680,7 @@ impl Interpreter {
                             };
                         }
                         "ceil" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Float(f) => Ok(Value::Float(f.ceil())),
@@ -1122,9 +691,7 @@ impl Interpreter {
                             };
                         }
                         "round" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Float(f) => Ok(Value::Float(f.round())),
@@ -1136,9 +703,7 @@ impl Interpreter {
                         }
                         // Effect convenience builtins - delegate to capabilities
                         "read_file" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let path = self.eval_expr(&args[0])?;
                             if let Value::Text(p) = path {
                                 return self.call_fs_method("read", vec![Value::Text(p)]);
@@ -1149,17 +714,13 @@ impl Interpreter {
                             ));
                         }
                         "write_file" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let path = self.eval_expr(&args[0])?;
                             let content = self.eval_expr(&args[1])?;
                             return self.call_fs_method("write", vec![path, content]);
                         }
                         "http_get" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let url = self.eval_expr(&args[0])?;
                             if let Value::Text(u) = url {
                                 return self.call_net_method("get", vec![Value::Text(u)]);
@@ -1167,17 +728,13 @@ impl Interpreter {
                             return Err(RuntimeError::type_mismatch("Text", &format!("{:?}", url)));
                         }
                         "http_post" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let url = self.eval_expr(&args[0])?;
                             let body = self.eval_expr(&args[1])?;
                             return self.call_net_method("post", vec![url, body]);
                         }
                         "random_int" => {
-                            if args.len() != 2 {
-                                return Err(RuntimeError::arity_mismatch(2, args.len()));
-                            }
+                            check_arity(args, 2)?;
                             let min = self.eval_expr(&args[0])?;
                             let max = self.eval_expr(&args[1])?;
                             return self.call_rand_method("int", vec![min, max]);
@@ -1195,9 +752,7 @@ impl Interpreter {
                             return self.call_clock_method("now", vec![]);
                         }
                         "get_env" => {
-                            if args.len() != 1 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
-                            }
+                            check_arity(args, 1)?;
                             let name = self.eval_expr(&args[0])?;
                             return self.call_env_method("get", vec![name]);
                         }
@@ -2492,9 +2047,7 @@ impl Interpreter {
     }
 
     fn ho_list_fold(&mut self, items: &[Value], args: Vec<Value>) -> Result<Value, RuntimeError> {
-        if args.len() != 2 {
-            return Err(RuntimeError::arity_mismatch(2, args.len()));
-        }
+        check_arity(&args, 2)?;
         let mut args_iter = args.into_iter();
         let mut acc = args_iter.next().unwrap();
         let func = args_iter.next().unwrap();
@@ -3206,162 +2759,9 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
     }
 }
 
-/// Format a value for display
-pub fn format_value(value: &Value) -> String {
-    match value {
-        Value::Unit => "()".to_string(),
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => {
-            if f.fract() == 0.0 {
-                format!("{:.1}", f)
-            } else {
-                f.to_string()
-            }
-        }
-        Value::Bool(b) => b.to_string(),
-        Value::Text(s) => s.clone(),
-        Value::Record(fields) => {
-            let field_strs: Vec<String> = fields
-                .iter()
-                .map(|(k, v)| format!("{}: {}", k, format_value(v)))
-                .collect();
-            format!("{{ {} }}", field_strs.join(", "))
-        }
-        Value::Variant { name, data } => {
-            if let Some(d) = data {
-                format!("{}({})", name, format_value(d))
-            } else {
-                name.clone()
-            }
-        }
-        Value::Closure { .. } => "<closure>".to_string(),
-        Value::VariantConstructor { name, .. } => format!("<constructor:{}>", name),
-        Value::List(items) => {
-            let item_strs: Vec<String> = items.iter().map(format_value).collect();
-            format!("[{}]", item_strs.join(", "))
-        }
-        Value::Tuple(elements) => {
-            let strs: Vec<String> = elements.iter().map(format_value).collect();
-            format!("({})", strs.join(", "))
-        }
-        Value::Map(entries) => {
-            let strs: Vec<String> = entries
-                .iter()
-                .map(|(k, v)| format!("{}: {}", format_value(k), format_value(v)))
-                .collect();
-            format!("Map({{{}}})", strs.join(", "))
-        }
-        Value::Set(elements) => {
-            let strs: Vec<String> = elements.iter().map(format_value).collect();
-            format!("Set({{{}}})", strs.join(", "))
-        }
-        Value::Some(inner) => format!("Some({})", format_value(inner)),
-        Value::None => "None".to_string(),
-        Value::Ok(inner) => format!("Ok({})", format_value(inner)),
-        Value::Err(inner) => format!("Err({})", format_value(inner)),
-    }
-}
-
 impl Default for Interpreter {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Mock console capability for testing
-pub struct MockConsole {
-    output: std::cell::RefCell<Vec<String>>,
-}
-
-impl MockConsole {
-    pub fn new() -> Self {
-        Self {
-            output: std::cell::RefCell::new(Vec::new()),
-        }
-    }
-
-    pub fn output(&self) -> Vec<String> {
-        self.output.borrow().clone()
-    }
-}
-
-impl Default for MockConsole {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ConsoleCapability for MockConsole {
-    fn print(&self, text: &str) {
-        self.output.borrow_mut().push(text.to_string());
-    }
-
-    fn println(&self, text: &str) {
-        self.output.borrow_mut().push(format!("{}\n", text));
-    }
-
-    fn read_line(&self) -> Option<String> {
-        None
-    }
-}
-
-/// Seeded random capability for deterministic testing
-pub struct SeededRand {
-    seed: std::cell::Cell<u64>,
-}
-
-impl SeededRand {
-    pub fn new(seed: u64) -> Self {
-        Self {
-            seed: std::cell::Cell::new(seed),
-        }
-    }
-
-    fn next(&self) -> u64 {
-        // Simple xorshift64
-        let mut x = self.seed.get();
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.seed.set(x);
-        x
-    }
-}
-
-impl RandCapability for SeededRand {
-    fn int(&self, min: i64, max: i64) -> i64 {
-        let range = (max - min + 1) as u64;
-        let r = self.next() % range;
-        min + r as i64
-    }
-
-    fn bool(&self) -> bool {
-        self.next().is_multiple_of(2)
-    }
-
-    fn float(&self) -> f64 {
-        (self.next() as f64) / (u64::MAX as f64)
-    }
-}
-
-/// Fixed clock capability for deterministic testing
-pub struct FixedClock {
-    time: i64,
-}
-
-impl FixedClock {
-    pub fn new(time: i64) -> Self {
-        Self { time }
-    }
-}
-
-impl ClockCapability for FixedClock {
-    fn now(&self) -> i64 {
-        self.time
-    }
-
-    fn sleep(&self, _millis: u64) {
-        // No-op for fixed clock
     }
 }
 

@@ -65,6 +65,12 @@ astra/
 └── README.md
 ```
 
+## Agent Work Style
+
+- **Always work to full completion.** When given a task, do not stop partway through. Continue working until every part of the request is fully implemented, all tests pass, and changes are committed and pushed.
+- **Do not ask for confirmation to continue.** If a task has multiple steps or sub-tasks, work through all of them without pausing to ask if you should keep going.
+- **Fix issues as you encounter them.** If tests fail, clippy warns, or something breaks, fix it immediately and keep going.
+
 ## Core Design Principles
 
 1. **Verifiability First**: Wrong code fails early with precise errors
