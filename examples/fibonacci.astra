@@ -1,11 +1,7 @@
 module fibonacci
 
-# Fibonacci sequence implementation demonstrating:
-# - Function definitions with type annotations
-# - Pattern matching
-# - Recursion
-
-fn fib(n: Int) -> Int {
+fn fib(n: Int) -> Int
+{
   match n {
     0 => 0
     1 => 1
@@ -13,7 +9,8 @@ fn fib(n: Int) -> Int {
   }
 }
 
-fn fib_iter(n: Int) -> Int {
+fn fib_iter(n: Int) -> Int
+{
   if n <= 1 {
     n
   } else {
@@ -21,7 +18,8 @@ fn fib_iter(n: Int) -> Int {
   }
 }
 
-fn fib_loop(n: Int, a: Int, b: Int, i: Int) -> Int {
+fn fib_loop(n: Int, a: Int, b: Int, i: Int) -> Int
+{
   if i > n {
     b
   } else {
@@ -29,7 +27,9 @@ fn fib_loop(n: Int, a: Int, b: Int, i: Int) -> Int {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println("Fibonacci sequence:")
   Console.println("fib(5) = 5")
   Console.println("fib(10) = 55")

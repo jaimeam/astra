@@ -1,19 +1,18 @@
 module deterministic_tests
 
-# Demonstrates that pure functions are always deterministic
-
-fn compute_hash(n: Int) -> Int {
-  # Simple hash function - always returns same output for same input
+fn compute_hash(n: Int) -> Int
+{
   n * 31 + 17
 }
 
-fn verify_determinism(a: Int, b: Int) -> Bool {
-  # Same inputs always produce same outputs
-  compute_hash(a) == compute_hash(a) and
-  compute_hash(b) == compute_hash(b)
+fn verify_determinism(a: Int, b: Int) -> Bool
+{
+  compute_hash(a) == compute_hash(a) and compute_hash(b) == compute_hash(b)
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println("Testing determinism:")
   Console.println("compute_hash(42) always returns same value")
   Console.println("compute_hash(100) always returns same value")

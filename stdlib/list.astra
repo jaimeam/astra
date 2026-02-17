@@ -1,10 +1,15 @@
 module std.list
 
-fn is_empty[T](list: List[T]) -> Bool {
+fn is_empty[T](list: List[T]) -> Bool
+{
   list.length() == 0
 }
 
-fn head[T](list: List[T]) -> Option[T] {
-  if list.length() == 0 then None
-  else Some(list.get(0))
+fn head[T](list: List[T]) -> Option[T]
+{
+  if list.length() == 0 {
+    None
+  } else {
+    Some(list.get(0))
+  }
 }

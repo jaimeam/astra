@@ -1,18 +1,12 @@
 module contracts
 
-# Demonstrates function contracts (future feature)
-# For now, showing the pattern without requires/ensures
-
-fn divide(a: Int, b: Int) -> Int {
-  # Precondition: b != 0 (enforced by caller)
+fn divide(a: Int, b: Int) -> Int
+{
   a / b
 }
 
-fn safe_sqrt(n: Int) -> Int {
-  # Precondition: n >= 0 (enforced by caller)
-  # Postcondition: result * result <= n
-
-  # Integer square root - simplified version
+fn safe_sqrt(n: Int) -> Int
+{
   if n == 0 {
     0
   } else {
@@ -29,7 +23,9 @@ fn safe_sqrt(n: Int) -> Int {
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println("divide(10, 3) = 3")
   Console.println("safe_sqrt(4) = 2")
 }

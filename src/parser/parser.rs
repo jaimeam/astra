@@ -600,48 +600,76 @@ impl<'a> Parser<'a> {
                 fields,
             })
         } else if self.check(TokenKind::LParen) {
-            // Function type: (Type1, Type2) -> RetType effects(...)
+            // Could be:
+            //   () -> T           function type with no params
+            //   ()                unit type
+            //   (T1, T2) -> T    function type
+            //   (T1, T2)         tuple type
+            //   (T)              parenthesized type
             self.advance();
-            let mut params = Vec::new();
+
+            let mut types = Vec::new();
             if !self.check(TokenKind::RParen) {
-                params.push(self.parse_type_expr()?);
+                types.push(self.parse_type_expr()?);
                 while self.check(TokenKind::Comma) {
                     self.advance();
                     if self.check(TokenKind::RParen) {
                         break;
                     }
-                    params.push(self.parse_type_expr()?);
+                    types.push(self.parse_type_expr()?);
                 }
             }
             self.expect(TokenKind::RParen)?;
 
-            // Must be followed by -> for function type
-            self.expect(TokenKind::Arrow)?;
-            let ret = Box::new(self.parse_type_expr()?);
-
-            // Optional effects
-            let effects = if self.check(TokenKind::Effects) {
+            if self.check(TokenKind::Arrow) {
+                // Function type: (params) -> RetType effects(...)
                 self.advance();
-                self.expect(TokenKind::LParen)?;
-                let mut effects = vec![self.expect_ident()?];
-                while self.check(TokenKind::Comma) {
-                    self.advance();
-                    effects.push(self.expect_ident()?);
-                }
-                self.expect(TokenKind::RParen)?;
-                effects
-            } else {
-                Vec::new()
-            };
+                let ret = Box::new(self.parse_type_expr()?);
 
-            let end_span = self.current_span();
-            Ok(TypeExpr::Function {
-                id: NodeId::new(),
-                span: start_span.merge(&end_span),
-                params,
-                ret,
-                effects,
-            })
+                // Optional effects
+                let effects = if self.check(TokenKind::Effects) {
+                    self.advance();
+                    self.expect(TokenKind::LParen)?;
+                    let mut effects = vec![self.expect_ident()?];
+                    while self.check(TokenKind::Comma) {
+                        self.advance();
+                        effects.push(self.expect_ident()?);
+                    }
+                    self.expect(TokenKind::RParen)?;
+                    effects
+                } else {
+                    Vec::new()
+                };
+
+                let end_span = self.current_span();
+                Ok(TypeExpr::Function {
+                    id: NodeId::new(),
+                    span: start_span.merge(&end_span),
+                    params: types,
+                    ret,
+                    effects,
+                })
+            } else if types.is_empty() {
+                // () = Unit type
+                let end_span = self.current_span();
+                Ok(TypeExpr::Named {
+                    id: NodeId::new(),
+                    span: start_span.merge(&end_span),
+                    name: "Unit".to_string(),
+                    args: Vec::new(),
+                })
+            } else if types.len() == 1 {
+                // (T) = parenthesized type, just unwrap
+                Ok(types.into_iter().next().unwrap())
+            } else {
+                // (T1, T2, ...) = tuple type
+                let end_span = self.current_span();
+                Ok(TypeExpr::Tuple {
+                    id: NodeId::new(),
+                    span: start_span.merge(&end_span),
+                    elements: types,
+                })
+            }
         } else {
             let name = self.expect_ident()?;
             let args = self.parse_optional_type_args()?;
@@ -754,8 +782,8 @@ impl<'a> Parser<'a> {
         if self.check(TokenKind::Let) {
             self.advance();
 
-            // Check for destructuring pattern: `let { ... } = expr`
-            if self.check(TokenKind::LBrace) {
+            // Check for destructuring pattern: `let { ... } = expr` or `let (...) = expr`
+            if self.check(TokenKind::LBrace) || self.check(TokenKind::LParen) {
                 let pattern = self.parse_pattern()?;
                 let ty = if self.check(TokenKind::Colon) {
                     self.advance();

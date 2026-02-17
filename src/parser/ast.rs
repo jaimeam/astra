@@ -253,6 +253,12 @@ pub enum TypeExpr {
         ret: Box<TypeExpr>,
         effects: Vec<String>,
     },
+    /// Tuple type (e.g., `(Int, Text)`)
+    Tuple {
+        id: NodeId,
+        span: Span,
+        elements: Vec<TypeExpr>,
+    },
 }
 
 /// A block of statements with optional trailing expression

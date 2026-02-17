@@ -1,31 +1,29 @@
 module effects_demo
 
-# Demonstrates the effects system
-
-# Pure function - no effects keyword means no side effects
-fn add(a: Int, b: Int) -> Int {
+fn add(a: Int, b: Int) -> Int
+{
   a + b
 }
 
-# Function that prints - must declare Console effect
-fn greet(name: Text) effects(Console) {
+fn greet(name: Text)
+  effects(Console)
+{
   Console.println("Hello, " + name + "!")
 }
 
-# Functions can declare multiple effects
-fn log_sum(a: Int, b: Int) -> Int effects(Console) {
+fn log_sum(a: Int, b: Int) -> Int
+  effects(Console)
+{
   let result = add(a, b)
   Console.println("Computing sum...")
   result
 }
 
-fn main() effects(Console) {
-  # Pure function can be called anywhere
+fn main()
+  effects(Console)
+{
   let sum = add(2, 3)
-
-  # Effectful functions propagate effects to callers
   greet("Astra")
-
   let logged_result = log_sum(10, 20)
   Console.println("Done!")
 }

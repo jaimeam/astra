@@ -1,16 +1,37 @@
 module std.math
 
-# P3.6 / P4.4: Standard math functions
-# These wrap the builtin math functions for import convenience
-
-fn abs_val(x: Int) -> Int { abs(x) }
-fn min_val(a: Int, b: Int) -> Int { min(a, b) }
-fn max_val(a: Int, b: Int) -> Int { max(a, b) }
-fn clamp(x: Int, low: Int, high: Int) -> Int {
-  if x < low { low }
-  else if x > high { high }
-  else { x }
+fn abs_val(x: Int) -> Int
+{
+  abs(x)
 }
 
-fn is_even(n: Int) -> Bool { n % 2 == 0 }
-fn is_odd(n: Int) -> Bool { n % 2 != 0 }
+fn min_val(a: Int, b: Int) -> Int
+{
+  min(a, b)
+}
+
+fn max_val(a: Int, b: Int) -> Int
+{
+  max(a, b)
+}
+
+fn clamp(x: Int, low: Int, high: Int) -> Int
+{
+  if x < low {
+    low
+  } else if x > high {
+    high
+  } else {
+    x
+  }
+}
+
+fn is_even(n: Int) -> Bool
+{
+  n % 2 == 0
+}
+
+fn is_odd(n: Int) -> Bool
+{
+  n % 2 != 0
+}
