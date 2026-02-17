@@ -421,6 +421,49 @@ fn run_test(
                     }
                 }
             }
+
+            // P5.1: Property-based tests
+            if let Item::Property(prop) = item {
+                if let Some(f) = filter {
+                    if !prop.name.contains(f) {
+                        continue;
+                    }
+                }
+
+                total_tests += 1;
+                let num_iterations = 100;
+                let seed = _seed.unwrap_or(42);
+                let mut all_passed = true;
+
+                for i in 0..num_iterations {
+                    let iter_seed = seed.wrapping_add(i);
+                    let mut capabilities = build_test_capabilities(&prop.using);
+                    capabilities.rand = Some(Box::new(SeededRand::new(iter_seed)));
+
+                    let mut interpreter = Interpreter::with_capabilities(capabilities);
+                    if let Err(e) = interpreter.load_module(&module) {
+                        eprintln!("  FAIL: {} (iteration {}) - {}", prop.name, i, e);
+                        all_passed = false;
+                        break;
+                    }
+
+                    if let Err(e) = interpreter.eval_block(&prop.body) {
+                        eprintln!(
+                            "  FAIL: {} (iteration {}, seed {}) - {}",
+                            prop.name, i, iter_seed, e
+                        );
+                        all_passed = false;
+                        break;
+                    }
+                }
+
+                if all_passed {
+                    println!("  PASS: {} ({} iterations)", prop.name, num_iterations);
+                    passed += 1;
+                } else {
+                    failed += 1;
+                }
+            }
         }
     }
 

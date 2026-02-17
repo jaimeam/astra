@@ -426,6 +426,8 @@ pub struct Interpreter {
     pub search_paths: Vec<PathBuf>,
     /// Already-loaded modules (to prevent circular imports)
     loaded_modules: std::collections::HashSet<String>,
+    /// Modules currently being loaded (for circular import detection P4.2)
+    loading_modules: std::collections::HashSet<String>,
     /// Call stack for stack traces (P5.2)
     call_stack: Vec<String>,
 }
@@ -438,6 +440,7 @@ impl Interpreter {
             capabilities: Capabilities::default(),
             search_paths: Vec::new(),
             loaded_modules: std::collections::HashSet::new(),
+            loading_modules: std::collections::HashSet::new(),
             call_stack: Vec::new(),
         }
     }
@@ -449,6 +452,7 @@ impl Interpreter {
             capabilities,
             search_paths: Vec::new(),
             loaded_modules: std::collections::HashSet::new(),
+            loading_modules: std::collections::HashSet::new(),
             call_stack: Vec::new(),
         }
     }
@@ -477,7 +481,14 @@ impl Interpreter {
         if self.loaded_modules.contains(&module_key) {
             return Ok(()); // Already loaded
         }
-        self.loaded_modules.insert(module_key);
+        // P4.2: Circular import detection
+        if self.loading_modules.contains(&module_key) {
+            return Err(RuntimeError::new(
+                "E4018",
+                format!("Circular import detected: {}", module_key),
+            ));
+        }
+        self.loading_modules.insert(module_key.clone());
 
         let file_path = match self.resolve_module_path(segments) {
             Some(p) => p,
@@ -499,6 +510,8 @@ impl Interpreter {
         })?;
 
         self.load_module(&imported_module)?;
+        self.loading_modules.remove(&module_key);
+        self.loaded_modules.insert(module_key);
         Ok(())
     }
 
