@@ -589,10 +589,22 @@ impl<'a> Parser<'a> {
             return Ok(Vec::new());
         }
         self.advance();
-        let mut params = vec![self.expect_ident()?];
+        let mut params = Vec::new();
+        let name = self.expect_ident()?;
+        // P2.4: Skip optional trait bound (T: Bound)
+        if self.check(TokenKind::Colon) {
+            self.advance();
+            let _bound = self.expect_ident()?; // Skip the bound name for now
+        }
+        params.push(name);
         while self.check(TokenKind::Comma) {
             self.advance();
-            params.push(self.expect_ident()?);
+            let name = self.expect_ident()?;
+            if self.check(TokenKind::Colon) {
+                self.advance();
+                let _bound = self.expect_ident()?;
+            }
+            params.push(name);
         }
         self.expect(TokenKind::RBracket)?;
         Ok(params)
