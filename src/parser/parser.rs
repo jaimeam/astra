@@ -154,7 +154,7 @@ impl<'a> Parser<'a> {
         let start_span = self.current_span();
         self.expect(TokenKind::Type)?;
         let name = self.expect_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, _bounds) = self.parse_optional_type_params()?;
         self.expect(TokenKind::Eq)?;
         let value = self.parse_type_expr()?;
 
@@ -181,7 +181,7 @@ impl<'a> Parser<'a> {
         let start_span = self.current_span();
         self.expect(TokenKind::Enum)?;
         let name = self.expect_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, _bounds) = self.parse_optional_type_params()?;
         self.expect(TokenKind::Eq)?;
 
         if self.check(TokenKind::Pipe) {
@@ -255,7 +255,7 @@ impl<'a> Parser<'a> {
         let start_span = self.current_span();
         self.expect(TokenKind::Trait)?;
         let name = self.expect_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, _bounds) = self.parse_optional_type_params()?;
         self.expect(TokenKind::LBrace)?;
         let methods = self.parse_fn_signatures()?;
         self.expect(TokenKind::RBrace)?;
@@ -366,7 +366,7 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::Fn)?;
         let name = self.expect_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, type_param_bounds) = self.parse_optional_type_params()?;
         self.expect(TokenKind::LParen)?;
         let params = self.parse_params()?;
         self.expect(TokenKind::RParen)?;
@@ -415,6 +415,7 @@ impl<'a> Parser<'a> {
             visibility,
             name,
             type_params,
+            type_param_bounds,
             params,
             return_type,
             effects,
@@ -694,17 +695,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_optional_type_params(&mut self) -> Result<Vec<String>, Diagnostic> {
+    #[allow(clippy::type_complexity)]
+    fn parse_optional_type_params(
+        &mut self,
+    ) -> Result<(Vec<String>, Vec<(String, String)>), Diagnostic> {
         if !self.check(TokenKind::LBracket) {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         self.advance();
         let mut params = Vec::new();
+        let mut bounds = Vec::new();
         let name = self.expect_ident()?;
-        // P2.4: Skip optional trait bound (T: Bound)
+        // P2.4: Parse optional trait bound (T: Bound)
         if self.check(TokenKind::Colon) {
             self.advance();
-            let _bound = self.expect_ident()?; // Skip the bound name for now
+            let bound = self.expect_ident()?;
+            bounds.push((name.clone(), bound));
         }
         params.push(name);
         while self.check(TokenKind::Comma) {
@@ -712,12 +718,13 @@ impl<'a> Parser<'a> {
             let name = self.expect_ident()?;
             if self.check(TokenKind::Colon) {
                 self.advance();
-                let _bound = self.expect_ident()?;
+                let bound = self.expect_ident()?;
+                bounds.push((name.clone(), bound));
             }
             params.push(name);
         }
         self.expect(TokenKind::RBracket)?;
-        Ok(params)
+        Ok((params, bounds))
     }
 
     fn parse_optional_type_args(&mut self) -> Result<Vec<TypeExpr>, Diagnostic> {
@@ -873,21 +880,44 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_unary_expr()?;
 
         loop {
+            // Range expressions: `..` and `..=` at precedence 1 (between pipe and or)
+            if min_prec <= 1 {
+                let inclusive = match self.peek().kind {
+                    TokenKind::DotDotEq => Some(true),
+                    TokenKind::DotDot => Some(false),
+                    _ => None,
+                };
+                if let Some(inclusive) = inclusive {
+                    let start_span = self.expr_span(&left);
+                    self.advance();
+                    let right = self.parse_binary_expr(2)?;
+                    let end_span = self.expr_span(&right);
+                    left = Expr::Range {
+                        id: NodeId::new(),
+                        span: start_span.merge(&end_span),
+                        start: Box::new(left),
+                        end: Box::new(right),
+                        inclusive,
+                    };
+                    continue;
+                }
+            }
+
             let (op, prec) = match self.peek().kind {
                 TokenKind::PipeArrow => (BinaryOp::Pipe, 0),
-                TokenKind::Or => (BinaryOp::Or, 1),
-                TokenKind::And => (BinaryOp::And, 2),
-                TokenKind::EqEq => (BinaryOp::Eq, 3),
-                TokenKind::BangEq => (BinaryOp::Ne, 3),
-                TokenKind::Lt => (BinaryOp::Lt, 4),
-                TokenKind::LtEq => (BinaryOp::Le, 4),
-                TokenKind::Gt => (BinaryOp::Gt, 4),
-                TokenKind::GtEq => (BinaryOp::Ge, 4),
-                TokenKind::Plus => (BinaryOp::Add, 5),
-                TokenKind::Minus => (BinaryOp::Sub, 5),
-                TokenKind::Star => (BinaryOp::Mul, 6),
-                TokenKind::Slash => (BinaryOp::Div, 6),
-                TokenKind::Percent => (BinaryOp::Mod, 6),
+                TokenKind::Or => (BinaryOp::Or, 2),
+                TokenKind::And => (BinaryOp::And, 3),
+                TokenKind::EqEq => (BinaryOp::Eq, 4),
+                TokenKind::BangEq => (BinaryOp::Ne, 4),
+                TokenKind::Lt => (BinaryOp::Lt, 5),
+                TokenKind::LtEq => (BinaryOp::Le, 5),
+                TokenKind::Gt => (BinaryOp::Gt, 5),
+                TokenKind::GtEq => (BinaryOp::Ge, 5),
+                TokenKind::Plus => (BinaryOp::Add, 6),
+                TokenKind::Minus => (BinaryOp::Sub, 6),
+                TokenKind::Star => (BinaryOp::Mul, 7),
+                TokenKind::Slash => (BinaryOp::Div, 7),
+                TokenKind::Percent => (BinaryOp::Mod, 7),
                 _ => break,
             };
 
@@ -1094,11 +1124,42 @@ impl<'a> Parser<'a> {
                 if value.contains("${") {
                     self.parse_string_interp(&value, &token.span)
                 } else {
-                    Ok(Expr::TextLit {
-                        id: NodeId::new(),
-                        span: token.span,
-                        value: unescape_string(&value),
-                    })
+                    match unescape_string(&value) {
+                        Ok(unescaped) => Ok(Expr::TextLit {
+                            id: NodeId::new(),
+                            span: token.span,
+                            value: unescaped,
+                        }),
+                        Err((msg, _)) => Err(Diagnostic::error(
+                            crate::diagnostics::error_codes::syntax::INVALID_ESCAPE,
+                        )
+                        .message(msg)
+                        .span(token.span)
+                        .build()),
+                    }
+                }
+            }
+            TokenKind::MultilineTextLit(s) => {
+                let raw = s.clone();
+                self.advance();
+                let dedented = dedent_multiline_string(&raw);
+                // Check for string interpolation: "${...}"
+                if dedented.contains("${") {
+                    self.parse_string_interp(&dedented, &token.span)
+                } else {
+                    match unescape_string(&dedented) {
+                        Ok(unescaped) => Ok(Expr::TextLit {
+                            id: NodeId::new(),
+                            span: token.span,
+                            value: unescaped,
+                        }),
+                        Err((msg, _)) => Err(Diagnostic::error(
+                            crate::diagnostics::error_codes::syntax::INVALID_ESCAPE,
+                        )
+                        .message(msg)
+                        .span(token.span)
+                        .build()),
+                    }
                 }
             }
             TokenKind::Ident(name) => {
@@ -1219,6 +1280,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::IntLit(_)
                 | TokenKind::FloatLit(_)
                 | TokenKind::TextLit(_)
+                | TokenKind::MultilineTextLit(_)
                 | TokenKind::LBracket
                 | TokenKind::LParen
                 | TokenKind::Minus
@@ -1269,7 +1331,7 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
 
         // Parse type parameters if present (e.g., `fn id[T](x: T)`)
-        let _type_params = self.parse_optional_type_params()?;
+        let (_type_params, _type_param_bounds) = self.parse_optional_type_params()?;
 
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
@@ -1862,9 +1924,17 @@ impl<'a> Parser<'a> {
         while let Some(dollar_pos) = remaining.find("${") {
             // Add literal part before ${
             if dollar_pos > 0 {
-                parts.push(StringPart::Literal(unescape_string(
-                    &remaining[..dollar_pos],
-                )));
+                match unescape_string(&remaining[..dollar_pos]) {
+                    Ok(unescaped) => parts.push(StringPart::Literal(unescaped)),
+                    Err((msg, _)) => {
+                        return Err(Diagnostic::error(
+                            crate::diagnostics::error_codes::syntax::INVALID_ESCAPE,
+                        )
+                        .message(msg)
+                        .span(span.clone())
+                        .build());
+                    }
+                }
             }
 
             // Find the matching closing brace
@@ -1932,7 +2002,17 @@ impl<'a> Parser<'a> {
 
         // Add remaining literal
         if !remaining.is_empty() {
-            parts.push(StringPart::Literal(unescape_string(remaining)));
+            match unescape_string(remaining) {
+                Ok(unescaped) => parts.push(StringPart::Literal(unescaped)),
+                Err((msg, _)) => {
+                    return Err(Diagnostic::error(
+                        crate::diagnostics::error_codes::syntax::INVALID_ESCAPE,
+                    )
+                    .message(msg)
+                    .span(span.clone())
+                    .build());
+                }
+            }
         }
 
         Ok(Expr::StringInterp {
@@ -1971,6 +2051,7 @@ impl<'a> Parser<'a> {
             | Expr::Break { span, .. }
             | Expr::Continue { span, .. }
             | Expr::StringInterp { span, .. }
+            | Expr::Range { span, .. }
             | Expr::Await { span, .. }
             | Expr::Hole { span, .. } => span.clone(),
         }
@@ -1997,8 +2078,9 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Process escape sequences in a string literal
-fn unescape_string(s: &str) -> String {
+/// Process escape sequences in a string literal.
+/// Returns Err with a description if an invalid escape sequence is found.
+fn unescape_string(s: &str) -> Result<String, (String, char)> {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -2009,9 +2091,16 @@ fn unescape_string(s: &str) -> String {
                 Some('t') => result.push('\t'),
                 Some('\\') => result.push('\\'),
                 Some('"') => result.push('"'),
+                Some('0') => result.push('\0'),
+                Some('$') => result.push('$'),
                 Some(other) => {
-                    result.push('\\');
-                    result.push(other);
+                    return Err((
+                        format!(
+                            "Invalid escape sequence `\\{}`. Valid escapes: \\n, \\r, \\t, \\\\, \\\", \\0, \\$",
+                            other
+                        ),
+                        other,
+                    ));
                 }
                 None => result.push('\\'),
             }
@@ -2019,5 +2108,97 @@ fn unescape_string(s: &str) -> String {
             result.push(c);
         }
     }
-    result
+    Ok(result)
+}
+
+/// Dedent a multiline string by stripping common leading whitespace.
+/// Also strips the first line if it's empty (immediately after `"""`) and
+/// the last line if it's only whitespace (immediately before closing `"""`).
+fn dedent_multiline_string(s: &str) -> String {
+    let mut lines: Vec<&str> = s.split('\n').collect();
+
+    // Strip leading empty line (the newline right after opening """)
+    if !lines.is_empty() && lines[0].trim().is_empty() {
+        lines.remove(0);
+    }
+
+    // Strip trailing whitespace-only line (the line before closing """)
+    if !lines.is_empty() && lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+
+    // Find minimum indentation across non-empty lines
+    let min_indent = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    // Strip common indentation
+    lines
+        .iter()
+        .map(|l| {
+            if l.len() >= min_indent {
+                &l[min_indent..]
+            } else {
+                l.trim_start()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unescape_valid_sequences() {
+        assert_eq!(unescape_string(r"hello\nworld").unwrap(), "hello\nworld");
+        assert_eq!(unescape_string(r"tab\there").unwrap(), "tab\there");
+        assert_eq!(unescape_string(r"cr\rhere").unwrap(), "cr\rhere");
+        assert_eq!(
+            unescape_string(r"escaped\\slash").unwrap(),
+            "escaped\\slash"
+        );
+        assert_eq!(
+            unescape_string(r#"escaped\"quote"#).unwrap(),
+            "escaped\"quote"
+        );
+        assert_eq!(unescape_string(r"null\0byte").unwrap(), "null\0byte");
+        assert_eq!(unescape_string(r"dollar\$sign").unwrap(), "dollar$sign");
+        assert_eq!(unescape_string("no escapes").unwrap(), "no escapes");
+    }
+
+    #[test]
+    fn test_unescape_invalid_sequences() {
+        assert!(unescape_string(r"\q").is_err());
+        assert!(unescape_string(r"\a").is_err());
+        assert!(unescape_string(r"\x").is_err());
+        assert!(unescape_string(r"hello\qworld").is_err());
+
+        let err = unescape_string(r"\q").unwrap_err();
+        assert!(err.0.contains("Invalid escape sequence"));
+        assert_eq!(err.1, 'q');
+    }
+
+    #[test]
+    fn test_dedent_multiline_string() {
+        // Basic dedent
+        let input = "\n    hello\n    world\n    ";
+        assert_eq!(dedent_multiline_string(input), "hello\nworld");
+
+        // Mixed indentation: dedent to minimum
+        let input2 = "\n    hello\n      world\n    ";
+        assert_eq!(dedent_multiline_string(input2), "hello\n  world");
+
+        // No indentation
+        let input3 = "\nhello\nworld\n";
+        assert_eq!(dedent_multiline_string(input3), "hello\nworld");
+
+        // Single line
+        let input4 = "\n    hello\n    ";
+        assert_eq!(dedent_multiline_string(input4), "hello");
+    }
 }

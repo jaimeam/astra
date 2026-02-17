@@ -3,9 +3,78 @@
 //! Implements type checking, inference, exhaustiveness checking, effect enforcement,
 //! and lint checks (W0001-W0007).
 
-use crate::diagnostics::{Diagnostic, DiagnosticBag, Note, Span, Suggestion};
+use crate::diagnostics::{Diagnostic, DiagnosticBag, Edit, Note, Span, Suggestion};
 use crate::parser::ast::*;
 use std::collections::{HashMap, HashSet};
+
+/// Format a Type as a human-readable string for suggestions.
+fn format_type(ty: &Type) -> String {
+    match ty {
+        Type::Unit => "Unit".to_string(),
+        Type::Int => "Int".to_string(),
+        Type::Float => "Float".to_string(),
+        Type::Bool => "Bool".to_string(),
+        Type::Text => "Text".to_string(),
+        Type::Option(inner) => format!("Option[{}]", format_type(inner)),
+        Type::Result(ok, err) => format!("Result[{}, {}]", format_type(ok), format_type(err)),
+        Type::List(inner) => format!("List[{}]", format_type(inner)),
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(format_type).collect();
+            format!("({})", parts.join(", "))
+        }
+        Type::Record(fields) => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, format_type(v)))
+                .collect();
+            format!("{{ {} }}", parts.join(", "))
+        }
+        Type::Function {
+            params,
+            ret,
+            effects,
+        } => {
+            let param_str: Vec<String> = params.iter().map(format_type).collect();
+            let fx = if effects.is_empty() {
+                String::new()
+            } else {
+                format!(" effects({})", effects.join(", "))
+            };
+            format!("({}) -> {}{}", param_str.join(", "), format_type(ret), fx)
+        }
+        Type::Named(name, args) => {
+            if args.is_empty() {
+                name.clone()
+            } else {
+                let arg_str: Vec<String> = args.iter().map(format_type).collect();
+                format!("{}[{}]", name, arg_str.join(", "))
+            }
+        }
+        Type::TypeParam(name) => name.clone(),
+        Type::Var(id) => format!("?{}", id.0),
+        Type::Unknown => "Unknown".to_string(),
+    }
+}
+
+/// Get the span of a TypeExpr.
+fn type_expr_span(ty: &TypeExpr) -> Span {
+    match ty {
+        TypeExpr::Named { span, .. }
+        | TypeExpr::Record { span, .. }
+        | TypeExpr::Function { span, .. }
+        | TypeExpr::Tuple { span, .. } => span.clone(),
+    }
+}
+
+/// Extract a simple name from a TypeExpr (for trait impl tracking).
+fn type_expr_to_name(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Named { name, .. } => name.clone(),
+        TypeExpr::Tuple { .. } => "Tuple".to_string(),
+        TypeExpr::Record { .. } => "Record".to_string(),
+        TypeExpr::Function { .. } => "Function".to_string(),
+    }
+}
 
 /// Compute Levenshtein edit distance between two strings.
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -263,6 +332,8 @@ pub struct TypeChecker {
     imports: Vec<(String, Span, bool)>,
     /// Set of type parameter names in the current generic context
     current_type_params: HashSet<String>,
+    /// Trait implementations: maps (trait_name, type_name) -> true
+    trait_impls: HashSet<(String, String)>,
 }
 
 impl TypeChecker {
@@ -274,6 +345,7 @@ impl TypeChecker {
             lint_scopes: Vec::new(),
             imports: Vec::new(),
             current_type_params: HashSet::new(),
+            trait_impls: HashSet::new(),
         }
     }
 
@@ -341,7 +413,11 @@ impl TypeChecker {
                             "prefix with `_` to suppress this warning: `_{}`",
                             binding.name
                         )))
-                        .suggestion(Suggestion::new(format!("Rename to `_{}`", binding.name)))
+                        .suggestion(
+                            Suggestion::new(format!("Rename to `_{}`", binding.name)).with_edit(
+                                Edit::new(binding.span.clone(), format!("_{}", binding.name)),
+                            ),
+                        )
                         .build(),
                     );
                 }
@@ -481,7 +557,12 @@ impl TypeChecker {
                 Item::TraitDef(def) => {
                     self.env.register_trait(def.clone());
                 }
-                Item::ImplBlock(_impl_block) => {}
+                Item::ImplBlock(impl_block) => {
+                    // Register that this type implements this trait
+                    let type_name = type_expr_to_name(&impl_block.target_type);
+                    self.trait_impls
+                        .insert((impl_block.trait_name.clone(), type_name));
+                }
                 _ => {}
             }
         }
@@ -499,7 +580,10 @@ impl TypeChecker {
                         .message(format!("Unused import `{}`", name))
                         .span(span.clone())
                         .note(Note::new("remove this import if it is no longer needed"))
-                        .suggestion(Suggestion::new("Remove this import"))
+                        .suggestion(
+                            Suggestion::new("Remove this import")
+                                .with_edit(Edit::new(span.clone(), "")),
+                        )
                         .build(),
                 );
             }
@@ -795,6 +879,16 @@ impl TypeChecker {
 
                 if let Some(declared) = &declared_type {
                     if !self.types_compatible(&value_type, declared) {
+                        let type_display = format_type(&value_type);
+                        let mut suggestion = Suggestion::new(format!(
+                            "Change the type annotation to `{}`",
+                            type_display
+                        ));
+                        // If we have the type expression span, add a concrete edit
+                        if let Some(type_expr) = ty {
+                            let type_span = type_expr_span(type_expr);
+                            suggestion = suggestion.with_edit(Edit::new(type_span, &type_display));
+                        }
                         self.diagnostics.push(
                             Diagnostic::error(
                                 crate::diagnostics::error_codes::types::TYPE_MISMATCH,
@@ -803,10 +897,7 @@ impl TypeChecker {
                                 "Expected type {:?}, found {:?}",
                                 declared, value_type
                             ))
-                            .suggestion(Suggestion::new(format!(
-                                "Change the type annotation to match the value type `{:?}`",
-                                value_type
-                            )))
+                            .suggestion(suggestion)
                             .build(),
                         );
                     }
@@ -873,13 +964,13 @@ impl TypeChecker {
                             .span(span.clone());
 
                             // Suggest similar names from the environment
-                            if let Some(suggestion) = find_similar_name(name, env) {
+                            if let Some(similar) = find_similar_name(name, env) {
                                 diag = diag
-                                    .note(Note::new(format!("did you mean `{}`?", suggestion)))
-                                    .suggestion(Suggestion::new(format!(
-                                        "Replace with `{}`",
-                                        suggestion
-                                    )));
+                                    .note(Note::new(format!("did you mean `{}`?", similar)))
+                                    .suggestion(
+                                        Suggestion::new(format!("Replace with `{}`", similar))
+                                            .with_edit(Edit::new(span.clone(), &similar)),
+                                    );
                             }
 
                             self.diagnostics.push(diag.build());
@@ -1016,11 +1107,37 @@ impl TypeChecker {
 
                     // Try generic type parameter inference if the called function
                     // has type params
-                    if let Expr::Ident { name, .. } = func.as_ref() {
+                    if let Expr::Ident { name, span, .. } = func.as_ref() {
                         if let Some(fn_def) = env.lookup_fn(name).cloned() {
                             if !fn_def.type_params.is_empty() {
                                 let bindings =
                                     self.unify_type_params(&fn_def.type_params, params, &arg_types);
+
+                                // Check trait bounds on type parameters
+                                for (param_name, bound_name) in &fn_def.type_param_bounds {
+                                    if let Some(concrete_ty) = bindings.get(param_name) {
+                                        let concrete_name = format_type(concrete_ty);
+                                        if !self
+                                            .trait_impls
+                                            .contains(&(bound_name.clone(), concrete_name.clone()))
+                                        {
+                                            self.diagnostics.push(
+                                                Diagnostic::error(crate::diagnostics::error_codes::types::TRAIT_CONSTRAINT_NOT_SATISFIED)
+                                                    .message(format!(
+                                                        "Type `{}` does not implement trait `{}` required by type parameter `{}`",
+                                                        concrete_name, bound_name, param_name
+                                                    ))
+                                                    .span(span.clone())
+                                                    .note(Note::new(format!(
+                                                        "add `impl {} for {} {{ ... }}` to satisfy this constraint",
+                                                        bound_name, concrete_name
+                                                    )))
+                                                    .build(),
+                                            );
+                                        }
+                                    }
+                                }
+
                                 // Substitute type params in return type
                                 let substituted_ret = self.substitute_type_params(ret, &bindings);
                                 return substituted_ret;
@@ -1190,6 +1307,30 @@ impl TypeChecker {
                     self.check_expr_with_effects(v, env, effects);
                 }
                 Type::Unknown // Map type not fully tracked yet
+            }
+            Expr::Range {
+                start, end, span, ..
+            } => {
+                let start_ty = self.check_expr_with_effects(start, env, effects);
+                let end_ty = self.check_expr_with_effects(end, env, effects);
+                // Both bounds must be Int
+                if !self.types_compatible(&start_ty, &Type::Int) {
+                    self.diagnostics.push(
+                        Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
+                            .message(format!("Range start must be Int, found {:?}", start_ty))
+                            .span(span.clone())
+                            .build(),
+                    );
+                }
+                if !self.types_compatible(&end_ty, &Type::Int) {
+                    self.diagnostics.push(
+                        Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
+                            .message(format!("Range end must be Int, found {:?}", end_ty))
+                            .span(span.clone())
+                            .build(),
+                    );
+                }
+                Type::List(Box::new(Type::Int))
             }
             Expr::Await { expr, .. } => {
                 // P6.5: await just checks the inner expression
@@ -2746,5 +2887,124 @@ fn main() -> Unit {
 "#;
         let result = check_module(source);
         assert!(result.is_ok(), "Tuple type should be tracked");
+    }
+
+    #[test]
+    fn test_suggestions_have_edits() {
+        // W0001: unused variable suggestion should have an Edit
+        let source = r#"
+module example
+
+fn main() -> Unit {
+  let x = 42
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let unused_diag = diags.diagnostics().iter().find(|d| d.code == "W0001");
+        assert!(unused_diag.is_some(), "Should have W0001 for unused `x`");
+        let unused = unused_diag.unwrap();
+        assert!(
+            !unused.suggestions.is_empty(),
+            "W0001 should have a suggestion"
+        );
+        assert!(
+            !unused.suggestions[0].edits.is_empty(),
+            "W0001 suggestion should have an edit with replacement text"
+        );
+    }
+
+    #[test]
+    fn test_unknown_identifier_suggestion_has_edit() {
+        // E1002: unknown identifier with similar name suggestion
+        let source = r#"
+module example
+
+fn calculate(value: Int) -> Int {
+  valu + 1
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let error_diag = diags.diagnostics().iter().find(|d| d.code == "E1002");
+        assert!(error_diag.is_some(), "Should have E1002 for `valu`");
+        let error = error_diag.unwrap();
+        assert!(
+            !error.suggestions.is_empty(),
+            "E1002 should have a did-you-mean suggestion"
+        );
+        assert!(
+            !error.suggestions[0].edits.is_empty(),
+            "E1002 suggestion should have an edit for replacement"
+        );
+    }
+
+    #[test]
+    fn test_trait_constraint_satisfied() {
+        // Should pass: Int implements Show
+        let source = r#"
+module example
+
+trait Show {
+  fn to_text(self) -> Text
+}
+
+impl Show for Int {
+  fn to_text(self) -> Text { "int" }
+}
+
+fn display[T: Show](value: T) -> Text {
+  "ok"
+}
+
+fn main() -> Text {
+  display(42)
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let constraint_errors: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "E1016")
+            .collect();
+        assert!(
+            constraint_errors.is_empty(),
+            "Should have no E1016 errors when trait is implemented"
+        );
+    }
+
+    #[test]
+    fn test_trait_constraint_not_satisfied() {
+        // Should fail: Text does not implement Sortable
+        let source = r#"
+module example
+
+trait Sortable {
+  fn compare(self, other: Int) -> Int
+}
+
+impl Sortable for Int {
+  fn compare(self, other: Int) -> Int { 0 }
+}
+
+fn sort_items[T: Sortable](items: List[T]) -> List[T] {
+  items
+}
+
+fn main() -> List[Text] {
+  sort_items(["hello", "world"])
+}
+"#;
+        let diags = check_module_all_diags(source);
+        let constraint_errors: Vec<_> = diags
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code == "E1016")
+            .collect();
+        assert!(
+            !constraint_errors.is_empty(),
+            "Should have E1016 error: Text does not implement Sortable"
+        );
+        assert!(constraint_errors[0]
+            .message
+            .contains("does not implement trait"));
     }
 }

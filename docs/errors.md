@@ -238,6 +238,30 @@ p.z  # Error: Unknown field 'z'
 
 ---
 
+### E1016: Trait constraint not satisfied
+
+**Message**: `Type '{type}' does not implement trait '{trait}' required by type parameter '{param}'`
+
+**Explanation**: A generic function was called with a concrete type that doesn't satisfy
+the declared trait bound on the type parameter.
+
+**Example**:
+```astra
+trait Sortable {
+  fn compare(self, other: Int) -> Int
+}
+
+fn sort_items[T: Sortable](items: List[T]) -> List[T] { items }
+
+fn main() -> Unit {
+  sort_items(["hello"])  # Error: Text does not implement Sortable
+}
+```
+
+**Fix**: Either implement the trait for the type, or use a type that already implements it.
+
+---
+
 ## Effect Errors (E2xxx)
 
 ### E2001: Effect not declared

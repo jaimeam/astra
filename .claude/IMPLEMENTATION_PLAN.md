@@ -99,14 +99,14 @@
 | **P1.11** | Math builtins | `abs`, `min`, `max`, `pow`, `sqrt`, `floor`, `ceil`, `round` | ✅ Done |
 | **P1.12** | Negative number literals | `-42` as unary negation in parser | ✅ Done |
 
-### 🟡 Phase 2: Type System Maturity (75% — checker gaps remain)
+### 🟡 Phase 2: Type System Maturity (90% — generic unification partial)
 
 | # | Task | Impact | Status |
 |---|------|--------|--------|
 | **P2.1** | Generic type checking | Type params treated as opaque named types; no HM unification | 🟡 Partial — runs via dynamic typing, checker does basic structural matching |
 | **P2.2** | Traits / type classes | `trait Show { fn to_text(self) -> Text }` + `impl Show for Int` | 🟡 Parsed + formatted; checker validates methods but no trait resolution on calls |
 | **P2.3** | Type invariants enforcement | `type Positive = Int invariant self > 0` checked at runtime | ✅ Done |
-| **P2.4** | Generic type constraints | `fn sort[T: Ord](list: List[T])` syntax parsed | 🟡 Parsed; constraints not enforced by checker |
+| **P2.4** | Generic type constraints | `fn sort[T: Ord](list: List[T])` bounds enforced at call sites | ✅ Done — `E1016` reports when concrete types don't implement required traits |
 | **P2.5** | Recursive / self-referential types | Trees, linked lists (`Cons(h, t: IntList)`) | ✅ Done |
 
 ### ✅ Phase 3: Standard Library Expansion (100% Complete)
@@ -162,15 +162,16 @@
 
 ## Estimated Completion
 
-- **Fully working**: Parser (with block expressions, local functions, 2-token lookahead), lexer, formatter, interpreter runtime (split into submodules), diagnostics, CLI (run/check/test/fmt/repl/package/lsp)
-- **Partially working**: Type checker (basic types + effects + exhaustiveness + typedef/enumdef validation + import resolution + generics + traits)
-- **Not started**: WASM target, incremental compilation
+- **Fully working**: Parser (block expressions, local functions, 2-token lookahead, range expressions, multiline strings, string escape validation), lexer, formatter, interpreter runtime (split into submodules), diagnostics (with concrete Edit objects), CLI (run/check/test/fmt/repl/package/lsp/init)
+- **Partially working**: Type checker (basic types + effects + exhaustiveness + typedef/enumdef validation + import resolution + generics + traits + trait constraint enforcement)
+- **Not started**: WASM target, incremental compilation, watch mode
 - All 14 examples parse, format, type-check, run correctly, and produce visible output
 - 12 stdlib modules (8 original + 4 new: json, io, iter, error)
 - Complete standard library documentation (docs/stdlib.md) covering all 137 built-in methods and functions
-- 273 Rust unit tests + 4 golden tests passing
+- 305 Rust unit tests + 4 golden tests = 309 total, all passing
 - 95+/95+ Astra-level tests passing (0 failures)
 - All 11 refactoring tasks (R1-R11) completed
+- 54 error/warning codes registered (E0xxx-E4xxx, W0xxx)
 - Full documentation suite: spec, getting-started, effects, testing, stdlib, errors, formatting, examples, why-astra, 4 ADRs
 
 ### Known Limitations
@@ -178,9 +179,12 @@
 | Limitation | Impact | Workaround |
 |-----------|--------|------------|
 | Generic type params treated as opaque | Type checker doesn't catch type errors in generic code | Programs run correctly via dynamic typing; errors caught at runtime |
-| Traits not resolved on calls | `impl Show for Int` is parsed but method calls aren't dispatched via trait | Use direct method calls or pattern matching |
+| Traits not resolved on method calls | `impl Show for Int` is parsed but method calls aren't dispatched via trait | Use direct method calls or pattern matching |
+| Trait constraint enforcement is name-based | `T: Show` checks if `impl Show for Int` exists, not structural compatibility | Define trait impls for types you use with bounded generics |
 | Parameter destructuring not supported | `fn foo({x, y}: {x: Int, y: Int})` doesn't parse | Use `let {x, y} = param` inside the function body |
 | Async/await is synchronous | `await expr` evaluates `expr` directly with no concurrency | Suitable for single-threaded use cases |
+| No incremental checking | `astra check` re-parses everything from scratch | Only noticeable on large projects |
+| No watch mode | Must manually re-run `astra check` | Use external file watcher |
 
 ---
 

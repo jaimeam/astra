@@ -767,6 +767,20 @@ impl Formatter {
                 }
                 self.write("])");
             }
+            Expr::Range {
+                start,
+                end,
+                inclusive,
+                ..
+            } => {
+                self.format_expr(start);
+                if *inclusive {
+                    self.write("..=");
+                } else {
+                    self.write("..");
+                }
+                self.format_expr(end);
+            }
             Expr::Await { expr, .. } => {
                 self.write("await ");
                 self.format_expr(expr);
