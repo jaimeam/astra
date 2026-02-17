@@ -170,6 +170,7 @@ impl Formatter {
 
         self.write("fn ");
         self.write(&fndef.name);
+        self.format_type_params(&fndef.type_params);
         self.write("(");
 
         for (i, param) in fndef.params.iter().enumerate() {
@@ -590,6 +591,19 @@ impl Formatter {
                 self.write(" ");
                 self.format_block(body);
             }
+            Expr::ForIn {
+                binding,
+                iter,
+                body,
+                ..
+            } => {
+                self.write("for ");
+                self.write(binding);
+                self.write(" in ");
+                self.format_expr(iter);
+                self.write(" ");
+                self.format_block(body);
+            }
             Expr::Hole { .. } => {
                 self.write("???");
             }
@@ -615,11 +629,16 @@ impl Formatter {
             Pattern::Ident { name, .. } => {
                 self.write(name);
             }
-            Pattern::Variant { name, data, .. } => {
+            Pattern::Variant { name, fields, .. } => {
                 self.write(name);
-                if let Some(p) = data {
+                if !fields.is_empty() {
                     self.write("(");
-                    self.format_pattern(p);
+                    for (i, p) in fields.iter().enumerate() {
+                        if i > 0 {
+                            self.write(", ");
+                        }
+                        self.format_pattern(p);
+                    }
                     self.write(")");
                 }
             }

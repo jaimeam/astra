@@ -10,7 +10,7 @@ pub mod ast;
 pub mod lexer;
 #[allow(clippy::module_inception)]
 pub mod parser;
-mod span;
+pub mod span;
 
 pub use ast::*;
 pub use lexer::Lexer;

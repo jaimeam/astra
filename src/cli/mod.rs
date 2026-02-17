@@ -547,6 +547,10 @@ fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error
 
     // Create interpreter and run
     let mut interpreter = Interpreter::with_capabilities(capabilities);
+    // Add the file's parent directory as a search path for imports
+    if let Some(parent) = file.parent() {
+        interpreter.add_search_path(parent.to_path_buf());
+    }
     match interpreter.eval_module(&module) {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Runtime error: {}", e).into()),

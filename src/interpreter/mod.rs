@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use crate::parser::ast::*;
 
@@ -179,6 +180,11 @@ pub enum Value {
     Err(Box<Value>),
     /// List of values
     List(Vec<Value>),
+    /// Variant constructor for multi-field enums
+    VariantConstructor {
+        name: String,
+        field_names: Vec<String>,
+    },
 }
 
 /// Closure body containing the AST block and optional contracts
@@ -220,8 +226,9 @@ fn values_equal(left: &Value, right: &Value) -> bool {
         (Value::List(a), Value::List(b)) => {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
         }
-        // Closures are never equal
+        // Closures and constructors are never equal
         (Value::Closure { .. }, Value::Closure { .. }) => false,
+        (Value::VariantConstructor { .. }, Value::VariantConstructor { .. }) => false,
         _ => false,
     }
 }
@@ -333,6 +340,10 @@ pub struct Interpreter {
     pub env: Environment,
     /// Available capabilities
     pub capabilities: Capabilities,
+    /// Search paths for module resolution
+    pub search_paths: Vec<PathBuf>,
+    /// Already-loaded modules (to prevent circular imports)
+    loaded_modules: std::collections::HashSet<String>,
 }
 
 impl Interpreter {
@@ -341,6 +352,8 @@ impl Interpreter {
         Self {
             env: Environment::new(),
             capabilities: Capabilities::default(),
+            search_paths: Vec::new(),
+            loaded_modules: std::collections::HashSet::new(),
         }
     }
 
@@ -349,29 +362,111 @@ impl Interpreter {
         Self {
             env: Environment::new(),
             capabilities,
+            search_paths: Vec::new(),
+            loaded_modules: std::collections::HashSet::new(),
         }
     }
 
     /// Load a module's definitions without running main
+    /// Resolve a module path to a file path
+    fn resolve_module_path(&self, segments: &[String]) -> Option<PathBuf> {
+        let relative = segments.join("/") + ".astra";
+        for search_path in &self.search_paths {
+            let candidate = search_path.join(&relative);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        // Also check relative to cwd
+        let candidate = PathBuf::from(&relative);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        None
+    }
+
+    /// Load an imported module by path segments
+    fn load_import(&mut self, segments: &[String]) -> Result<(), RuntimeError> {
+        let module_key = segments.join(".");
+        if self.loaded_modules.contains(&module_key) {
+            return Ok(()); // Already loaded
+        }
+        self.loaded_modules.insert(module_key);
+
+        let file_path = match self.resolve_module_path(segments) {
+            Some(p) => p,
+            None => return Ok(()), // Silently skip unresolvable imports for now
+        };
+
+        let source = std::fs::read_to_string(&file_path).map_err(|e| {
+            RuntimeError::new("E4016", format!("Failed to read module file: {}", e))
+        })?;
+
+        let source_file = crate::parser::span::SourceFile::new(file_path.clone(), source.clone());
+        let lexer = crate::parser::lexer::Lexer::new(&source_file);
+        let mut parser = crate::parser::parser::Parser::new(lexer, source_file.clone());
+        let imported_module = parser.parse_module().map_err(|_| {
+            RuntimeError::new(
+                "E4017",
+                format!("Failed to parse module: {}", file_path.display()),
+            )
+        })?;
+
+        self.load_module(&imported_module)?;
+        Ok(())
+    }
+
     pub fn load_module(&mut self, module: &Module) -> Result<(), RuntimeError> {
-        // Collect all function definitions into the environment
+        // Process imports first
         for item in &module.items {
-            if let Item::FnDef(fn_def) = item {
-                let params: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
-                let closure = Value::Closure {
-                    name: Some(fn_def.name.clone()),
-                    params,
-                    body: ClosureBody {
-                        block: fn_def.body.clone(),
-                        requires: fn_def.requires.clone(),
-                        ensures: fn_def.ensures.clone(),
-                    },
-                    env: Environment::new(), // Will use global env at call time
-                };
-                self.env.define(fn_def.name.clone(), closure);
+            if let Item::Import(import) = item {
+                self.load_import(&import.path.segments)?;
+            }
+        }
+
+        // Collect all function and enum definitions into the environment
+        for item in &module.items {
+            match item {
+                Item::FnDef(fn_def) => {
+                    let params: Vec<String> =
+                        fn_def.params.iter().map(|p| p.name.clone()).collect();
+                    let closure = Value::Closure {
+                        name: Some(fn_def.name.clone()),
+                        params,
+                        body: ClosureBody {
+                            block: fn_def.body.clone(),
+                            requires: fn_def.requires.clone(),
+                            ensures: fn_def.ensures.clone(),
+                        },
+                        env: Environment::new(), // Will use global env at call time
+                    };
+                    self.env.define(fn_def.name.clone(), closure);
+                }
+                Item::EnumDef(enum_def) => {
+                    // Register variant constructors
+                    for variant in &enum_def.variants {
+                        if !variant.fields.is_empty() {
+                            let field_names: Vec<String> =
+                                variant.fields.iter().map(|f| f.name.clone()).collect();
+                            self.env.define(
+                                variant.name.clone(),
+                                Value::VariantConstructor {
+                                    name: variant.name.clone(),
+                                    field_names,
+                                },
+                            );
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Add a search path for module resolution
+    pub fn add_search_path(&mut self, path: PathBuf) {
+        self.search_paths.push(path);
     }
 
     /// Evaluate a module
@@ -728,6 +823,47 @@ impl Interpreter {
                 })
             }
 
+            // For-in loop
+            Expr::ForIn {
+                binding,
+                iter,
+                body,
+                ..
+            } => {
+                let iter_val = self.eval_expr(iter)?;
+                match iter_val {
+                    Value::List(items) => {
+                        for item in &items {
+                            // Define/update loop binding directly (no child scope)
+                            self.env.define(binding.clone(), item.clone());
+                            // Evaluate body statements inline (not via eval_block)
+                            // to preserve assignment visibility
+                            for stmt in &body.stmts {
+                                if let Stmt::Return { value, .. } = stmt {
+                                    let result = if let Some(val_expr) = value {
+                                        self.eval_expr(val_expr)?
+                                    } else {
+                                        Value::Unit
+                                    };
+                                    self.env.bindings.remove(binding);
+                                    return Ok(result);
+                                }
+                                self.eval_stmt(stmt)?;
+                            }
+                            if let Some(expr) = &body.expr {
+                                self.eval_expr(expr)?;
+                            }
+                        }
+                        self.env.bindings.remove(binding);
+                        Ok(Value::Unit)
+                    }
+                    _ => Err(RuntimeError::type_mismatch(
+                        "List",
+                        &format!("{:?}", iter_val),
+                    )),
+                }
+            }
+
             // Hole (incomplete code)
             Expr::Hole { .. } => Err(RuntimeError::hole_encountered()),
         }
@@ -878,6 +1014,28 @@ impl Interpreter {
     /// Call a function value with arguments
     fn call_function(&mut self, func: Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
         match func {
+            Value::VariantConstructor { name, field_names } => {
+                if args.len() != field_names.len() {
+                    return Err(RuntimeError::arity_mismatch(field_names.len(), args.len()));
+                }
+                if field_names.len() == 1 {
+                    // Single-field variant: store data directly
+                    Ok(Value::Variant {
+                        name,
+                        data: Some(Box::new(args.into_iter().next().unwrap())),
+                    })
+                } else {
+                    // Multi-field variant: store as Record
+                    let mut fields = HashMap::new();
+                    for (field_name, arg) in field_names.iter().zip(args) {
+                        fields.insert(field_name.clone(), arg);
+                    }
+                    Ok(Value::Variant {
+                        name,
+                        data: Some(Box::new(Value::Record(fields))),
+                    })
+                }
+            }
             Value::Closure {
                 name,
                 params,
@@ -1630,19 +1788,21 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
         }
 
         // Variant pattern (for enums, Some/None, Ok/Err)
-        Pattern::Variant { name, data, .. } => {
+        Pattern::Variant { name, fields, .. } => {
             match (name.as_str(), value) {
                 // Option::Some
                 ("Some", Value::Some(inner)) => {
-                    if let Some(data_pat) = data {
-                        match_pattern(data_pat, inner)
-                    } else {
+                    if fields.len() == 1 {
+                        match_pattern(&fields[0], inner)
+                    } else if fields.is_empty() {
                         Some(vec![])
+                    } else {
+                        None
                     }
                 }
                 // Option::None
                 ("None", Value::None) => {
-                    if data.is_none() {
+                    if fields.is_empty() {
                         Some(vec![])
                     } else {
                         None
@@ -1650,18 +1810,22 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
                 }
                 // Result::Ok
                 ("Ok", Value::Ok(inner)) => {
-                    if let Some(data_pat) = data {
-                        match_pattern(data_pat, inner)
-                    } else {
+                    if fields.len() == 1 {
+                        match_pattern(&fields[0], inner)
+                    } else if fields.is_empty() {
                         Some(vec![])
+                    } else {
+                        None
                     }
                 }
                 // Result::Err
                 ("Err", Value::Err(inner)) => {
-                    if let Some(data_pat) = data {
-                        match_pattern(data_pat, inner)
-                    } else {
+                    if fields.len() == 1 {
+                        match_pattern(&fields[0], inner)
+                    } else if fields.is_empty() {
                         Some(vec![])
+                    } else {
+                        None
                     }
                 }
                 // Generic variant
@@ -1673,9 +1837,38 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
                     },
                 ) => {
                     if pat_name == var_name {
-                        match (data, var_data) {
-                            (None, None) => Some(vec![]),
-                            (Some(data_pat), Some(var_val)) => match_pattern(data_pat, var_val),
+                        match (fields.as_slice(), var_data) {
+                            // No fields pattern, no data
+                            ([], None) => Some(vec![]),
+                            // Single field pattern, single data value
+                            ([pat], Some(var_val)) => match_pattern(pat, var_val),
+                            // Multi-field pattern, data is a Record
+                            (pats, Some(var_val)) if pats.len() > 1 => {
+                                // Multi-field variant data is stored as a Record
+                                if let Value::Record(ref field_map) = **var_val {
+                                    let mut bindings = Vec::new();
+                                    // Positional matching: match patterns to fields by order
+                                    let mut sorted_keys: Vec<_> = field_map.keys().collect();
+                                    sorted_keys.sort();
+                                    if pats.len() != sorted_keys.len() {
+                                        return None;
+                                    }
+                                    for (pat, key) in pats.iter().zip(sorted_keys.iter()) {
+                                        if let Some(val) = field_map.get(*key) {
+                                            if let Some(sub) = match_pattern(pat, val) {
+                                                bindings.extend(sub);
+                                            } else {
+                                                return None;
+                                            }
+                                        } else {
+                                            return None;
+                                        }
+                                    }
+                                    Some(bindings)
+                                } else {
+                                    None
+                                }
+                            }
                             _ => None,
                         }
                     } else {
@@ -1710,6 +1903,7 @@ fn format_value(value: &Value) -> String {
             }
         }
         Value::Closure { .. } => "<closure>".to_string(),
+        Value::VariantConstructor { name, .. } => format!("<constructor:{}>", name),
         Value::List(items) => {
             let item_strs: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", item_strs.join(", "))
@@ -3240,5 +3434,191 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(12)));
+    }
+
+    // =========================================================================
+    // For loop tests
+    // =========================================================================
+
+    #[test]
+    fn test_for_loop_basic() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let mut sum = 0
+  for x in [1, 2, 3, 4, 5] {
+    sum = sum + x
+  }
+  sum
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(15)));
+    }
+
+    #[test]
+    fn test_for_loop_with_variable() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let items = [10, 20, 30]
+  let mut total = 0
+  for item in items {
+    total = total + item
+  }
+  total
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(60)));
+    }
+
+    #[test]
+    fn test_for_loop_empty_list() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let mut count = 0
+  for _x in [] {
+    count = count + 1
+  }
+  count
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(0)));
+    }
+
+    #[test]
+    fn test_for_loop_nested() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  let mut sum = 0
+  for x in [1, 2, 3] {
+    for y in [10, 20] {
+      sum = sum + x * y
+    }
+  }
+  sum
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(180)));
+    }
+
+    // =========================================================================
+    // Multi-field variant destructuring tests
+    // =========================================================================
+
+    #[test]
+    fn test_multi_field_variant_construct_and_match() {
+        let source = r#"
+module example
+
+enum Shape =
+  | Circle(radius: Int)
+  | Rectangle(width: Int, height: Int)
+
+fn area(s: Shape) -> Int {
+  match s {
+    Circle(r) => r * r * 3
+    Rectangle(w, h) => w * h
+  }
+}
+
+fn main() -> Int {
+  area(Rectangle(5, 3))
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(15)));
+    }
+
+    #[test]
+    fn test_multi_field_variant_single_field() {
+        let source = r#"
+module example
+
+enum Shape =
+  | Circle(radius: Int)
+  | Rectangle(width: Int, height: Int)
+
+fn area(s: Shape) -> Int {
+  match s {
+    Circle(r) => r * r
+    Rectangle(w, h) => w * h
+  }
+}
+
+fn main() -> Int {
+  area(Circle(10))
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(100)));
+    }
+
+    // =========================================================================
+    // Generic function tests
+    // =========================================================================
+
+    #[test]
+    fn test_generic_identity() {
+        let source = r#"
+module example
+
+fn identity[T](x: T) -> T {
+  x
+}
+
+fn main() -> Int {
+  identity(42)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_generic_identity_text() {
+        let source = r#"
+module example
+
+fn identity[T](x: T) -> T {
+  x
+}
+
+fn main() -> Text {
+  identity("hello")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "hello"));
+    }
+
+    #[test]
+    fn test_generic_pair() {
+        let source = r#"
+module example
+
+fn first[T, U](a: T, b: U) -> T {
+  a
+}
+
+fn second[T, U](a: T, b: U) -> U {
+  b
+}
+
+fn main() -> Int {
+  first(1, "hello") + second("world", 2)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
     }
 }
