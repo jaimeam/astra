@@ -1,0 +1,31 @@
+module examples.tail_recursion
+
+# Demonstrate tail call optimization
+
+# TCO-optimized accumulator-style recursion
+fn sum_to(n: Int, acc: Int) -> Int {
+  if n <= 0 {
+    acc
+  } else {
+    sum_to(n - 1, acc + n)
+  }
+}
+
+fn fibonacci_acc(n: Int, a: Int, b: Int) -> Int {
+  if n <= 0 {
+    a
+  } else {
+    fibonacci_acc(n - 1, b, a + b)
+  }
+}
+
+fn main() -> Unit
+  effects(Console)
+{
+  # These would overflow without TCO
+  let result = sum_to(10000, 0)
+  Console.println("Sum 1..10000 = " + to_text(result))
+
+  let fib = fibonacci_acc(30, 0, 1)
+  Console.println("Fibonacci(30) = " + to_text(fib))
+}

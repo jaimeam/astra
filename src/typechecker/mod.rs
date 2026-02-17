@@ -31,6 +31,8 @@ pub enum Type {
     Unit,
     /// Integer type
     Int,
+    /// Float type
+    Float,
     /// Boolean type
     Bool,
     /// Text/string type
@@ -351,6 +353,18 @@ impl TypeChecker {
             Item::TypeDef(def) => self.check_typedef(def),
             Item::EnumDef(def) => self.check_enumdef(def),
             Item::FnDef(def) => self.check_fndef(def),
+            Item::TraitDef(_) => {
+                // Trait definitions define interfaces, checked structurally
+            }
+            Item::ImplBlock(impl_block) => {
+                // Check each method in the impl block
+                for method in &impl_block.methods {
+                    self.check_fndef(method);
+                }
+            }
+            Item::EffectDef(_) => {
+                // Effect definitions are structurally valid if parsed
+            }
             Item::Test(test) => self.check_test(test),
             Item::Property(prop) => self.check_property(prop),
         }
@@ -556,6 +570,7 @@ impl TypeChecker {
     ) -> Type {
         match expr {
             Expr::IntLit { .. } => Type::Int,
+            Expr::FloatLit { .. } => Type::Float,
             Expr::BoolLit { .. } => Type::Bool,
             Expr::TextLit { .. } => Type::Text,
             Expr::UnitLit { .. } => Type::Unit,
@@ -563,10 +578,12 @@ impl TypeChecker {
                 // Built-in constructors and effects are always available
                 match name.as_str() {
                     "Some" | "None" | "Ok" | "Err" => Type::Unknown,
-                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => Type::Unknown,
-                    "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" => {
+                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" | "Map" | "Set" => {
                         Type::Unknown
                     }
+                    "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" | "range"
+                    | "abs" | "min" | "max" | "pow" | "to_int" | "to_float" | "sqrt" | "floor"
+                    | "ceil" | "round" => Type::Unknown,
                     _ => {
                         // Mark variable as used for W0001 lint
                         self.lint_use_var(name);
@@ -611,11 +628,21 @@ impl TypeChecker {
                     | BinaryOp::Mod => {
                         if left_ty == Type::Int && right_ty == Type::Int {
                             Type::Int
+                        } else if left_ty == Type::Float || right_ty == Type::Float {
+                            Type::Float
                         } else if left_ty == Type::Text
                             && right_ty == Type::Text
                             && *op == BinaryOp::Add
                         {
                             Type::Text
+                        } else {
+                            Type::Unknown
+                        }
+                    }
+                    // Pipe operator returns the return type of the right-hand function
+                    BinaryOp::Pipe => {
+                        if let Type::Function { ret, .. } = right_ty {
+                            *ret
                         } else {
                             Type::Unknown
                         }
@@ -828,6 +855,40 @@ impl TypeChecker {
                 self.check_block_with_effects(body, &mut loop_env, effects);
                 self.pop_lint_scope();
                 Type::Unit
+            }
+            Expr::While { cond, body, .. } => {
+                self.check_expr_with_effects(cond, env, effects);
+                let mut loop_env = env.clone();
+                self.push_lint_scope();
+                self.check_block_with_effects(body, &mut loop_env, effects);
+                self.pop_lint_scope();
+                Type::Unit
+            }
+            Expr::Break { .. } | Expr::Continue { .. } => Type::Unit,
+            Expr::StringInterp { parts, .. } => {
+                for part in parts {
+                    if let StringPart::Expr(expr) = part {
+                        self.check_expr_with_effects(expr, env, effects);
+                    }
+                }
+                Type::Text
+            }
+            Expr::TupleLit { elements, .. } => {
+                for elem in elements {
+                    self.check_expr_with_effects(elem, env, effects);
+                }
+                Type::Unknown // Tuple type not fully tracked yet
+            }
+            Expr::MapLit { entries, .. } => {
+                for (k, v) in entries {
+                    self.check_expr_with_effects(k, env, effects);
+                    self.check_expr_with_effects(v, env, effects);
+                }
+                Type::Unknown // Map type not fully tracked yet
+            }
+            Expr::Await { expr, .. } => {
+                // P6.5: await just checks the inner expression
+                self.check_expr_with_effects(expr, env, effects)
             }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(
@@ -1073,6 +1134,7 @@ impl TypeChecker {
         match ty {
             TypeExpr::Named { name, args, .. } => match name.as_str() {
                 "Int" => Type::Int,
+                "Float" => Type::Float,
                 "Bool" => Type::Bool,
                 "Text" => Type::Text,
                 "Unit" => Type::Unit,
@@ -1083,10 +1145,30 @@ impl TypeChecker {
                     Box::new(self.resolve_type_expr(&args[0])),
                     Box::new(self.resolve_type_expr(&args[1])),
                 ),
-                _ => Type::Named(
-                    name.clone(),
-                    args.iter().map(|a| self.resolve_type_expr(a)).collect(),
+                "List" if args.len() == 1 => {
+                    Type::Named("List".to_string(), vec![self.resolve_type_expr(&args[0])])
+                }
+                "Map" if args.len() == 2 => Type::Named(
+                    "Map".to_string(),
+                    vec![
+                        self.resolve_type_expr(&args[0]),
+                        self.resolve_type_expr(&args[1]),
+                    ],
                 ),
+                "Set" if args.len() == 1 => {
+                    Type::Named("Set".to_string(), vec![self.resolve_type_expr(&args[0])])
+                }
+                _ => {
+                    // Check for type alias resolution (P1.9)
+                    if let Some(type_def) = self.env.lookup_type(name).cloned() {
+                        self.resolve_type_expr(&type_def.value)
+                    } else {
+                        Type::Named(
+                            name.clone(),
+                            args.iter().map(|a| self.resolve_type_expr(a)).collect(),
+                        )
+                    }
+                }
             },
             TypeExpr::Record { fields, .. } => Type::Record(
                 fields
@@ -1143,8 +1225,14 @@ fn collect_pattern_bindings(pattern: &Pattern, env: &mut TypeEnv) {
                 collect_pattern_bindings(pat, env);
             }
         }
+        Pattern::Tuple { elements, .. } => {
+            for inner in elements {
+                collect_pattern_bindings(inner, env);
+            }
+        }
         Pattern::Wildcard { .. }
         | Pattern::IntLit { .. }
+        | Pattern::FloatLit { .. }
         | Pattern::BoolLit { .. }
         | Pattern::TextLit { .. } => {}
     }

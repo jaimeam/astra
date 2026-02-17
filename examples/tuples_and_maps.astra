@@ -1,0 +1,35 @@
+module examples.tuples_and_maps
+
+# Demonstrate tuple and map types
+
+fn swap(pair: (Int, Int)) -> (Int, Int) {
+  let (a, b) = pair
+  (b, a)
+}
+
+fn main() -> Unit
+  effects(Console)
+{
+  # Tuples
+  let point = (10, 20)
+  let (x, y) = point
+  Console.println("Point: (" + to_text(x) + ", " + to_text(y) + ")")
+
+  let swapped = swap(point)
+  Console.println("Swapped: (" + to_text(swapped.0) + ", " + to_text(swapped.1) + ")")
+
+  # Maps
+  let scores = Map.new()
+    .set("Alice", 95)
+    .set("Bob", 87)
+    .set("Carol", 92)
+
+  Console.println("Alice's score: " + to_text(scores.get("Alice")))
+  Console.println("Map size: " + to_text(scores.len()))
+
+  # Sets
+  let primes = Set.from([2, 3, 5, 7, 11])
+  let small = Set.from([1, 2, 3, 4, 5])
+  let common = primes.intersection(small)
+  Console.println("Common elements: " + to_text(common.len()))
+}

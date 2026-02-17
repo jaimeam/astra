@@ -69,8 +69,28 @@ pub enum TokenKind {
     Type,
     #[token("using")]
     Using,
+    #[token("while")]
+    While,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
+
+    #[token("trait")]
+    Trait,
+    #[token("impl")]
+    Impl,
+    #[token("effect")]
+    Effect,
+    #[token("await")]
+    Await,
+    #[token("async")]
+    Async,
 
     // Literals
+    #[regex(r"[0-9]+\.[0-9]+", priority = 3, callback = |lex| lex.slice().parse::<f64>().ok())]
+    FloatLit(f64),
+
     #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     IntLit(i64),
 
@@ -137,6 +157,8 @@ pub enum TokenKind {
     Arrow,
     #[token("=>")]
     FatArrow,
+    #[token("|>")]
+    PipeArrow,
     #[token("|")]
     Pipe,
     #[token(".")]

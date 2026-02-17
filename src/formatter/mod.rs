@@ -81,6 +81,9 @@ impl Formatter {
             Item::TypeDef(typedef) => self.format_typedef(typedef),
             Item::EnumDef(enumdef) => self.format_enumdef(enumdef),
             Item::FnDef(fndef) => self.format_fndef(fndef),
+            Item::TraitDef(trait_def) => self.format_trait_def(trait_def),
+            Item::ImplBlock(impl_block) => self.format_impl_block(impl_block),
+            Item::EffectDef(effect_def) => self.format_effect_def(effect_def),
             Item::Test(test) => self.format_test(test),
             Item::Property(property) => self.format_property(property),
         }
@@ -88,6 +91,9 @@ impl Formatter {
 
     fn format_import(&mut self, import: &ImportDecl) {
         self.write_indent();
+        if import.public {
+            self.write("public ");
+        }
         self.write("import ");
         self.format_module_path(&import.path);
 
@@ -224,6 +230,96 @@ impl Formatter {
 
         self.newline();
         self.format_block(&fndef.body);
+        self.newline();
+    }
+
+    fn format_trait_def(&mut self, trait_def: &TraitDef) {
+        self.write_indent();
+        self.write("trait ");
+        self.write(&trait_def.name);
+        if !trait_def.type_params.is_empty() {
+            self.write("[");
+            self.write(&trait_def.type_params.join(", "));
+            self.write("]");
+        }
+        self.write(" {");
+        self.newline();
+        self.indent_level += 1;
+        for method in &trait_def.methods {
+            self.write_indent();
+            self.write("fn ");
+            self.write(&method.name);
+            self.write("(");
+            for (i, param) in method.params.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&param.name);
+                self.write(": ");
+                self.format_type_expr(&param.ty);
+            }
+            self.write(")");
+            if let Some(ret) = &method.return_type {
+                self.write(" -> ");
+                self.format_type_expr(ret);
+            }
+            self.newline();
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.write("}");
+        self.newline();
+    }
+
+    fn format_impl_block(&mut self, impl_block: &ImplBlock) {
+        self.write_indent();
+        self.write("impl ");
+        self.write(&impl_block.trait_name);
+        self.write(" for ");
+        self.format_type_expr(&impl_block.target_type);
+        self.write(" {");
+        self.newline();
+        self.indent_level += 1;
+        for method in &impl_block.methods {
+            self.format_fndef(method);
+            self.newline();
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.write("}");
+        self.newline();
+    }
+
+    fn format_effect_def(&mut self, effect_def: &EffectDecl) {
+        self.write_indent();
+        self.write("effect ");
+        self.write(&effect_def.name);
+        self.write(" {");
+        self.newline();
+        self.indent_level += 1;
+        for op in &effect_def.operations {
+            self.write_indent();
+            self.write("fn ");
+            self.write(&op.name);
+            self.write("(");
+            for (i, param) in op.params.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&param.name);
+                self.write(": ");
+                self.format_type_expr(&param.ty);
+            }
+            self.write(")");
+            if let Some(ret) = &op.return_type {
+                self.write(" -> ");
+                self.format_type_expr(ret);
+            }
+            self.newline();
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.write("}");
         self.newline();
     }
 
@@ -424,6 +520,9 @@ impl Formatter {
             Expr::IntLit { value, .. } => {
                 self.write(&value.to_string());
             }
+            Expr::FloatLit { value, .. } => {
+                self.write(&format!("{}", value));
+            }
             Expr::BoolLit { value, .. } => {
                 self.write(if *value { "true" } else { "false" });
             }
@@ -604,6 +703,60 @@ impl Formatter {
                 self.write(" ");
                 self.format_block(body);
             }
+            Expr::While { cond, body, .. } => {
+                self.write("while ");
+                self.format_expr(cond);
+                self.write(" ");
+                self.format_block(body);
+            }
+            Expr::Break { .. } => {
+                self.write("break");
+            }
+            Expr::Continue { .. } => {
+                self.write("continue");
+            }
+            Expr::StringInterp { parts, .. } => {
+                self.write("\"");
+                for part in parts {
+                    match part {
+                        StringPart::Literal(s) => self.write(&s.replace('"', "\\\"")),
+                        StringPart::Expr(expr) => {
+                            self.write("${");
+                            self.format_expr(expr);
+                            self.write("}");
+                        }
+                    }
+                }
+                self.write("\"");
+            }
+            Expr::TupleLit { elements, .. } => {
+                self.write("(");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.format_expr(elem);
+                }
+                self.write(")");
+            }
+            Expr::MapLit { entries, .. } => {
+                self.write("Map.from([");
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write("(");
+                    self.format_expr(k);
+                    self.write(", ");
+                    self.format_expr(v);
+                    self.write(")");
+                }
+                self.write("])");
+            }
+            Expr::Await { expr, .. } => {
+                self.write("await ");
+                self.format_expr(expr);
+            }
             Expr::Hole { .. } => {
                 self.write("???");
             }
@@ -617,6 +770,9 @@ impl Formatter {
             }
             Pattern::IntLit { value, .. } => {
                 self.write(&value.to_string());
+            }
+            Pattern::FloatLit { value, .. } => {
+                self.write(&format!("{}", value));
             }
             Pattern::BoolLit { value, .. } => {
                 self.write(if *value { "true" } else { "false" });
@@ -655,6 +811,16 @@ impl Formatter {
                     }
                 }
                 self.write(" }");
+            }
+            Pattern::Tuple { elements, .. } => {
+                self.write("(");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.format_pattern(elem);
+                }
+                self.write(")");
             }
         }
     }

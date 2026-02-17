@@ -68,6 +68,9 @@ pub enum Command {
         args: Vec<String>,
     },
 
+    /// Start interactive REPL
+    Repl,
+
     /// Create a distributable package
     Package {
         /// Output directory
@@ -97,6 +100,9 @@ impl Cli {
             }
             Command::Run { file, args } => {
                 run_program(&file, &args)?;
+            }
+            Command::Repl => {
+                run_repl()?;
             }
             Command::Package { output, target } => {
                 run_package(&output, &target)?;
@@ -415,6 +421,49 @@ fn run_test(
                     }
                 }
             }
+
+            // P5.1: Property-based tests
+            if let Item::Property(prop) = item {
+                if let Some(f) = filter {
+                    if !prop.name.contains(f) {
+                        continue;
+                    }
+                }
+
+                total_tests += 1;
+                let num_iterations = 100;
+                let seed = _seed.unwrap_or(42);
+                let mut all_passed = true;
+
+                for i in 0..num_iterations {
+                    let iter_seed = seed.wrapping_add(i);
+                    let mut capabilities = build_test_capabilities(&prop.using);
+                    capabilities.rand = Some(Box::new(SeededRand::new(iter_seed)));
+
+                    let mut interpreter = Interpreter::with_capabilities(capabilities);
+                    if let Err(e) = interpreter.load_module(&module) {
+                        eprintln!("  FAIL: {} (iteration {}) - {}", prop.name, i, e);
+                        all_passed = false;
+                        break;
+                    }
+
+                    if let Err(e) = interpreter.eval_block(&prop.body) {
+                        eprintln!(
+                            "  FAIL: {} (iteration {}, seed {}) - {}",
+                            prop.name, i, iter_seed, e
+                        );
+                        all_passed = false;
+                        break;
+                    }
+                }
+
+                if all_passed {
+                    println!("  PASS: {} ({} iterations)", prop.name, num_iterations);
+                    passed += 1;
+                } else {
+                    failed += 1;
+                }
+            }
         }
     }
 
@@ -600,8 +649,197 @@ impl EnvCapability for RealEnv {
     }
 }
 
+fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::interpreter::format_value;
+    use std::io::{self, Write};
+
+    println!("Astra REPL v0.1.0");
+    println!("Type expressions to evaluate. Use :quit to exit, :help for help.");
+    println!();
+
+    // Keep track of definitions (accumulated source)
+    let mut definitions = String::from("module repl\n");
+    let mut line_num = 0u32;
+
+    let make_interpreter = || {
+        Interpreter::with_capabilities(Capabilities {
+            console: Some(Box::new(RealConsole)),
+            ..Default::default()
+        })
+    };
+
+    loop {
+        print!("astra> ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                continue;
+            }
+        }
+
+        let input = input.trim();
+        if input.is_empty() {
+            continue;
+        }
+
+        // Handle REPL commands
+        match input {
+            ":quit" | ":q" | ":exit" => break,
+            ":help" | ":h" => {
+                println!("Commands:");
+                println!("  :quit, :q    Exit the REPL");
+                println!("  :help, :h    Show this help");
+                println!("  :clear       Clear all definitions");
+                println!();
+                println!("Enter expressions, let bindings, or function definitions.");
+                continue;
+            }
+            ":clear" => {
+                definitions = String::from("module repl\n");
+                println!("Cleared.");
+                continue;
+            }
+            _ => {}
+        }
+
+        line_num += 1;
+
+        // Try to evaluate as expression first: wrap in a temp main function
+        let expr_source = format!("{}\nfn __repl__() -> Unit {{ {} }}", definitions, input);
+
+        let source_file = SourceFile::new(PathBuf::from("repl.astra"), expr_source.clone());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = AstraParser::new(lexer, source_file.clone());
+
+        match parser.parse_module() {
+            Ok(module) => {
+                let mut interp = make_interpreter();
+                if let Err(e) = interp.load_module(&module) {
+                    eprintln!("Error: {}", e);
+                    continue;
+                }
+                if let Some(func) = interp.env.lookup("__repl__").cloned() {
+                    match interp.call_function(func, vec![]) {
+                        Ok(value) => {
+                            if !matches!(value, crate::interpreter::Value::Unit) {
+                                println!("{}", format_value(&value));
+                            }
+                        }
+                        Err(e) if e.is_return => {
+                            if let Some(val) = e.early_return {
+                                println!("{}", format_value(&val));
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // Try as a top-level definition (fn, type, enum)
+                let def_source = format!("{}\n{}", definitions, input);
+                let source_file2 = SourceFile::new(PathBuf::from("repl.astra"), def_source.clone());
+                let lexer2 = Lexer::new(&source_file2);
+                let mut parser2 = AstraParser::new(lexer2, source_file2.clone());
+
+                match parser2.parse_module() {
+                    Ok(_) => {
+                        definitions = def_source;
+                        println!("Defined. ({} definitions)", line_num);
+                    }
+                    Err(e) => {
+                        eprintln!("{}", e.format_text(&def_source));
+                    }
+                }
+            }
+        }
+    }
+
+    println!("Bye!");
+    Ok(())
+}
+
 fn run_package(output: &PathBuf, target: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Packaging to {:?} (target: {})...", output, target);
-    // TODO: Implement packaging
+    // P7.2: Basic package command
+    println!("Packaging project...");
+
+    // Read project manifest
+    let manifest_path = std::env::current_dir()?.join("astra.toml");
+    if !manifest_path.exists() {
+        return Err(
+            "No astra.toml found in current directory. Run `astra init` to create one.".into(),
+        );
+    }
+
+    let manifest_content = std::fs::read_to_string(&manifest_path)?;
+    println!("  Found manifest: astra.toml");
+
+    // Collect all .astra source files
+    let current_dir = std::env::current_dir()?;
+    let source_files = walkdir(&current_dir)?
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|ext| ext == "astra"))
+        .collect::<Vec<_>>();
+
+    println!("  Found {} source files", source_files.len());
+
+    // Validate all files parse and type-check
+    let mut errors = 0;
+    for file in &source_files {
+        let source = std::fs::read_to_string(file)?;
+        let source_file = SourceFile::new(file.clone(), source.clone());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = AstraParser::new(lexer, source_file.clone());
+        match parser.parse_module() {
+            Ok(module) => {
+                let mut checker = crate::typechecker::TypeChecker::new();
+                if checker.check_module(&module).is_err() {
+                    eprintln!("  Type error in {:?}", file);
+                    errors += 1;
+                }
+            }
+            Err(_) => {
+                eprintln!("  Parse error in {:?}", file);
+                errors += 1;
+            }
+        }
+    }
+
+    if errors > 0 {
+        return Err(format!("{} file(s) have errors. Fix them before packaging.", errors).into());
+    }
+
+    // Create output directory
+    std::fs::create_dir_all(output)?;
+
+    // Copy source files to output
+    for file in &source_files {
+        let relative = file.strip_prefix(&current_dir).unwrap_or(file);
+        let dest = output.join(relative);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(file, &dest)?;
+    }
+
+    // Copy manifest
+    std::fs::copy(&manifest_path, output.join("astra.toml"))?;
+
+    // Write package metadata
+    let metadata = format!(
+        "# Astra Package\n# Target: {}\n# Manifest:\n{}\n",
+        target, manifest_content
+    );
+    std::fs::write(output.join("PACKAGE.md"), metadata)?;
+
+    println!("  Package created at {:?} (target: {})", output, target);
+    println!("  {} files packaged successfully", source_files.len());
+
     Ok(())
 }

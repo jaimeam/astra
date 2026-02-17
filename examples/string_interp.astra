@@ -1,0 +1,27 @@
+module examples.string_interp
+
+fn greet(name: Text) -> Text {
+  "Hello, ${name}!"
+}
+
+fn describe(x: Int) -> Text {
+  let doubled = x * 2
+  "${x} doubled is ${doubled}"
+}
+
+fn format_list(items: List[Int]) -> Text {
+  let count = len(items)
+  "List has ${count} items: ${to_text(items)}"
+}
+
+test "basic interpolation" {
+  assert_eq(greet("Astra"), "Hello, Astra!")
+}
+
+test "expression interpolation" {
+  assert_eq(describe(21), "21 doubled is 42")
+}
+
+test "interpolation with builtins" {
+  assert_eq(format_list([1, 2, 3]), "List has 3 items: [1, 2, 3]")
+}

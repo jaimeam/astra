@@ -52,6 +52,9 @@ pub enum Item {
     TypeDef(TypeDef),
     EnumDef(EnumDef),
     FnDef(FnDef),
+    TraitDef(TraitDef),
+    ImplBlock(ImplBlock),
+    EffectDef(EffectDecl),
     Test(TestBlock),
     Property(PropertyBlock),
 }
@@ -63,6 +66,8 @@ pub struct ImportDecl {
     pub span: Span,
     pub path: ModulePath,
     pub kind: ImportKind,
+    /// P4.3: Re-exports (public import)
+    pub public: bool,
 }
 
 /// Kind of import
@@ -113,6 +118,45 @@ pub struct Field {
     pub span: Span,
     pub name: String,
     pub ty: TypeExpr,
+}
+
+/// Trait definition (e.g., `trait Show { fn to_text(self) -> Text }`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraitDef {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub methods: Vec<TraitMethod>,
+}
+
+/// A method signature in a trait
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraitMethod {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeExpr>,
+}
+
+/// Impl block (e.g., `impl Show for Int { fn to_text(self) -> Text { ... } }`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImplBlock {
+    pub id: NodeId,
+    pub span: Span,
+    pub trait_name: String,
+    pub target_type: TypeExpr,
+    pub methods: Vec<FnDef>,
+}
+
+/// Effect definition (e.g., `effect Logger { fn log(msg: Text) -> Unit }`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectDecl {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub operations: Vec<TraitMethod>,
 }
 
 /// Function definition
@@ -272,6 +316,11 @@ pub enum Expr {
         span: Span,
         value: i64,
     },
+    FloatLit {
+        id: NodeId,
+        span: Span,
+        value: f64,
+    },
     BoolLit {
         id: NodeId,
         span: Span,
@@ -381,6 +430,20 @@ pub enum Expr {
         elements: Vec<Expr>,
     },
 
+    // Tuple literal (e.g., `(1, "hello", true)`)
+    TupleLit {
+        id: NodeId,
+        span: Span,
+        elements: Vec<Expr>,
+    },
+
+    // Map literal (e.g., `Map.from([(k1, v1), (k2, v2)])`)
+    MapLit {
+        id: NodeId,
+        span: Span,
+        entries: Vec<(Expr, Expr)>,
+    },
+
     // Lambda/anonymous function
     Lambda {
         id: NodeId,
@@ -399,6 +462,38 @@ pub enum Expr {
         body: Box<Block>,
     },
 
+    // While loop
+    While {
+        id: NodeId,
+        span: Span,
+        cond: Box<Expr>,
+        body: Box<Block>,
+    },
+
+    // Loop control
+    Break {
+        id: NodeId,
+        span: Span,
+    },
+    Continue {
+        id: NodeId,
+        span: Span,
+    },
+
+    // String interpolation
+    StringInterp {
+        id: NodeId,
+        span: Span,
+        parts: Vec<StringPart>,
+    },
+
+    // Await expression (P6.5: async/await)
+    Await {
+        id: NodeId,
+        span: Span,
+        expr: Box<Expr>,
+    },
+
     // Special
     Hole {
         id: NodeId,
@@ -411,6 +506,7 @@ impl Expr {
     pub fn span(&self) -> &Span {
         match self {
             Expr::IntLit { span, .. }
+            | Expr::FloatLit { span, .. }
             | Expr::BoolLit { span, .. }
             | Expr::TextLit { span, .. }
             | Expr::UnitLit { span, .. }
@@ -428,8 +524,15 @@ impl Expr {
             | Expr::Try { span, .. }
             | Expr::TryElse { span, .. }
             | Expr::ListLit { span, .. }
+            | Expr::TupleLit { span, .. }
+            | Expr::MapLit { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::ForIn { span, .. }
+            | Expr::While { span, .. }
+            | Expr::Break { span, .. }
+            | Expr::Continue { span, .. }
+            | Expr::StringInterp { span, .. }
+            | Expr::Await { span, .. }
             | Expr::Hole { span, .. } => span,
         }
     }
@@ -456,6 +559,9 @@ pub enum BinaryOp {
     // Logical
     And,
     Or,
+
+    // Pipe
+    Pipe,
 }
 
 impl BinaryOp {
@@ -475,6 +581,7 @@ impl BinaryOp {
             BinaryOp::Ge => ">=",
             BinaryOp::And => "and",
             BinaryOp::Or => "or",
+            BinaryOp::Pipe => "|>",
         }
     }
 }
@@ -533,6 +640,11 @@ pub enum Pattern {
         span: Span,
         value: i64,
     },
+    FloatLit {
+        id: NodeId,
+        span: Span,
+        value: f64,
+    },
     BoolLit {
         id: NodeId,
         span: Span,
@@ -554,6 +666,20 @@ pub enum Pattern {
         name: String,
         fields: Vec<Pattern>,
     },
+    Tuple {
+        id: NodeId,
+        span: Span,
+        elements: Vec<Pattern>,
+    },
+}
+
+/// Part of an interpolated string
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StringPart {
+    /// Literal text segment
+    Literal(String),
+    /// Interpolated expression `${expr}`
+    Expr(Box<Expr>),
 }
 
 /// Comment (preserved for formatter)

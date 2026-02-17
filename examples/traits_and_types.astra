@@ -1,0 +1,37 @@
+module examples.traits_and_types
+
+# Demonstrate traits, type aliases, and invariants
+
+type Percentage = Int invariant self >= 0 and self <= 100
+
+trait Describable {
+  fn describe(self: Text) -> Text
+}
+
+enum Shape =
+  | Circle(radius: Int)
+  | Rectangle(width: Int, height: Int)
+  | Triangle(base: Int, height: Int)
+
+fn area(shape: Shape) -> Int {
+  match shape {
+    Circle(r) => r * r * 3
+    Rectangle(w, h) => w * h
+    Triangle(b, h) => b * h / 2
+  }
+}
+
+fn main() -> Unit
+  effects(Console)
+{
+  # Type with invariant
+  let score: Percentage = 85
+  Console.println("Score: " + to_text(score) + "%")
+
+  # Pattern matching on shapes
+  let shapes = [Circle(5), Rectangle(3, 4), Triangle(6, 8)]
+  for shape in shapes {
+    let a = area(shape)
+    Console.println("Area: " + to_text(a))
+  }
+}

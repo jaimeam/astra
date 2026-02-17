@@ -1,0 +1,27 @@
+module std.string
+
+# P4.4: Standard string utilities
+
+fn is_blank(s: Text) -> Bool {
+  s.trim().len() == 0
+}
+
+fn pad_left(s: Text, width: Int, pad_char: Text) -> Text {
+  let current = s.len()
+  if current >= width {
+    s
+  } else {
+    let padding = pad_char.repeat(width - current)
+    padding + s
+  }
+}
+
+fn pad_right(s: Text, width: Int, pad_char: Text) -> Text {
+  let current = s.len()
+  if current >= width {
+    s
+  } else {
+    let padding = pad_char.repeat(width - current)
+    s + padding
+  }
+}
