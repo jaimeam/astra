@@ -386,6 +386,20 @@ pub enum Expr {
         elements: Vec<Expr>,
     },
 
+    // Tuple literal (e.g., `(1, "hello", true)`)
+    TupleLit {
+        id: NodeId,
+        span: Span,
+        elements: Vec<Expr>,
+    },
+
+    // Map literal (e.g., `Map.from([(k1, v1), (k2, v2)])`)
+    MapLit {
+        id: NodeId,
+        span: Span,
+        entries: Vec<(Expr, Expr)>,
+    },
+
     // Lambda/anonymous function
     Lambda {
         id: NodeId,
@@ -459,6 +473,8 @@ impl Expr {
             | Expr::Try { span, .. }
             | Expr::TryElse { span, .. }
             | Expr::ListLit { span, .. }
+            | Expr::TupleLit { span, .. }
+            | Expr::MapLit { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::ForIn { span, .. }
             | Expr::While { span, .. }
@@ -597,6 +613,11 @@ pub enum Pattern {
         span: Span,
         name: String,
         fields: Vec<Pattern>,
+    },
+    Tuple {
+        id: NodeId,
+        span: Span,
+        elements: Vec<Pattern>,
     },
 }
 

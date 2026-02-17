@@ -633,6 +633,30 @@ impl Formatter {
                 }
                 self.write("\"");
             }
+            Expr::TupleLit { elements, .. } => {
+                self.write("(");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.format_expr(elem);
+                }
+                self.write(")");
+            }
+            Expr::MapLit { entries, .. } => {
+                self.write("Map.from([");
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write("(");
+                    self.format_expr(k);
+                    self.write(", ");
+                    self.format_expr(v);
+                    self.write(")");
+                }
+                self.write("])");
+            }
             Expr::Hole { .. } => {
                 self.write("???");
             }
@@ -687,6 +711,16 @@ impl Formatter {
                     }
                 }
                 self.write(" }");
+            }
+            Pattern::Tuple { elements, .. } => {
+                self.write("(");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.format_pattern(elem);
+                }
+                self.write(")");
             }
         }
     }

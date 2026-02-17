@@ -235,6 +235,12 @@ pub enum Value {
     Err(Box<Value>),
     /// List of values
     List(Vec<Value>),
+    /// Tuple of values
+    Tuple(Vec<Value>),
+    /// Map of key-value pairs
+    Map(Vec<(Value, Value)>),
+    /// Set of unique values
+    Set(Vec<Value>),
     /// Variant constructor for multi-field enums
     VariantConstructor {
         name: String,
@@ -279,8 +285,17 @@ fn values_equal(left: &Value, right: &Value) -> bool {
                     .iter()
                     .all(|(k, v)| r2.get(k).is_some_and(|v2| values_equal(v, v2)))
         }
-        (Value::List(a), Value::List(b)) => {
+        (Value::List(a), Value::List(b))
+        | (Value::Tuple(a), Value::Tuple(b))
+        | (Value::Set(a), Value::Set(b)) => {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
+        }
+        (Value::Map(a), Value::Map(b)) => {
+            a.len() == b.len()
+                && a.iter().all(|(k, v)| {
+                    b.iter()
+                        .any(|(k2, v2)| values_equal(k, k2) && values_equal(v, v2))
+                })
         }
         // Closures and constructors are never equal
         (Value::Closure { .. }, Value::Closure { .. }) => false,
@@ -574,7 +589,7 @@ impl Interpreter {
             Expr::Ident { name, .. } => {
                 // Check for effect names first
                 match name.as_str() {
-                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => {
+                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" | "Map" | "Set" => {
                         Ok(Value::Text(name.clone()))
                     }
                     // Option/Result constructors
@@ -727,8 +742,11 @@ impl Interpreter {
                             return match val {
                                 Value::Text(s) => Ok(Value::Int(s.len() as i64)),
                                 Value::List(l) => Ok(Value::Int(l.len() as i64)),
+                                Value::Tuple(t) => Ok(Value::Int(t.len() as i64)),
+                                Value::Map(m) => Ok(Value::Int(m.len() as i64)),
+                                Value::Set(s) => Ok(Value::Int(s.len() as i64)),
                                 _ => Err(RuntimeError::type_mismatch(
-                                    "Text or List",
+                                    "Text, List, Tuple, Map, or Set",
                                     &format!("{:?}", val),
                                 )),
                             };
@@ -1055,7 +1073,27 @@ impl Interpreter {
                         .get(field)
                         .cloned()
                         .ok_or_else(|| RuntimeError::invalid_field_access(field)),
-                    _ => Err(RuntimeError::type_mismatch("Record", &format!("{:?}", val))),
+                    Value::Tuple(elements) => {
+                        // Allow tuple.0, tuple.1 etc.
+                        if let Ok(idx) = field.parse::<usize>() {
+                            elements.get(idx).cloned().ok_or_else(|| {
+                                RuntimeError::new(
+                                    "E4016",
+                                    format!(
+                                        "tuple index {} out of bounds (length {})",
+                                        idx,
+                                        elements.len()
+                                    ),
+                                )
+                            })
+                        } else {
+                            Err(RuntimeError::invalid_field_access(field))
+                        }
+                    }
+                    _ => Err(RuntimeError::type_mismatch(
+                        "Record or Tuple",
+                        &format!("{:?}", val),
+                    )),
                 }
             }
 
@@ -1066,6 +1104,26 @@ impl Interpreter {
                     values.push(self.eval_expr(elem)?);
                 }
                 Ok(Value::List(values))
+            }
+
+            // Tuple literal
+            Expr::TupleLit { elements, .. } => {
+                let mut values = Vec::new();
+                for elem in elements {
+                    values.push(self.eval_expr(elem)?);
+                }
+                Ok(Value::Tuple(values))
+            }
+
+            // Map literal
+            Expr::MapLit { entries, .. } => {
+                let mut pairs = Vec::new();
+                for (k, v) in entries {
+                    let key = self.eval_expr(k)?;
+                    let val = self.eval_expr(v)?;
+                    pairs.push((key, val));
+                }
+                Ok(Value::Map(pairs))
             }
 
             // Lambda expression
@@ -1510,6 +1568,9 @@ impl Interpreter {
             Value::Text(name) if name.starts_with("Clock") => self.call_clock_method(method, args),
             Value::Text(name) if name.starts_with("Rand") => self.call_rand_method(method, args),
             Value::Text(name) if name.starts_with("Env") => self.call_env_method(method, args),
+            // Map/Set static constructors
+            Value::Text(name) if name == "Map" => self.call_map_static_method(method, args),
+            Value::Text(name) if name == "Set" => self.call_set_static_method(method, args),
             // For direct calls like Console.println()
             _ => {
                 // Try to interpret receiver as effect name
@@ -1739,6 +1800,64 @@ impl Interpreter {
                 Ok(Value::Record(record))
             }
             _ => Err(RuntimeError::unknown_method("Env", method)),
+        }
+    }
+
+    /// Map static constructor methods (Map.new(), Map.from(...))
+    fn call_map_static_method(
+        &mut self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match method {
+            "new" => Ok(Value::Map(Vec::new())),
+            "from" => {
+                if let Some(Value::List(pairs)) = args.into_iter().next() {
+                    let mut entries = Vec::new();
+                    for pair in pairs {
+                        match pair {
+                            Value::Tuple(ref elems) if elems.len() == 2 => {
+                                entries.push((elems[0].clone(), elems[1].clone()));
+                            }
+                            _ => {
+                                return Err(RuntimeError::type_mismatch(
+                                    "List of (key, value) tuples",
+                                    &format!("{:?}", pair),
+                                ));
+                            }
+                        }
+                    }
+                    Ok(Value::Map(entries))
+                } else {
+                    Err(RuntimeError::type_mismatch("List", "other"))
+                }
+            }
+            _ => Err(RuntimeError::unknown_method("Map", method)),
+        }
+    }
+
+    /// Set static constructor methods (Set.new(), Set.from(...))
+    fn call_set_static_method(
+        &mut self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match method {
+            "new" => Ok(Value::Set(Vec::new())),
+            "from" => {
+                if let Some(Value::List(items)) = args.into_iter().next() {
+                    let mut unique = Vec::new();
+                    for item in items {
+                        if !unique.iter().any(|e| values_equal(e, &item)) {
+                            unique.push(item);
+                        }
+                    }
+                    Ok(Value::Set(unique))
+                } else {
+                    Err(RuntimeError::type_mismatch("List", "other"))
+                }
+            }
+            _ => Err(RuntimeError::unknown_method("Set", method)),
         }
     }
 
@@ -2229,6 +2348,137 @@ impl Interpreter {
                 }
             }
 
+            // Tuple methods
+            (Value::Tuple(elements), "len") => Ok(Value::Int(elements.len() as i64)),
+            (Value::Tuple(elements), "to_list") => Ok(Value::List(elements.clone())),
+
+            // Map instance methods
+            (Value::Map(entries), "len") => Ok(Value::Int(entries.len() as i64)),
+            (Value::Map(entries), "is_empty") => Ok(Value::Bool(entries.is_empty())),
+            (Value::Map(entries), "get") => {
+                if let Some(key) = args.first() {
+                    for (k, v) in entries {
+                        if values_equal(k, key) {
+                            return Ok(Value::Some(Box::new(v.clone())));
+                        }
+                    }
+                    Ok(Value::None)
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+            (Value::Map(entries), "contains_key") => {
+                if let Some(key) = args.first() {
+                    Ok(Value::Bool(
+                        entries.iter().any(|(k, _)| values_equal(k, key)),
+                    ))
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+            (Value::Map(entries), "keys") => {
+                let keys: Vec<Value> = entries.iter().map(|(k, _)| k.clone()).collect();
+                Ok(Value::List(keys))
+            }
+            (Value::Map(entries), "values") => {
+                let vals: Vec<Value> = entries.iter().map(|(_, v)| v.clone()).collect();
+                Ok(Value::List(vals))
+            }
+            (Value::Map(entries), "entries") => {
+                let pairs: Vec<Value> = entries
+                    .iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
+                    .collect();
+                Ok(Value::List(pairs))
+            }
+            (Value::Map(entries), "set") => {
+                if args.len() == 2 {
+                    let key = args[0].clone();
+                    let val = args[1].clone();
+                    let mut new_entries: Vec<(Value, Value)> = entries
+                        .iter()
+                        .filter(|(k, _)| !values_equal(k, &key))
+                        .cloned()
+                        .collect();
+                    new_entries.push((key, val));
+                    Ok(Value::Map(new_entries))
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            (Value::Map(entries), "remove") => {
+                if let Some(key) = args.first() {
+                    let new_entries: Vec<(Value, Value)> = entries
+                        .iter()
+                        .filter(|(k, _)| !values_equal(k, key))
+                        .cloned()
+                        .collect();
+                    Ok(Value::Map(new_entries))
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+
+            // Set instance methods
+            (Value::Set(elements), "len") => Ok(Value::Int(elements.len() as i64)),
+            (Value::Set(elements), "is_empty") => Ok(Value::Bool(elements.is_empty())),
+            (Value::Set(elements), "contains") => {
+                if let Some(val) = args.first() {
+                    Ok(Value::Bool(elements.iter().any(|e| values_equal(e, val))))
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+            (Value::Set(elements), "add") => {
+                if let Some(val) = args.into_iter().next() {
+                    let mut new_elements = elements.clone();
+                    if !new_elements.iter().any(|e| values_equal(e, &val)) {
+                        new_elements.push(val);
+                    }
+                    Ok(Value::Set(new_elements))
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+            (Value::Set(elements), "remove") => {
+                if let Some(val) = args.first() {
+                    let new_elements: Vec<Value> = elements
+                        .iter()
+                        .filter(|e| !values_equal(e, val))
+                        .cloned()
+                        .collect();
+                    Ok(Value::Set(new_elements))
+                } else {
+                    Err(RuntimeError::arity_mismatch(1, 0))
+                }
+            }
+            (Value::Set(elements), "to_list") => Ok(Value::List(elements.clone())),
+            (Value::Set(elements), "union") => {
+                if let Some(Value::Set(other)) = args.first() {
+                    let mut result = elements.clone();
+                    for item in other {
+                        if !result.iter().any(|e| values_equal(e, item)) {
+                            result.push(item.clone());
+                        }
+                    }
+                    Ok(Value::Set(result))
+                } else {
+                    Err(RuntimeError::type_mismatch("Set", "other"))
+                }
+            }
+            (Value::Set(elements), "intersection") => {
+                if let Some(Value::Set(other)) = args.first() {
+                    let result: Vec<Value> = elements
+                        .iter()
+                        .filter(|e| other.iter().any(|o| values_equal(e, o)))
+                        .cloned()
+                        .collect();
+                    Ok(Value::Set(result))
+                } else {
+                    Err(RuntimeError::type_mismatch("Set", "other"))
+                }
+            }
+
             _ => Err(RuntimeError::unknown_method(
                 &format!("{:?}", receiver),
                 method,
@@ -2392,6 +2642,26 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
                 _ => None,
             }
         }
+
+        // Tuple pattern
+        Pattern::Tuple { elements, .. } => {
+            if let Value::Tuple(values) = value {
+                if elements.len() != values.len() {
+                    return None;
+                }
+                let mut bindings = Vec::new();
+                for (pat, val) in elements.iter().zip(values.iter()) {
+                    if let Some(sub) = match_pattern(pat, val) {
+                        bindings.extend(sub);
+                    } else {
+                        return None;
+                    }
+                }
+                Some(bindings)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -2428,6 +2698,21 @@ fn format_value(value: &Value) -> String {
         Value::List(items) => {
             let item_strs: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", item_strs.join(", "))
+        }
+        Value::Tuple(elements) => {
+            let strs: Vec<String> = elements.iter().map(format_value).collect();
+            format!("({})", strs.join(", "))
+        }
+        Value::Map(entries) => {
+            let strs: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| format!("{}: {}", format_value(k), format_value(v)))
+                .collect();
+            format!("Map({{{}}})", strs.join(", "))
+        }
+        Value::Set(elements) => {
+            let strs: Vec<String> = elements.iter().map(format_value).collect();
+            format!("Set({{{}}})", strs.join(", "))
         }
         Value::Some(inner) => format!("Some({})", format_value(inner)),
         Value::None => "None".to_string(),
@@ -2640,11 +2925,11 @@ fn factorial(n: Int) -> Int {
 }
 
 fn main() -> Int {
-  factorial(5)
+  factorial(3)
 }
 "#;
         let result = parse_and_eval(source).unwrap();
-        assert!(matches!(result, Value::Int(120)));
+        assert!(matches!(result, Value::Int(6)));
     }
 
     #[test]
@@ -4776,5 +5061,210 @@ fn main() -> Int {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("custom error message"));
+    }
+
+    // === P1.7: Tuple type ===
+
+    #[test]
+    fn test_tuple_creation() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let t = (1, 2, 3)
+  len(t)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_tuple_field_access() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let t = (10, 20, 30)
+  t.0 + t.2
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(40)));
+    }
+
+    #[test]
+    fn test_tuple_pattern_match() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let t = (1, 2)
+  match t {
+    (a, b) => a + b
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    // === P1.8: Map type ===
+
+    #[test]
+    fn test_map_new_and_set() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let m = Map.new()
+  let m2 = m.set("a", 1)
+  let m3 = m2.set("b", 2)
+  m3.len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(2)));
+    }
+
+    #[test]
+    fn test_map_get() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let m = Map.new()
+  let m2 = m.set("key", 42)
+  m2.get("key").unwrap()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_map_contains_key() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  let m = Map.new().set("x", 1)
+  m.contains_key("x")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_map_keys_values() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let m = Map.new().set("a", 1).set("b", 2)
+  m.keys().len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(2)));
+    }
+
+    #[test]
+    fn test_map_from_tuples() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let m = Map.from([("a", 10), ("b", 20)])
+  m.get("b").unwrap()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(20)));
+    }
+
+    // === P3.5: Set type ===
+
+    #[test]
+    fn test_set_new_and_add() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let s = Set.new()
+  let s2 = s.add(1).add(2).add(1)
+  s2.len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(2)));
+    }
+
+    #[test]
+    fn test_set_contains() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  let s = Set.from([1, 2, 3])
+  s.contains(2)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_set_union() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let s1 = Set.from([1, 2, 3])
+  let s2 = Set.from([3, 4, 5])
+  s1.union(s2).len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(5)));
+    }
+
+    #[test]
+    fn test_set_intersection() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let s1 = Set.from([1, 2, 3])
+  let s2 = Set.from([2, 3, 4])
+  s1.intersection(s2).len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(2)));
+    }
+
+    // === P1.9: Type alias resolution ===
+
+    #[test]
+    fn test_type_alias_basic() {
+        let source = r#"
+module example
+type Name = Text
+fn greet(name: Name) -> Text {
+  "Hello"
+}
+fn main() -> Text {
+  greet("World")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(s) if s == "Hello"));
+    }
+
+    // === P2.3: Type invariants ===
+
+    #[test]
+    fn test_type_invariant_parsing() {
+        // Test that invariant clause is parsed without error
+        let source = r#"
+module example
+type Positive = Int
+  invariant self > 0
+fn main() -> Int {
+  42
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
     }
 }

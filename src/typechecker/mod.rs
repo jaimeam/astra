@@ -566,10 +566,12 @@ impl TypeChecker {
                 // Built-in constructors and effects are always available
                 match name.as_str() {
                     "Some" | "None" | "Ok" | "Err" => Type::Unknown,
-                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" => Type::Unknown,
-                    "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" => {
+                    "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" | "Map" | "Set" => {
                         Type::Unknown
                     }
+                    "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" | "range"
+                    | "abs" | "min" | "max" | "pow" | "to_int" | "to_float" | "sqrt" | "floor"
+                    | "ceil" | "round" => Type::Unknown,
                     _ => {
                         // Mark variable as used for W0001 lint
                         self.lint_use_var(name);
@@ -859,6 +861,19 @@ impl TypeChecker {
                 }
                 Type::Text
             }
+            Expr::TupleLit { elements, .. } => {
+                for elem in elements {
+                    self.check_expr_with_effects(elem, env, effects);
+                }
+                Type::Unknown // Tuple type not fully tracked yet
+            }
+            Expr::MapLit { entries, .. } => {
+                for (k, v) in entries {
+                    self.check_expr_with_effects(k, env, effects);
+                    self.check_expr_with_effects(v, env, effects);
+                }
+                Type::Unknown // Map type not fully tracked yet
+            }
             Expr::Hole { span, .. } => {
                 self.diagnostics.push(
                     Diagnostic::info("H0001")
@@ -1114,10 +1129,30 @@ impl TypeChecker {
                     Box::new(self.resolve_type_expr(&args[0])),
                     Box::new(self.resolve_type_expr(&args[1])),
                 ),
-                _ => Type::Named(
-                    name.clone(),
-                    args.iter().map(|a| self.resolve_type_expr(a)).collect(),
+                "List" if args.len() == 1 => {
+                    Type::Named("List".to_string(), vec![self.resolve_type_expr(&args[0])])
+                }
+                "Map" if args.len() == 2 => Type::Named(
+                    "Map".to_string(),
+                    vec![
+                        self.resolve_type_expr(&args[0]),
+                        self.resolve_type_expr(&args[1]),
+                    ],
                 ),
+                "Set" if args.len() == 1 => {
+                    Type::Named("Set".to_string(), vec![self.resolve_type_expr(&args[0])])
+                }
+                _ => {
+                    // Check for type alias resolution (P1.9)
+                    if let Some(type_def) = self.env.lookup_type(name).cloned() {
+                        self.resolve_type_expr(&type_def.value)
+                    } else {
+                        Type::Named(
+                            name.clone(),
+                            args.iter().map(|a| self.resolve_type_expr(a)).collect(),
+                        )
+                    }
+                }
             },
             TypeExpr::Record { fields, .. } => Type::Record(
                 fields
@@ -1172,6 +1207,11 @@ fn collect_pattern_bindings(pattern: &Pattern, env: &mut TypeEnv) {
         Pattern::Record { fields, .. } => {
             for (_, pat) in fields {
                 collect_pattern_bindings(pat, env);
+            }
+        }
+        Pattern::Tuple { elements, .. } => {
+            for inner in elements {
+                collect_pattern_bindings(inner, env);
             }
         }
         Pattern::Wildcard { .. }

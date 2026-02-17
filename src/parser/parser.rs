@@ -133,7 +133,14 @@ impl<'a> Parser<'a> {
         let type_params = self.parse_optional_type_params()?;
         self.expect(TokenKind::Eq)?;
         let value = self.parse_type_expr()?;
-        let invariant = None; // Simplified for now
+
+        // Parse optional invariant clause
+        let invariant = if self.check(TokenKind::Invariant) {
+            self.advance();
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
 
         let end_span = self.current_span();
         Ok(TypeDef {
@@ -748,7 +755,14 @@ impl<'a> Parser<'a> {
             } else if self.check(TokenKind::Dot) {
                 let start_span = self.expr_span(&expr);
                 self.advance();
-                let name = self.expect_ident()?;
+                // Allow both identifiers and int literals (for tuple indexing: t.0, t.1)
+                let name = if let TokenKind::IntLit(n) = &self.peek().kind {
+                    let s = n.to_string();
+                    self.advance();
+                    s
+                } else {
+                    self.expect_ident()?
+                };
 
                 if self.check(TokenKind::LParen) {
                     self.advance();
@@ -880,9 +894,27 @@ impl<'a> Parser<'a> {
                         span: token.span,
                     });
                 }
-                let expr = self.parse_expr()?;
+                let first = self.parse_expr()?;
+                // Check for tuple: (a, b, ...)
+                if self.check(TokenKind::Comma) {
+                    let mut elements = vec![first];
+                    while self.check(TokenKind::Comma) {
+                        self.advance();
+                        if self.check(TokenKind::RParen) {
+                            break;
+                        }
+                        elements.push(self.parse_expr()?);
+                    }
+                    self.expect(TokenKind::RParen)?;
+                    let end_span = self.current_span();
+                    return Ok(Expr::TupleLit {
+                        id: NodeId::new(),
+                        span: token.span.merge(&end_span),
+                        elements,
+                    });
+                }
                 self.expect(TokenKind::RParen)?;
-                Ok(expr)
+                Ok(first)
             }
             TokenKind::LBracket => self.parse_list_expr(),
             TokenKind::Fn => self.parse_lambda_expr(),
@@ -1337,6 +1369,37 @@ impl<'a> Parser<'a> {
                     fields,
                 })
             }
+            TokenKind::FloatLit(n) => {
+                let value = *n;
+                self.advance();
+                Ok(Pattern::FloatLit {
+                    id: NodeId::new(),
+                    span: token.span,
+                    value,
+                })
+            }
+            TokenKind::LParen => {
+                // Tuple pattern: (pat1, pat2, ...)
+                self.advance();
+                let mut elements = Vec::new();
+                if !self.check(TokenKind::RParen) {
+                    elements.push(self.parse_pattern()?);
+                    while self.check(TokenKind::Comma) {
+                        self.advance();
+                        if self.check(TokenKind::RParen) {
+                            break;
+                        }
+                        elements.push(self.parse_pattern()?);
+                    }
+                }
+                self.expect(TokenKind::RParen)?;
+                let end_span = self.current_span();
+                Ok(Pattern::Tuple {
+                    id: NodeId::new(),
+                    span: token.span.merge(&end_span),
+                    elements,
+                })
+            }
             _ => Err(self.error_unexpected("pattern")),
         }
     }
@@ -1531,6 +1594,8 @@ impl<'a> Parser<'a> {
             | Expr::Try { span, .. }
             | Expr::TryElse { span, .. }
             | Expr::ListLit { span, .. }
+            | Expr::TupleLit { span, .. }
+            | Expr::MapLit { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::ForIn { span, .. }
             | Expr::While { span, .. }
