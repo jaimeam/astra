@@ -1,4 +1,4 @@
-# v2: Trait method dispatch tests
+# Trait method dispatch tests
 module trait_dispatch
 
 trait Describe {

@@ -67,18 +67,6 @@ pub enum Type {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeVarId(pub u32);
 
-/// A registered trait implementation: `impl TraitName for TargetType { methods... }`
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct TraitImpl {
-    /// The trait being implemented
-    trait_name: String,
-    /// The concrete type implementing the trait
-    target_type: Type,
-    /// Method names provided by this impl
-    method_names: Vec<String>,
-}
-
 /// Type environment for tracking bindings
 #[derive(Debug, Clone, Default)]
 pub struct TypeEnv {
@@ -199,15 +187,10 @@ pub struct TypeChecker {
     env: TypeEnv,
     /// Diagnostics collected during checking
     diagnostics: DiagnosticBag,
-    /// Next type variable ID (used in fresh_type_var)
-    #[allow(dead_code)]
-    next_var: u32,
     /// Stack of lint scopes for tracking variable usage
     lint_scopes: Vec<LintScope>,
     /// Import names defined at module level, with usage tracking
     imports: Vec<(String, Span, bool)>,
-    /// Registered trait implementations: maps (trait_name, type_name) -> method names
-    trait_impls: Vec<TraitImpl>,
     /// Set of type parameter names in the current generic context
     current_type_params: HashSet<String>,
 }
@@ -218,10 +201,8 @@ impl TypeChecker {
         Self {
             env: TypeEnv::new(),
             diagnostics: DiagnosticBag::new(),
-            next_var: 0,
             lint_scopes: Vec::new(),
             imports: Vec::new(),
-            trait_impls: Vec::new(),
             current_type_params: HashSet::new(),
         }
     }
@@ -382,17 +363,7 @@ impl TypeChecker {
                 Item::TraitDef(def) => {
                     self.env.register_trait(def.clone());
                 }
-                Item::ImplBlock(impl_block) => {
-                    // Register the impl so we can do trait dispatch
-                    let target_type = self.resolve_type_expr(&impl_block.target_type);
-                    let method_names: Vec<String> =
-                        impl_block.methods.iter().map(|m| m.name.clone()).collect();
-                    self.trait_impls.push(TraitImpl {
-                        trait_name: impl_block.trait_name.clone(),
-                        target_type,
-                        method_names,
-                    });
-                }
+                Item::ImplBlock(_impl_block) => {}
                 _ => {}
             }
         }
@@ -433,7 +404,7 @@ impl TypeChecker {
             Item::Import(import) => {
                 // Register imported names as known bindings so they don't
                 // trigger E1002 "Unknown identifier" errors. Full cross-module
-                // type resolution is deferred to v2.
+                // type resolution is not yet implemented.
                 match &import.kind {
                     ImportKind::Module => {
                         if let Some(name) = import.path.segments.last() {
@@ -1594,34 +1565,6 @@ impl TypeChecker {
             _ => ty.clone(),
         }
     }
-
-    /// Look up a trait impl method for a given target type
-    #[allow(dead_code)]
-    fn lookup_trait_method(&self, trait_name: &str, target_type: &Type, method_name: &str) -> bool {
-        self.trait_impls.iter().any(|imp| {
-            imp.trait_name == trait_name
-                && self.types_compatible(&imp.target_type, target_type)
-                && imp.method_names.contains(&method_name.to_string())
-        })
-    }
-
-    /// Check if a type satisfies a trait constraint
-    #[allow(dead_code)]
-    fn type_satisfies_trait(&self, ty: &Type, trait_name: &str) -> bool {
-        if *ty == Type::Unknown || matches!(ty, Type::TypeParam(_)) {
-            return true;
-        }
-        self.trait_impls
-            .iter()
-            .any(|imp| imp.trait_name == trait_name && self.types_compatible(&imp.target_type, ty))
-    }
-
-    #[allow(dead_code)]
-    fn fresh_var(&mut self) -> Type {
-        let id = TypeVarId(self.next_var);
-        self.next_var += 1;
-        Type::Var(id)
-    }
 }
 
 impl Default for TypeChecker {
@@ -2533,7 +2476,7 @@ fn main() -> Int {
         );
     }
 
-    // v2: Generic type checking tests
+    // Generic type checking tests
 
     #[test]
     fn test_generic_type_param_resolution() {
@@ -2584,7 +2527,7 @@ fn pair[A, B](a: A, b: B) -> (A, B) {
         assert!(result.is_ok(), "Multiple type params should be in scope");
     }
 
-    // v2: Trait/impl type checking tests
+    // Trait/impl type checking tests
 
     #[test]
     fn test_trait_definition() {
@@ -2647,7 +2590,7 @@ impl Describe for Int {
         );
     }
 
-    // v2: List and Tuple type tracking
+    // List and Tuple type tracking
 
     #[test]
     fn test_list_type_tracking() {

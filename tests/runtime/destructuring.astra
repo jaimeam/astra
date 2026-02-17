@@ -1,4 +1,4 @@
-# v2: Parameter destructuring tests
+# Parameter destructuring tests
 module destructuring
 
 fn get_x({x, y}: {x: Int, y: Int}) -> Int {

@@ -26,13 +26,9 @@ enum TcoResult {
     TailCall(Vec<Value>),
 }
 
-/// Interpreter for Astra programs
 /// A registered trait implementation for runtime dispatch
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct RuntimeTraitImpl {
-    /// The trait being implemented
-    trait_name: String,
     /// The target type name (e.g., "Int", "Text", "MyType")
     target_type_name: String,
     /// Method implementations: method_name -> closure
@@ -56,7 +52,7 @@ pub struct Interpreter {
     type_defs: HashMap<String, TypeDef>,
     /// Effect definitions (P6.2)
     effect_defs: HashMap<String, EffectDecl>,
-    /// Trait implementations for method dispatch (v2)
+    /// Trait implementations for method dispatch
     trait_impls: Vec<RuntimeTraitImpl>,
 }
 
@@ -298,7 +294,6 @@ impl Interpreter {
 
                     // Register in the trait impl registry for dispatch
                     self.trait_impls.push(RuntimeTraitImpl {
-                        trait_name: impl_block.trait_name.clone(),
                         target_type_name,
                         methods: methods_map,
                     });
@@ -2626,7 +2621,7 @@ impl Interpreter {
             }
 
             _ => {
-                // v2: Try trait method dispatch before failing
+                // Try trait method dispatch before failing
                 if let Some(result) = self.try_trait_dispatch(receiver, method, args) {
                     return result;
                 }
@@ -5718,7 +5713,7 @@ fn main() -> Int {
         assert!(matches!(result, Value::Int(42)));
     }
 
-    // v2: Trait method dispatch tests
+    // Trait method dispatch tests
 
     #[test]
     fn test_trait_method_dispatch() {
@@ -5768,7 +5763,7 @@ fn main() -> Text {
         assert!(matches!(result, Value::Text(ref s) if s == "hello"));
     }
 
-    // v2: Parameter destructuring tests
+    // Parameter destructuring tests
 
     #[test]
     fn test_record_param_destructuring() {

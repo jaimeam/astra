@@ -1,5 +1,5 @@
-# v2: Enhanced generic type checking tests
-module generics_v2
+# Enhanced generic type checking tests
+module generics
 
 fn identity[T](x: T) -> T {
   x
