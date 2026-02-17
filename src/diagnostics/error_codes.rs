@@ -12,6 +12,7 @@ pub mod syntax {
     pub const UNEXPECTED_EOF: &str = "E0008";
     pub const INVALID_MODULE: &str = "E0009";
     pub const DUPLICATE_MODULE: &str = "E0010";
+    pub const MODULE_NOT_FOUND: &str = "E0011";
 }
 
 /// Type errors (E1xxx)

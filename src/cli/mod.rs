@@ -6,8 +6,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::interpreter::{
-    Capabilities, ConsoleCapability, EnvCapability, FixedClock, Interpreter, MockConsole,
-    SeededRand,
+    Capabilities, ClockCapability, ConsoleCapability, EnvCapability, FixedClock, FsCapability,
+    Interpreter, MockConsole, NetCapability, RandCapability, SeededRand, Value,
 };
 use crate::parser::{Lexer, Parser as AstraParser, SourceFile};
 
@@ -83,6 +83,17 @@ pub enum Command {
         target: String,
     },
 
+    /// Initialize a new Astra project
+    Init {
+        /// Project name (defaults to current directory name)
+        #[arg()]
+        name: Option<String>,
+
+        /// Create a library project (no main function)
+        #[arg(long)]
+        lib: bool,
+    },
+
     /// Start Language Server Protocol server (for IDE integration)
     Lsp,
 }
@@ -107,6 +118,9 @@ impl Cli {
             }
             Command::Repl => {
                 run_repl()?;
+            }
+            Command::Init { name, lib } => {
+                run_init(name.as_deref(), lib)?;
             }
             Command::Lsp => {
                 crate::lsp::run_server()?;
@@ -289,7 +303,7 @@ fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::er
         Ok(module) => {
             // Run type checking (includes exhaustiveness + effect + lint enforcement)
             let mut checker = crate::typechecker::TypeChecker::new();
-            let type_result = checker.check_module(&module);
+            let _type_result = checker.check_module(&module);
 
             // Always retrieve all diagnostics (errors + warnings)
             let all_diags = checker.diagnostics();
@@ -304,22 +318,16 @@ fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::er
                 .filter(|d| matches!(d.severity, crate::diagnostics::Severity::Warning))
                 .collect();
 
-            // Display errors (from Err result or from diagnostics bag)
-            if let Err(ref bag) = type_result {
-                if json {
-                    println!("{}", bag.to_json());
-                } else {
-                    eprintln!("{}", bag.format_text(&source));
-                }
-            }
-
-            // Display warnings
-            if !warnings.is_empty() {
-                for w in &warnings {
+            // Display all diagnostics from the checker's bag. When
+            // check_module returns Err, the bag contains both errors and
+            // warnings, so we use the bag directly to avoid double-printing.
+            let all = all_diags.diagnostics();
+            if !all.is_empty() {
+                for d in all {
                     if json {
-                        println!("{}", w.to_json());
+                        println!("{}", d.to_json());
                     } else {
-                        eprintln!("{}", w.to_human_readable(&source));
+                        eprintln!("{}", d.to_human_readable(&source));
                     }
                 }
             }
@@ -673,14 +681,14 @@ fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error
         .parse_module()
         .map_err(|e| format!("Parse error:\n{}", e.format_text(&source)))?;
 
-    // Set up capabilities
-    let console = Box::new(RealConsole);
-    let env_cap = Box::new(RealEnv::new(args.to_vec()));
-
+    // Set up capabilities — provide all real capabilities for `astra run`
     let capabilities = Capabilities {
-        console: Some(console),
-        env: Some(env_cap),
-        ..Default::default()
+        console: Some(Box::new(RealConsole)),
+        env: Some(Box::new(RealEnv::new(args.to_vec()))),
+        fs: Some(Box::new(RealFs)),
+        net: Some(Box::new(RealNet)),
+        clock: Some(Box::new(RealClock)),
+        rand: Some(Box::new(RealRand::new())),
     };
 
     // Create interpreter and run
@@ -733,6 +741,216 @@ impl EnvCapability for RealEnv {
     fn args(&self) -> Vec<String> {
         self.args.clone()
     }
+}
+
+/// Real filesystem capability that performs actual I/O
+struct RealFs;
+
+impl FsCapability for RealFs {
+    fn read(&self, path: &str) -> Result<String, String> {
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read '{}': {}", path, e))
+    }
+
+    fn write(&self, path: &str, content: &str) -> Result<(), String> {
+        std::fs::write(path, content).map_err(|e| format!("Failed to write '{}': {}", path, e))
+    }
+
+    fn exists(&self, path: &str) -> bool {
+        std::path::Path::new(path).exists()
+    }
+}
+
+/// Real network capability using ureq for HTTP
+struct RealNet;
+
+impl NetCapability for RealNet {
+    fn get(&self, url: &str) -> Result<Value, String> {
+        match ureq::get(url).call() {
+            Ok(response) => {
+                let body = response
+                    .into_string()
+                    .map_err(|e| format!("Failed to read response body: {}", e))?;
+                Ok(Value::Text(body))
+            }
+            Err(e) => Err(format!("HTTP GET failed: {}", e)),
+        }
+    }
+
+    fn post(&self, url: &str, body: &str) -> Result<Value, String> {
+        match ureq::post(url).send_string(body) {
+            Ok(response) => {
+                let body = response
+                    .into_string()
+                    .map_err(|e| format!("Failed to read response body: {}", e))?;
+                Ok(Value::Text(body))
+            }
+            Err(e) => Err(format!("HTTP POST failed: {}", e)),
+        }
+    }
+}
+
+/// Real clock capability using system time
+struct RealClock;
+
+impl ClockCapability for RealClock {
+    fn now(&self) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+    }
+
+    fn sleep(&self, millis: u64) {
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
+}
+
+/// Real random capability using system randomness
+struct RealRand {
+    seed: std::cell::Cell<u64>,
+}
+
+impl RealRand {
+    fn new() -> Self {
+        // Seed from system time for non-deterministic randomness
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        Self {
+            seed: std::cell::Cell::new(seed),
+        }
+    }
+
+    fn next(&self) -> u64 {
+        let mut x = self.seed.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.seed.set(x);
+        x
+    }
+}
+
+impl RandCapability for RealRand {
+    fn int(&self, min: i64, max: i64) -> i64 {
+        if max <= min {
+            return min;
+        }
+        let range = (max - min + 1) as u64;
+        let r = self.next() % range;
+        min + r as i64
+    }
+
+    fn bool(&self) -> bool {
+        self.next().is_multiple_of(2)
+    }
+
+    fn float(&self) -> f64 {
+        (self.next() as f64) / (u64::MAX as f64)
+    }
+}
+
+fn run_init(name: Option<&str>, lib: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let project_name = match name {
+        Some(n) => n.to_string(),
+        None => {
+            let cwd = std::env::current_dir()?;
+            cwd.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("my_project")
+                .to_string()
+        }
+    };
+
+    // Determine project root
+    let project_dir = if name.is_some() {
+        let dir = std::env::current_dir()?.join(&project_name);
+        std::fs::create_dir_all(&dir)?;
+        dir
+    } else {
+        std::env::current_dir()?
+    };
+
+    // Create src directory
+    let src_dir = project_dir.join("src");
+    std::fs::create_dir_all(&src_dir)?;
+
+    // Write astra.toml
+    let manifest = format!(
+        r#"[package]
+name = "{name}"
+version = "0.1.0"
+description = ""
+authors = []
+license = "MIT"
+
+[build]
+target = "interpreter"
+
+[lint]
+level = "warn"
+"#,
+        name = project_name
+    );
+    std::fs::write(project_dir.join("astra.toml"), manifest)?;
+
+    // Write main source file
+    if lib {
+        let lib_source = format!(
+            r#"module {name}
+
+## A library module for {name}.
+
+public fn greet(who: Text) -> Text {{
+  "Hello, ${{who}}!"
+}}
+
+test "greet works" {{
+  assert_eq(greet("world"), "Hello, world!")
+}}
+"#,
+            name = project_name
+        );
+        std::fs::write(src_dir.join("lib.astra"), lib_source)?;
+    } else {
+        let main_source = format!(
+            r#"module {name}
+
+fn main() effects(Console) {{
+  println("Hello from {name}!")
+}}
+
+test "hello works" {{
+  assert true
+}}
+"#,
+            name = project_name
+        );
+        std::fs::write(src_dir.join("main.astra"), main_source)?;
+    }
+
+    // Write .gitignore
+    let gitignore = "# Astra build artifacts\n/build/\n/.astra-cache/\n";
+    std::fs::write(project_dir.join(".gitignore"), gitignore)?;
+
+    if name.is_some() {
+        println!("Created new Astra project '{}'", project_name);
+        println!("  cd {}", project_name);
+    } else {
+        println!("Initialized Astra project '{}'", project_name);
+    }
+
+    if lib {
+        println!("  astra test          # Run tests");
+        println!("  astra check         # Type check");
+    } else {
+        println!("  astra run src/main.astra   # Run the program");
+        println!("  astra test                 # Run tests");
+        println!("  astra check                # Type check");
+    }
+
+    Ok(())
 }
 
 fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
