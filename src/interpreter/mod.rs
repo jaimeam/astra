@@ -443,25 +443,12 @@ pub struct Interpreter {
     type_defs: HashMap<String, TypeDef>,
     /// Effect definitions (P6.2)
     effect_defs: HashMap<String, EffectDecl>,
-    /// Re-exported module keys for public imports (P4.3)
-    #[allow(dead_code)]
-    reexport_modules: Vec<String>,
 }
 
 impl Interpreter {
     /// Create a new interpreter
     pub fn new() -> Self {
-        Self {
-            env: Environment::new(),
-            capabilities: Capabilities::default(),
-            search_paths: Vec::new(),
-            loaded_modules: std::collections::HashSet::new(),
-            loading_modules: std::collections::HashSet::new(),
-            call_stack: Vec::new(),
-            type_defs: HashMap::new(),
-            effect_defs: HashMap::new(),
-            reexport_modules: Vec::new(),
-        }
+        Self::with_capabilities(Capabilities::default())
     }
 
     /// Create an interpreter with specific capabilities
@@ -475,7 +462,6 @@ impl Interpreter {
             call_stack: Vec::new(),
             type_defs: HashMap::new(),
             effect_defs: HashMap::new(),
-            reexport_modules: Vec::new(),
         }
     }
 
@@ -483,16 +469,40 @@ impl Interpreter {
     /// Resolve a module path to a file path
     fn resolve_module_path(&self, segments: &[String]) -> Option<PathBuf> {
         let relative = segments.join("/") + ".astra";
+
+        // P4.4: Map `std.*` imports to `stdlib/*` directory
+        let stdlib_relative =
+            if segments.first().map(|s| s.as_str()) == Some("std") && segments.len() > 1 {
+                let mut stdlib_segments = vec!["stdlib".to_string()];
+                stdlib_segments.extend(segments[1..].iter().cloned());
+                Some(stdlib_segments.join("/") + ".astra")
+            } else {
+                None
+            };
+
         for search_path in &self.search_paths {
             let candidate = search_path.join(&relative);
             if candidate.exists() {
                 return Some(candidate);
+            }
+            // Also try the stdlib mapping
+            if let Some(ref stdlib_rel) = stdlib_relative {
+                let candidate = search_path.join(stdlib_rel);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
             }
         }
         // Also check relative to cwd
         let candidate = PathBuf::from(&relative);
         if candidate.exists() {
             return Some(candidate);
+        }
+        if let Some(ref stdlib_rel) = stdlib_relative {
+            let candidate = PathBuf::from(stdlib_rel);
+            if candidate.exists() {
+                return Some(candidate);
+            }
         }
         None
     }
@@ -590,14 +600,23 @@ impl Interpreter {
                     self.env.define(fn_def.name.clone(), closure);
                 }
                 Item::EnumDef(enum_def) => {
-                    // Register variant constructors
+                    // Register variant constructors and nullary variant values
                     for variant in &enum_def.variants {
                         if let Some(names) = filter {
                             if !names.contains(&variant.name) {
                                 continue;
                             }
                         }
-                        if !variant.fields.is_empty() {
+                        if variant.fields.is_empty() {
+                            // Nullary variant: register as a value (e.g., `Red`, `None`)
+                            self.env.define(
+                                variant.name.clone(),
+                                Value::Variant {
+                                    name: variant.name.clone(),
+                                    data: None,
+                                },
+                            );
+                        } else {
                             let field_names: Vec<String> =
                                 variant.fields.iter().map(|f| f.name.clone()).collect();
                             self.env.define(
@@ -778,11 +797,16 @@ impl Interpreter {
                         name: "Err".to_string(),
                         data: None,
                     }),
-                    _ => self
-                        .env
-                        .lookup(name)
-                        .cloned()
-                        .ok_or_else(|| RuntimeError::undefined_variable(name)),
+                    _ => {
+                        // P6.2: Check user-defined effect names
+                        if self.effect_defs.contains_key(name) {
+                            return Ok(Value::Text(name.clone()));
+                        }
+                        self.env
+                            .lookup(name)
+                            .cloned()
+                            .ok_or_else(|| RuntimeError::undefined_variable(name))
+                    }
                 }
             }
             Expr::QualifiedIdent { module, name, .. } => {
@@ -1110,6 +1134,73 @@ impl Interpreter {
                                 }
                             };
                         }
+                        // Effect convenience builtins - delegate to capabilities
+                        "read_file" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let path = self.eval_expr(&args[0])?;
+                            if let Value::Text(p) = path {
+                                return self.call_fs_method("read", vec![Value::Text(p)]);
+                            }
+                            return Err(RuntimeError::type_mismatch(
+                                "Text",
+                                &format!("{:?}", path),
+                            ));
+                        }
+                        "write_file" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let path = self.eval_expr(&args[0])?;
+                            let content = self.eval_expr(&args[1])?;
+                            return self.call_fs_method("write", vec![path, content]);
+                        }
+                        "http_get" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let url = self.eval_expr(&args[0])?;
+                            if let Value::Text(u) = url {
+                                return self.call_net_method("get", vec![Value::Text(u)]);
+                            }
+                            return Err(RuntimeError::type_mismatch("Text", &format!("{:?}", url)));
+                        }
+                        "http_post" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let url = self.eval_expr(&args[0])?;
+                            let body = self.eval_expr(&args[1])?;
+                            return self.call_net_method("post", vec![url, body]);
+                        }
+                        "random_int" => {
+                            if args.len() != 2 {
+                                return Err(RuntimeError::arity_mismatch(2, args.len()));
+                            }
+                            let min = self.eval_expr(&args[0])?;
+                            let max = self.eval_expr(&args[1])?;
+                            return self.call_rand_method("int", vec![min, max]);
+                        }
+                        "random_bool" => {
+                            if !args.is_empty() {
+                                return Err(RuntimeError::arity_mismatch(0, args.len()));
+                            }
+                            return self.call_rand_method("bool", vec![]);
+                        }
+                        "current_time_millis" => {
+                            if !args.is_empty() {
+                                return Err(RuntimeError::arity_mismatch(0, args.len()));
+                            }
+                            return self.call_clock_method("now", vec![]);
+                        }
+                        "get_env" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let name = self.eval_expr(&args[0])?;
+                            return self.call_env_method("get", vec![name]);
+                        }
                         _ => {}
                     }
                 }
@@ -1432,13 +1523,24 @@ impl Interpreter {
             Stmt::Let {
                 name, value, ty, ..
             } => {
-                let val = self.eval_expr(value)?;
+                let mut val = self.eval_expr(value)?;
                 // P2.3: Check type invariant if type annotation matches a type with invariant
                 if let Some(TypeExpr::Named {
                     name: type_name, ..
                 }) = ty
                 {
                     self.check_type_invariant(type_name, &val)?;
+                }
+                // For local named closures (e.g., `let helper = fn(...) { ... }`),
+                // set the closure's name to enable recursive self-calls and TCO.
+                if let Value::Closure {
+                    name: ref mut closure_name,
+                    ..
+                } = val
+                {
+                    if closure_name.is_none() {
+                        *closure_name = Some(name.clone());
+                    }
                 }
                 self.env.define(name.clone(), val);
                 Ok(())
@@ -1668,6 +1770,20 @@ impl Interpreter {
 
                     // Create new environment with appropriate parent
                     let mut call_env = parent_env.child();
+                    // For named closures, define self in the call env to enable recursion
+                    if let Some(ref fn_name_str) = name {
+                        if call_env.lookup(fn_name_str).is_none() {
+                            call_env.define(
+                                fn_name_str.clone(),
+                                Value::Closure {
+                                    name: name.clone(),
+                                    params: params.clone(),
+                                    body: body.clone(),
+                                    env: env.clone(),
+                                },
+                            );
+                        }
+                    }
                     for (param, arg) in params.iter().zip(current_args.iter().cloned()) {
                         call_env.define(param.clone(), arg);
                     }
@@ -1946,6 +2062,11 @@ impl Interpreter {
                     if s == "Console" {
                         return self.call_console_method(method, args);
                     }
+                    // P6.2: User-defined effect dispatch
+                    // If the receiver name matches a user-defined effect, look for a handler
+                    if self.effect_defs.contains_key(s) {
+                        return self.call_user_effect_method(s, method, args);
+                    }
                 }
                 // Check if this is an Option/Result method
                 self.call_value_method(receiver, method, args)
@@ -2131,9 +2252,8 @@ impl Interpreter {
             }
             "bool" => Ok(Value::Bool(rand.bool())),
             "float" => {
-                // Return as int for now since we don't have floats
                 let f = rand.float();
-                Ok(Value::Int((f * 1000000.0) as i64))
+                Ok(Value::Float(f))
             }
             _ => Err(RuntimeError::unknown_method("Rand", method)),
         }
@@ -2160,14 +2280,67 @@ impl Interpreter {
             }
             "args" => {
                 let args_vec: Vec<Value> = env_cap.args().into_iter().map(Value::Text).collect();
-                // Return as a record with numbered fields for now
-                let mut record = HashMap::new();
-                for (i, arg) in args_vec.into_iter().enumerate() {
-                    record.insert(i.to_string(), arg);
-                }
-                Ok(Value::Record(record))
+                Ok(Value::List(args_vec))
             }
             _ => Err(RuntimeError::unknown_method("Env", method)),
+        }
+    }
+
+    /// P6.2: Call a method on a user-defined effect.
+    ///
+    /// Looks up an effect handler in the environment as a record with method fields.
+    /// For example, `effect Logger { fn log(msg: Text) -> Unit }` can be handled by
+    /// providing a record value `{ log = fn(msg) { ... } }` bound as `__handler_Logger`.
+    fn call_user_effect_method(
+        &mut self,
+        effect_name: &str,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        // Look for a handler bound in the environment
+        let handler_name = format!("__handler_{}", effect_name);
+        if let Some(handler) = self.env.lookup(&handler_name).cloned() {
+            match handler {
+                Value::Record(fields) => {
+                    if let Some(func) = fields.get(method) {
+                        return self.call_function(func.clone(), args);
+                    }
+                    Err(RuntimeError::new(
+                        "E2003",
+                        format!(
+                            "Effect handler for '{}' does not implement operation '{}'",
+                            effect_name, method
+                        ),
+                    ))
+                }
+                Value::Closure { .. } => {
+                    // If the handler is a single closure, call it directly
+                    self.call_function(handler, args)
+                }
+                _ => Err(RuntimeError::new(
+                    "E2003",
+                    format!(
+                        "Effect handler for '{}' must be a record of functions, got {:?}",
+                        effect_name, handler
+                    ),
+                )),
+            }
+        } else {
+            // Validate that the operation exists in the effect definition
+            if let Some(effect_def) = self.effect_defs.get(effect_name).cloned() {
+                let valid_ops: Vec<&str> = effect_def
+                    .operations
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .collect();
+                if !valid_ops.contains(&method) {
+                    return Err(RuntimeError::unknown_method(effect_name, method));
+                }
+            }
+            // No handler provided - return Unit (effect is unhandled)
+            // This allows effect declarations to be used without requiring handlers
+            // when running in contexts that don't need the effect to actually do anything.
+            Ok(Value::Unit)
         }
     }
 
@@ -3211,6 +3384,10 @@ mod tests {
         };
 
         let mut interpreter = Interpreter::with_capabilities(capabilities);
+        // Add the project root as a search path for stdlib imports
+        if let Ok(cwd) = std::env::current_dir() {
+            interpreter.add_search_path(cwd);
+        }
         interpreter.eval_module(&module)
     }
 
@@ -5883,6 +6060,20 @@ fn main() -> Int {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_stdlib_import_use() {
+        let source = r#"
+module example
+import std.math
+
+fn main() -> Bool {
+  is_even(4)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
     // === P5.4: Custom assert messages ===
 
     #[test]
@@ -5933,6 +6124,29 @@ fn main() -> Text {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Text(s) if s == "effects defined"));
+    }
+
+    #[test]
+    fn test_user_effect_handler_dispatch() {
+        // Test user-defined effect with a handler record
+        let source = r#"
+module example
+
+effect Logger {
+  fn log(msg: Text) -> Unit
+}
+
+fn do_work() -> Int effects(Logger) {
+  Logger.log("starting work")
+  42
+}
+
+fn main() -> Int {
+  do_work()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
     }
 
     // === P6.4: Tail call optimization ===

@@ -15,6 +15,7 @@ pub struct Parser<'a> {
     source: SourceFile,
     errors: DiagnosticBag,
     peeked: Option<Token>,
+    peeked2: Option<Token>,
 }
 
 impl<'a> Parser<'a> {
@@ -25,6 +26,7 @@ impl<'a> Parser<'a> {
             source,
             errors: DiagnosticBag::new(),
             peeked: None,
+            peeked2: None,
         }
     }
 
@@ -734,6 +736,10 @@ impl<'a> Parser<'a> {
         while !self.check(TokenKind::RBrace) && !self.is_eof() {
             if self.check(TokenKind::Let) || self.check(TokenKind::Return) {
                 stmts.push(self.parse_stmt()?);
+            } else if self.check(TokenKind::Fn) && matches!(self.peek2().kind, TokenKind::Ident(_))
+            {
+                // Local named function definition: `fn name(...) { ... }`
+                stmts.push(self.parse_local_fn_stmt()?);
             } else {
                 // Parse an expression
                 let e = self.parse_expr()?;
@@ -1090,7 +1096,7 @@ impl<'a> Parser<'a> {
                     name,
                 })
             }
-            TokenKind::LBrace => self.parse_record_expr(),
+            TokenKind::LBrace => self.parse_brace_expr(),
             TokenKind::LParen => {
                 self.advance();
                 if self.check(TokenKind::RParen) {
@@ -1154,27 +1160,197 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_record_expr(&mut self) -> Result<Expr, Diagnostic> {
+    /// Parse a `{...}` expression, disambiguating between record literals and block expressions.
+    ///
+    /// Record: `{ name = expr, ... }`
+    /// Block: `{ stmt; stmt; expr }` (contains let, return, fn, or expressions)
+    fn parse_brace_expr(&mut self) -> Result<Expr, Diagnostic> {
         let start_span = self.current_span();
         self.expect(TokenKind::LBrace)?;
 
+        // Empty braces: `{}` → empty record
+        if self.check(TokenKind::RBrace) {
+            self.advance();
+            let end_span = self.current_span();
+            return Ok(Expr::Record {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                fields: vec![],
+            });
+        }
+
+        // If next token starts a statement, it's definitely a block
+        if matches!(self.peek().kind, TokenKind::Let | TokenKind::Return) {
+            return self.parse_block_body(start_span);
+        }
+
+        // If next token is `fn` followed by an identifier, it's a local function def → block
+        if self.check(TokenKind::Fn) && matches!(self.peek2().kind, TokenKind::Ident(_)) {
+            return self.parse_block_body(start_span);
+        }
+
+        // If it's a keyword that can only start an expression (not a record field), it's a block
+        if matches!(
+            self.peek().kind,
+            TokenKind::For
+                | TokenKind::While
+                | TokenKind::If
+                | TokenKind::Match
+                | TokenKind::Assert
+                | TokenKind::Break
+                | TokenKind::Continue
+                | TokenKind::Fn
+                | TokenKind::True
+                | TokenKind::False
+                | TokenKind::IntLit(_)
+                | TokenKind::FloatLit(_)
+                | TokenKind::TextLit(_)
+                | TokenKind::LBracket
+                | TokenKind::LParen
+                | TokenKind::Minus
+                | TokenKind::Not
+        ) {
+            return self.parse_block_body(start_span);
+        }
+
+        // If it's an identifier, we need to check what follows
+        if matches!(self.peek().kind, TokenKind::Ident(_)) {
+            // Peek at the token after the identifier
+            let after_ident = &self.peek2().kind;
+            if matches!(after_ident, TokenKind::Eq) {
+                // `{ name = ...` → record literal
+                return self.parse_record_fields(start_span);
+            }
+            // Otherwise it's a block (e.g., `{ x + 1 }` or `{ x }`)
+            return self.parse_block_body(start_span);
+        }
+
+        // Default: treat as block expression
+        self.parse_block_body(start_span)
+    }
+
+    /// Parse the body of a block expression after `{` has already been consumed.
+    fn parse_block_body(&mut self, start_span: Span) -> Result<Expr, Diagnostic> {
+        let mut stmts = Vec::new();
+        let mut expr = None;
+
+        while !self.check(TokenKind::RBrace) && !self.is_eof() {
+            if self.check(TokenKind::Let) || self.check(TokenKind::Return) {
+                stmts.push(self.parse_stmt()?);
+            } else if self.check(TokenKind::Fn) && matches!(self.peek2().kind, TokenKind::Ident(_))
+            {
+                // Local named function definition: `fn name(...) { ... }`
+                stmts.push(self.parse_local_fn_stmt()?);
+            } else {
+                let e = self.parse_expr()?;
+
+                if self.check(TokenKind::Eq) {
+                    self.advance();
+                    let value = self.parse_expr()?;
+                    let span = e.span().merge(value.span());
+                    stmts.push(Stmt::Assign {
+                        id: NodeId::new(),
+                        span,
+                        target: Box::new(e),
+                        value: Box::new(value),
+                    });
+                } else if self.check(TokenKind::RBrace) {
+                    expr = Some(Box::new(e));
+                    break;
+                } else {
+                    let span = e.span().clone();
+                    stmts.push(Stmt::Expr {
+                        id: NodeId::new(),
+                        span,
+                        expr: Box::new(e),
+                    });
+                }
+            }
+        }
+
+        self.expect(TokenKind::RBrace)?;
+        let end_span = self.current_span();
+
+        Ok(Expr::Block {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            block: Box::new(Block {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                stmts,
+                expr,
+            }),
+        })
+    }
+
+    /// Parse a local named function definition as a let statement.
+    /// `fn name(params) -> RetType { body }` becomes `let name = fn(params) -> RetType { body }`
+    fn parse_local_fn_stmt(&mut self) -> Result<Stmt, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::Fn)?;
+        let name = self.expect_ident()?;
+
+        // Parse type parameters if present (e.g., `fn id[T](x: T)`)
+        let _type_params = self.parse_optional_type_params()?;
+
+        self.expect(TokenKind::LParen)?;
+        let mut params = Vec::new();
+        if !self.check(TokenKind::RParen) {
+            params.push(self.parse_lambda_param()?);
+            while self.check(TokenKind::Comma) {
+                self.advance();
+                if self.check(TokenKind::RParen) {
+                    break;
+                }
+                params.push(self.parse_lambda_param()?);
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+
+        let return_type = if self.check(TokenKind::Arrow) {
+            self.advance();
+            Some(Box::new(self.parse_type_expr()?))
+        } else {
+            None
+        };
+
+        let body = Box::new(self.parse_block()?);
+        let end_span = self.current_span();
+
+        Ok(Stmt::Let {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            name,
+            mutable: false,
+            ty: None,
+            value: Box::new(Expr::Lambda {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                params,
+                return_type,
+                body,
+            }),
+        })
+    }
+
+    /// Parse record literal fields after `{` has been consumed and first ident confirmed.
+    fn parse_record_fields(&mut self, start_span: Span) -> Result<Expr, Diagnostic> {
         let mut fields = Vec::new();
-        if !self.check(TokenKind::RBrace) {
+
+        let name = self.expect_ident()?;
+        self.expect(TokenKind::Eq)?;
+        let value = self.parse_expr()?;
+        fields.push((name, Box::new(value)));
+
+        while self.check(TokenKind::Comma) {
+            self.advance();
+            if self.check(TokenKind::RBrace) {
+                break;
+            }
             let name = self.expect_ident()?;
             self.expect(TokenKind::Eq)?;
             let value = self.parse_expr()?;
             fields.push((name, Box::new(value)));
-
-            while self.check(TokenKind::Comma) {
-                self.advance();
-                if self.check(TokenKind::RBrace) {
-                    break;
-                }
-                let name = self.expect_ident()?;
-                self.expect(TokenKind::Eq)?;
-                let value = self.parse_expr()?;
-                fields.push((name, Box::new(value)));
-            }
         }
 
         self.expect(TokenKind::RBrace)?;
@@ -1619,8 +1795,22 @@ impl<'a> Parser<'a> {
         self.peeked.clone().unwrap()
     }
 
+    /// Peek at the second upcoming token (two-token lookahead)
+    fn peek2(&mut self) -> Token {
+        // Ensure first peeked token is buffered
+        let _ = self.peek();
+        if self.peeked2.is_none() {
+            self.peeked2 = Some(self.lexer.next_token());
+        }
+        self.peeked2.clone().unwrap()
+    }
+
     fn advance(&mut self) -> Token {
         if let Some(token) = self.peeked.take() {
+            // Move peeked2 into peeked if it exists
+            if self.peeked2.is_some() {
+                self.peeked = self.peeked2.take();
+            }
             token
         } else {
             self.lexer.next_token()
@@ -1637,11 +1827,6 @@ impl<'a> Parser<'a> {
 
     fn check(&mut self, kind: TokenKind) -> bool {
         std::mem::discriminant(&self.peek().kind) == std::mem::discriminant(&kind)
-    }
-
-    #[allow(dead_code)]
-    fn check_ident(&mut self, name: &str) -> bool {
-        matches!(&self.peek().kind, TokenKind::Ident(n) if n == name)
     }
 
     fn expect(&mut self, kind: TokenKind) -> Result<Token, Diagnostic> {
