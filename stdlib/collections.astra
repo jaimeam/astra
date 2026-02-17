@@ -1,0 +1,32 @@
+module std.collections
+
+# P4.4: Standard collection utilities
+
+fn group_by_even(items: List[Int]) -> (List[Int], List[Int]) {
+  let evens = items.filter(fn(x) { x % 2 == 0 })
+  let odds = items.filter(fn(x) { x % 2 != 0 })
+  (evens, odds)
+}
+
+fn frequencies(items: List[Int]) -> Map[Int, Int] {
+  let result = Map.new()
+  for item in items {
+    let count = result.get(item)
+    if count == 0 {
+      result.set(item, 1)
+    } else {
+      result.set(item, count + 1)
+    }
+  }
+}
+
+fn chunks(items: List[Int], size: Int) -> List[List[Int]] {
+  let result = []
+  let i = 0
+  while i < items.len() {
+    let chunk = items.slice(i, i + size)
+    result = result + [chunk]
+    i = i + size
+  }
+  result
+}
