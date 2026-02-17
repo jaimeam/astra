@@ -372,8 +372,25 @@ impl TypeChecker {
     /// Check a single item
     fn check_item(&mut self, item: &Item) {
         match item {
-            Item::Import(_) => {
-                // TODO: resolve imports
+            Item::Import(import) => {
+                // Register imported names as known bindings so they don't
+                // trigger E1002 "Unknown identifier" errors. Full cross-module
+                // type resolution is deferred to v2.
+                match &import.kind {
+                    ImportKind::Module => {
+                        if let Some(name) = import.path.segments.last() {
+                            self.env.define(name.clone(), Type::Unknown);
+                        }
+                    }
+                    ImportKind::Alias(alias) => {
+                        self.env.define(alias.clone(), Type::Unknown);
+                    }
+                    ImportKind::Items(items) => {
+                        for item_name in items {
+                            self.env.define(item_name.clone(), Type::Unknown);
+                        }
+                    }
+                }
             }
             Item::TypeDef(def) => self.check_typedef(def),
             Item::EnumDef(def) => self.check_enumdef(def),
@@ -395,12 +412,66 @@ impl TypeChecker {
         }
     }
 
-    fn check_typedef(&mut self, _def: &TypeDef) {
-        // TODO: check type definition is well-formed
+    fn check_typedef(&mut self, def: &TypeDef) {
+        // Resolve the underlying type expression to verify it references valid types
+        let _resolved = self.resolve_type_expr(&def.value);
+
+        // If the typedef has an invariant, type-check it
+        if let Some(invariant) = &def.invariant {
+            let mut inv_env = self.env.child();
+            // `self` is available inside the invariant as the value being checked
+            inv_env.define("self".to_string(), self.resolve_type_expr(&def.value));
+            let mut effects = HashSet::new();
+            let inv_ty = self.check_expr_with_effects(invariant, &inv_env, &mut effects);
+            if inv_ty != Type::Bool && inv_ty != Type::Unknown {
+                self.diagnostics.push(
+                    Diagnostic::error(crate::diagnostics::error_codes::types::TYPE_MISMATCH)
+                        .message(format!(
+                            "Type invariant for `{}` must be a Bool expression, found {:?}",
+                            def.name, inv_ty
+                        ))
+                        .span(def.span.clone())
+                        .build(),
+                );
+            }
+        }
     }
 
-    fn check_enumdef(&mut self, _def: &EnumDef) {
-        // TODO: check enum definition is well-formed
+    fn check_enumdef(&mut self, def: &EnumDef) {
+        // Check for duplicate variant names
+        let mut seen_variants = HashSet::new();
+        for variant in &def.variants {
+            if !seen_variants.insert(&variant.name) {
+                self.diagnostics.push(
+                    Diagnostic::error(crate::diagnostics::error_codes::types::DUPLICATE_FIELD)
+                        .message(format!(
+                            "Duplicate variant `{}` in enum `{}`",
+                            variant.name, def.name
+                        ))
+                        .span(variant.span.clone())
+                        .build(),
+                );
+            }
+
+            // Check for duplicate field names within each variant
+            let mut seen_fields = HashSet::new();
+            for field in &variant.fields {
+                if !seen_fields.insert(&field.name) {
+                    self.diagnostics.push(
+                        Diagnostic::error(crate::diagnostics::error_codes::types::DUPLICATE_FIELD)
+                            .message(format!(
+                                "Duplicate field `{}` in variant `{}`",
+                                field.name, variant.name
+                            ))
+                            .span(field.span.clone())
+                            .build(),
+                    );
+                }
+
+                // Resolve each field type to check it's valid
+                let _resolved = self.resolve_type_expr(&field.ty);
+            }
+        }
     }
 
     fn check_fndef(&mut self, def: &FnDef) {
@@ -2011,6 +2082,134 @@ fn swap(pair: (Int, Int)) -> (Int, Int) {
             result.is_ok(),
             "tuple types in signatures should parse and check: {:?}",
             result.unwrap_err()
+        );
+    }
+
+    // R9: check_typedef and check_enumdef tests
+
+    #[test]
+    fn test_typedef_well_formed() {
+        let source = r#"
+module example
+
+type Name = Text
+
+fn greet(n: Name) -> Text {
+  n
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "well-formed type def should pass");
+    }
+
+    #[test]
+    fn test_typedef_with_invariant() {
+        let source = r#"
+module example
+
+type Positive = Int invariant self > 0
+
+fn double(x: Positive) -> Int {
+  x + x
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "type def with valid invariant should pass");
+    }
+
+    #[test]
+    fn test_enumdef_well_formed() {
+        let source = r#"
+module example
+
+enum Direction =
+  | North
+  | South
+  | East
+  | West
+
+fn describe(d: Direction) -> Text {
+  match d {
+    North => "north"
+    South => "south"
+    East => "east"
+    West => "west"
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "well-formed enum def should pass");
+    }
+
+    #[test]
+    fn test_enumdef_with_fields_well_formed() {
+        let source = r#"
+module example
+
+enum Expr =
+  | Num(value: Int)
+  | Add(left: Int, right: Int)
+
+fn eval(e: Expr) -> Int {
+  match e {
+    Num(v) => v
+    Add(l, r) => l + r
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "enum def with fields should pass");
+    }
+
+    // R10: Import resolution tests
+
+    #[test]
+    fn test_import_module_registers_name() {
+        let source = r#"
+module example
+
+import std.math
+
+fn main() -> Int {
+  let _m = math
+  0
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "imported module name should be resolvable");
+    }
+
+    #[test]
+    fn test_import_alias_registers_name() {
+        let source = r#"
+module example
+
+import std.math as M
+
+fn main() -> Int {
+  let _m = M
+  0
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "import alias should be resolvable");
+    }
+
+    #[test]
+    fn test_unknown_identifier_still_errors() {
+        let source = r#"
+module example
+
+fn main() -> Int {
+  totally_unknown + 1
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_err(), "unknown identifier should error");
+        let diags = result.unwrap_err();
+        assert!(
+            diags.diagnostics().iter().any(|d| d.code == "E1002"),
+            "should report E1002 unknown identifier"
         );
     }
 }

@@ -6,7 +6,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::interpreter::{
-    Capabilities, ConsoleCapability, EnvCapability, FixedClock, Interpreter, SeededRand,
+    Capabilities, ConsoleCapability, EnvCapability, FixedClock, Interpreter, MockConsole,
+    SeededRand,
 };
 use crate::parser::{Lexer, Parser as AstraParser, SourceFile};
 
@@ -481,33 +482,6 @@ fn run_test(
     Ok(())
 }
 
-/// Test console that captures output
-struct TestConsole {
-    output: std::cell::RefCell<Vec<String>>,
-}
-
-impl TestConsole {
-    fn new() -> Self {
-        Self {
-            output: std::cell::RefCell::new(Vec::new()),
-        }
-    }
-}
-
-impl ConsoleCapability for TestConsole {
-    fn print(&self, text: &str) {
-        self.output.borrow_mut().push(text.to_string());
-    }
-
-    fn println(&self, text: &str) {
-        self.output.borrow_mut().push(format!("{}\n", text));
-    }
-
-    fn read_line(&self) -> Option<String> {
-        None
-    }
-}
-
 /// Configure standard search paths for module resolution.
 ///
 /// Adds the following search paths in order:
@@ -588,10 +562,10 @@ impl crate::interpreter::NetCapability for MockNet {
 /// - `Clock = Clock.fixed(<time>)` -> FixedClock
 /// - `Fs = mock_fs` or `Fs = ...` -> MockFs
 /// - `Net = mock_net` or `Net = ...` -> MockNet
-/// - `Console = ...` -> TestConsole (always provided)
+/// - `Console = ...` -> MockConsole (always provided)
 fn build_test_capabilities(using: &Option<crate::parser::ast::UsingClause>) -> Capabilities {
     let mut capabilities = Capabilities {
-        console: Some(Box::new(TestConsole::new())),
+        console: Some(Box::new(MockConsole::new())),
         ..Default::default()
     };
 
@@ -950,4 +924,108 @@ fn run_package(output: &PathBuf, target: &str) -> Result<(), Box<dyn std::error:
     println!("  {} files packaged successfully", source_files.len());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::Span;
+    use crate::parser::ast::{Expr, NodeId};
+
+    fn dummy_span() -> Span {
+        Span::new(std::path::PathBuf::from("test.astra"), 0, 0, 1, 1, 1, 1)
+    }
+
+    #[test]
+    fn test_extract_call_int_arg_match() {
+        let expr = Expr::Call {
+            id: NodeId::new(),
+            span: dummy_span(),
+            func: Box::new(Expr::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "seeded_rand".to_string(),
+            }),
+            args: vec![Expr::IntLit {
+                id: NodeId::new(),
+                span: dummy_span(),
+                value: 42,
+            }],
+        };
+        assert_eq!(extract_call_int_arg(&expr, "seeded_rand"), Some(42));
+    }
+
+    #[test]
+    fn test_extract_call_int_arg_wrong_name() {
+        let expr = Expr::Call {
+            id: NodeId::new(),
+            span: dummy_span(),
+            func: Box::new(Expr::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "other_fn".to_string(),
+            }),
+            args: vec![Expr::IntLit {
+                id: NodeId::new(),
+                span: dummy_span(),
+                value: 42,
+            }],
+        };
+        assert_eq!(extract_call_int_arg(&expr, "seeded_rand"), None);
+    }
+
+    #[test]
+    fn test_extract_method_int_arg_match() {
+        let expr = Expr::MethodCall {
+            id: NodeId::new(),
+            span: dummy_span(),
+            receiver: Box::new(Expr::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "Clock".to_string(),
+            }),
+            method: "fixed".to_string(),
+            args: vec![Expr::IntLit {
+                id: NodeId::new(),
+                span: dummy_span(),
+                value: 1000,
+            }],
+        };
+        assert_eq!(extract_method_int_arg(&expr, "Clock", "fixed"), Some(1000));
+    }
+
+    #[test]
+    fn test_extract_method_int_arg_wrong_receiver() {
+        let expr = Expr::MethodCall {
+            id: NodeId::new(),
+            span: dummy_span(),
+            receiver: Box::new(Expr::Ident {
+                id: NodeId::new(),
+                span: dummy_span(),
+                name: "Other".to_string(),
+            }),
+            method: "fixed".to_string(),
+            args: vec![Expr::IntLit {
+                id: NodeId::new(),
+                span: dummy_span(),
+                value: 1000,
+            }],
+        };
+        assert_eq!(extract_method_int_arg(&expr, "Clock", "fixed"), None);
+    }
+
+    #[test]
+    fn test_build_test_capabilities_default() {
+        let caps = build_test_capabilities(&None);
+        assert!(caps.console.is_some());
+        assert!(caps.rand.is_none());
+        assert!(caps.clock.is_none());
+    }
+
+    #[test]
+    fn test_configure_search_paths() {
+        let mut interpreter = Interpreter::new();
+        configure_search_paths(&mut interpreter, None);
+        assert!(!interpreter.search_paths.is_empty());
+    }
 }

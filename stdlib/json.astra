@@ -1,0 +1,36 @@
+module std.json
+
+fn stringify(value: Text) -> Text
+{
+  "\"" + value + "\""
+}
+
+fn parse_int(s: Text) -> Result[Int, Text]
+{
+  let trimmed = s.trim()
+  if trimmed.len() == 0 {
+    Err("empty string")
+  } else {
+    Ok(to_int(trimmed))
+  }
+}
+
+fn parse_bool(s: Text) -> Result[Bool, Text]
+{
+  let trimmed = s.trim()
+  if trimmed == "true" {
+    Ok(true)
+  } else if trimmed == "false" {
+    Ok(false)
+  } else {
+    Err("expected 'true' or 'false'")
+  }
+}
+
+fn escape(s: Text) -> Text
+{
+  s.replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\n", "\\n")
+    .replace("\t", "\\t")
+}

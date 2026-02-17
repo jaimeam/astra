@@ -1,0 +1,76 @@
+module std.iter
+
+fn sum(list: List[Int]) -> Int
+{
+  let mut acc = 0
+  for x in list {
+    acc = acc + x
+  }
+  acc
+}
+
+fn product(list: List[Int]) -> Int
+{
+  let mut acc = 1
+  for x in list {
+    acc = acc * x
+  }
+  acc
+}
+
+fn all(list: List[Bool]) -> Bool
+{
+  for x in list {
+    if x == false {
+      return false
+    }
+  }
+  true
+}
+
+fn any(list: List[Bool]) -> Bool
+{
+  for x in list {
+    if x == true {
+      return true
+    }
+  }
+  false
+}
+
+fn count[T](list: List[T], pred: (T) -> Bool) -> Int
+{
+  let mut n = 0
+  for x in list {
+    if pred(x) {
+      n = n + 1
+    }
+  }
+  n
+}
+
+fn flat_map[T, U](list: List[T], f: (T) -> List[U]) -> List[U]
+{
+  let mut result: List[U] = []
+  for x in list {
+    let items = f(x)
+    for item in items {
+      result = result + [item]
+    }
+  }
+  result
+}
+
+fn reduce[T](list: List[T], f: (T, T) -> T) -> Option[T]
+{
+  if len(list) == 0 {
+    None
+  } else {
+    let mut acc = list.head()
+    let rest = list.tail()
+    for x in rest {
+      acc = f(acc, x)
+    }
+    Some(acc)
+  }
+}
