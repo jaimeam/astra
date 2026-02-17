@@ -441,7 +441,43 @@ impl<'a> Parser<'a> {
 
     fn parse_param(&mut self) -> Result<Param, Diagnostic> {
         let start_span = self.current_span();
+
+        // Check for destructuring patterns: `{x, y}: {x: Int, y: Int}` or `(a, b): (Int, Text)`
+        if self.check(TokenKind::LBrace) || self.check(TokenKind::LParen) {
+            let pattern = self.parse_pattern()?;
+            self.expect(TokenKind::Colon)?;
+            let ty = self.parse_type_expr()?;
+            let end_span = self.current_span();
+            // Use a generated name for the parameter
+            let name = format!("__destructured_{}", NodeId::new().0);
+            return Ok(Param {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                name,
+                ty,
+                pattern: Some(pattern),
+            });
+        }
+
         let name = self.expect_ident()?;
+
+        // Check for `self` parameter (no type annotation)
+        if name == "self" && !self.check(TokenKind::Colon) {
+            let end_span = self.current_span();
+            return Ok(Param {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                name,
+                ty: TypeExpr::Named {
+                    id: NodeId::new(),
+                    span: start_span.merge(&end_span),
+                    name: "Self".to_string(),
+                    args: vec![],
+                },
+                pattern: None,
+            });
+        }
+
         self.expect(TokenKind::Colon)?;
         let ty = self.parse_type_expr()?;
 
@@ -451,6 +487,7 @@ impl<'a> Parser<'a> {
             span: start_span.merge(&end_span),
             name,
             ty,
+            pattern: None,
         })
     }
 

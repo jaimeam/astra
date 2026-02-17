@@ -1,0 +1,44 @@
+# Parameter destructuring tests
+module destructuring
+
+fn get_x({x, y}: {x: Int, y: Int}) -> Int {
+  x
+}
+
+fn get_y({x, y}: {x: Int, y: Int}) -> Int {
+  y
+}
+
+fn sum_pair((a, b): (Int, Int)) -> Int {
+  a + b
+}
+
+fn swap((a, b): (Int, Int)) -> (Int, Int) {
+  (b, a)
+}
+
+fn point_distance({x, y}: {x: Int, y: Int}) -> Int {
+  x + y
+}
+
+test "record destructuring extracts first field" {
+  assert_eq(get_x({x = 10, y = 20}), 10)
+}
+
+test "record destructuring extracts second field" {
+  assert_eq(get_y({x = 10, y = 20}), 20)
+}
+
+test "tuple destructuring sum" {
+  assert_eq(sum_pair((3, 7)), 10)
+}
+
+test "tuple destructuring swap" {
+  let result = swap((1, 2))
+  assert_eq(result, (2, 1))
+}
+
+test "record destructuring in computation" {
+  let p = {x = 5, y = 15}
+  assert_eq(point_distance(p), 20)
+}

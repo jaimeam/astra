@@ -1,0 +1,46 @@
+# Enhanced generic type checking tests
+module generics
+
+fn identity[T](x: T) -> T {
+  x
+}
+
+fn first[T](a: T, b: T) -> T {
+  a
+}
+
+fn pair[A, B](a: A, b: B) -> (A, B) {
+  (a, b)
+}
+
+fn wrap[T](x: T) -> List[T] {
+  [x]
+}
+
+trait Show {
+  fn show(self: Text) -> Text
+}
+
+trait Eq {
+  fn equals(self: Int, other: Int) -> Bool
+}
+
+impl Show for Int {
+  fn show(self: Int) -> Text {
+    "int"
+  }
+}
+
+impl Eq for Int {
+  fn equals(self: Int, other: Int) -> Bool {
+    self == other
+  }
+}
+
+fn main() -> Unit {
+  let x = identity(42)
+  let s = identity("hello")
+  let p = pair(1, "two")
+  let w = wrap(true)
+  let _f = first(1, 2)
+}

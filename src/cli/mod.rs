@@ -82,6 +82,9 @@ pub enum Command {
         #[arg(long, default_value = "wasm")]
         target: String,
     },
+
+    /// Start Language Server Protocol server (for IDE integration)
+    Lsp,
 }
 
 impl Cli {
@@ -104,6 +107,9 @@ impl Cli {
             }
             Command::Repl => {
                 run_repl()?;
+            }
+            Command::Lsp => {
+                crate::lsp::run_server()?;
             }
             Command::Package { output, target } => {
                 run_package(&output, &target)?;

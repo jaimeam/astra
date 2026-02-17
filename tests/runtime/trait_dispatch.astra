@@ -1,0 +1,43 @@
+# Trait method dispatch tests
+module trait_dispatch
+
+trait Describe {
+  fn describe(self: Text) -> Text
+}
+
+impl Describe for Int {
+  fn describe(self: Int) -> Text {
+    "an integer"
+  }
+}
+
+impl Describe for Text {
+  fn describe(self: Text) -> Text {
+    "a text value"
+  }
+}
+
+trait Greet {
+  fn greet(self: Text, name: Text) -> Text
+}
+
+impl Greet for Text {
+  fn greet(self: Text, name: Text) -> Text {
+    self + ", " + name + "!"
+  }
+}
+
+test "trait dispatch on Int" {
+  let x = 42
+  assert_eq(x.describe(), "an integer")
+}
+
+test "trait dispatch on Text" {
+  let s = "hello"
+  assert_eq(s.describe(), "a text value")
+}
+
+test "trait dispatch with args" {
+  let greeting = "Hello"
+  assert_eq(greeting.greet("World"), "Hello, World!")
+}

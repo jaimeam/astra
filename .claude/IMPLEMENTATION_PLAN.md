@@ -16,7 +16,7 @@
 | **Exhaustive match checking** | Compiler catches forgotten cases | ✅ Implemented |
 | **One canonical format** | No style choices to make | ✅ Formatter wired to CLI |
 | **Contracts (requires/ensures)** | LLMs get pre/postcondition verification | ✅ Parsed + enforced at runtime |
-| **Generic functions** | Type-safe reusable code | 🟡 Parsed + executed; checker treats type params as opaque |
+| **Generic functions** | Type-safe reusable code | ✅ Parsed + executed; type params unified at call sites |
 | **For loops** | Practical iteration over collections | ✅ `for x in list { ... }` |
 | **Multi-field variants** | Ergonomic enum destructuring | ✅ `Rectangle(w, h)` |
 | **Module system** | Cross-file code organization | ✅ Imports resolve and execute cross-file; stdlib importable |
@@ -148,23 +148,23 @@
 | **P6.4** | Tail call optimization | Auto-detected TCO for self-recursive tail calls | ✅ Done |
 | **P6.5** | Async/await syntax | `await` keyword parsed + evaluated (single-threaded) | 🟡 Parsed; evaluates synchronously |
 
-### ✅ Phase 7: Tooling & Distribution (80% — core commands work, v2 items remain)
+### ✅ Phase 7: Tooling & Distribution
 
 | # | Task | Impact | Status |
 |---|------|--------|--------|
 | **P7.1** | REPL (`astra repl`) | Interactive expression evaluation + definitions | ✅ Done |
 | **P7.2** | `package` command | Validates, type-checks, bundles .astra files | ✅ Done |
-| **P7.3** | LSP / language server | IDE integration | 📋 Planned (v2) |
-| **P7.4** | WASM compilation target | Browser/edge deployment | 📋 Planned (v2) |
-| **P7.5** | Incremental compilation | Fast rebuilds | 📋 Planned (v2) |
+| **P7.3** | LSP / language server | IDE integration | ✅ Done |
+| **P7.4** | WASM compilation target | Browser/edge deployment | 📋 Planned |
+| **P7.5** | Incremental compilation | Fast rebuilds | 📋 Planned |
 
 ---
 
-## Estimated Completion: 100% (v0.1)
+## Estimated Completion
 
-- **Fully working**: Parser (with block expressions, local functions, 2-token lookahead), lexer, formatter, interpreter runtime (split into submodules), diagnostics, CLI (run/check/test/fmt/repl/package)
-- **Partially working**: Type checker (basic types + effects + exhaustiveness + typedef/enumdef validation + import resolution; generics/traits check bypassed)
-- **Not started (v2)**: LSP server, WASM target, incremental compilation
+- **Fully working**: Parser (with block expressions, local functions, 2-token lookahead), lexer, formatter, interpreter runtime (split into submodules), diagnostics, CLI (run/check/test/fmt/repl/package/lsp)
+- **Partially working**: Type checker (basic types + effects + exhaustiveness + typedef/enumdef validation + import resolution + generics + traits)
+- **Not started**: WASM target, incremental compilation
 - All 14 examples parse, format, type-check, run correctly, and produce visible output
 - 12 stdlib modules (8 original + 4 new: json, io, iter, error)
 - Complete standard library documentation (docs/stdlib.md) covering all 137 built-in methods and functions
@@ -319,13 +319,20 @@ cargo run -- package -o dist             # Package project
 | **R10** | Type checker import resolution | Registers imported names as known bindings | ✅ Done |
 | **R11** | Add missing stdlib modules | `json`, `io`, `iter`, `error` modules | ✅ Done |
 
-### V2 Roadmap (Future)
+### ✅ Additional Features (Completed)
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Generic type checking with unification** | Type parameter inference and substitution during function calls; binds type params to concrete types from arguments and substitutes in return types | ✅ Done |
+| **Trait method dispatch** | `impl TraitName for Type { methods }` registers methods; `value.method()` dispatches through trait impls based on receiver runtime type | ✅ Done |
+| **Parameter destructuring** | `fn foo({x, y}: {x: Int, y: Int})` and `fn foo((a, b): (Int, Int))` — record and tuple patterns in function signatures, desugared at load time | ✅ Done |
+| **LSP Server** | Full Language Server Protocol over stdio with diagnostics, hover, go-to-definition, document symbols, and completion. CLI: `astra lsp` | ✅ Done |
+
+### Roadmap (Future)
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **Full generic type checking** | Hindley-Milner unification for type params | High |
-| **Trait method dispatch** | Resolve `impl` methods on trait-typed values | High |
-| **Parameter destructuring** | `fn foo({x, y}: {x: Int, y: Int})` in function signatures | Medium |
+| **Full HM type inference** | Complete Hindley-Milner with constraint solving | High |
+| **Trait constraint bounds** | `fn sort[T: Ord](items: List[T])` — require traits on type params | High |
 | **True async/await** | Concurrent execution with effect-based scheduling | Medium |
-| **LSP Server** | Language Server Protocol for IDE integration | Medium |
 | **WASM Target** | Compile to WebAssembly for browser/edge deployment | Low |
 | **Incremental Compilation** | Cache and reuse compilation artifacts | Low |

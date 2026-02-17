@@ -26,7 +26,15 @@ enum TcoResult {
     TailCall(Vec<Value>),
 }
 
-/// Interpreter for Astra programs
+/// A registered trait implementation for runtime dispatch
+#[derive(Debug, Clone)]
+struct RuntimeTraitImpl {
+    /// The target type name (e.g., "Int", "Text", "MyType")
+    target_type_name: String,
+    /// Method implementations: method_name -> closure
+    methods: HashMap<String, Value>,
+}
+
 pub struct Interpreter {
     /// Global environment
     pub env: Environment,
@@ -44,6 +52,8 @@ pub struct Interpreter {
     type_defs: HashMap<String, TypeDef>,
     /// Effect definitions (P6.2)
     effect_defs: HashMap<String, EffectDecl>,
+    /// Trait implementations for method dispatch
+    trait_impls: Vec<RuntimeTraitImpl>,
 }
 
 impl Interpreter {
@@ -63,6 +73,7 @@ impl Interpreter {
             call_stack: Vec::new(),
             type_defs: HashMap::new(),
             effect_defs: HashMap::new(),
+            trait_impls: Vec::new(),
         }
     }
 
@@ -188,11 +199,35 @@ impl Interpreter {
                     }
                     let params: Vec<String> =
                         fn_def.params.iter().map(|p| p.name.clone()).collect();
+
+                    // Build body block, prepending destructuring for pattern params
+                    let mut body_block = fn_def.body.clone();
+                    let mut destructure_stmts = Vec::new();
+                    for param in &fn_def.params {
+                        if let Some(ref pattern) = param.pattern {
+                            destructure_stmts.push(Stmt::LetPattern {
+                                id: NodeId::new(),
+                                span: param.span.clone(),
+                                pattern: pattern.clone(),
+                                ty: None,
+                                value: Box::new(Expr::Ident {
+                                    id: NodeId::new(),
+                                    span: param.span.clone(),
+                                    name: param.name.clone(),
+                                }),
+                            });
+                        }
+                    }
+                    if !destructure_stmts.is_empty() {
+                        destructure_stmts.extend(body_block.stmts);
+                        body_block.stmts = destructure_stmts;
+                    }
+
                     let closure = Value::Closure {
                         name: Some(fn_def.name.clone()),
                         params,
                         body: ClosureBody {
-                            block: fn_def.body.clone(),
+                            block: body_block,
                             requires: fn_def.requires.clone(),
                             ensures: fn_def.ensures.clone(),
                         },
@@ -231,8 +266,13 @@ impl Interpreter {
                     }
                 }
                 Item::ImplBlock(impl_block) => {
-                    // Register impl methods with qualified names
-                    // Methods are stored as "TypeName.method_name" or just "method_name"
+                    // Extract the target type name from the TypeExpr
+                    let target_type_name = match &impl_block.target_type {
+                        TypeExpr::Named { name, .. } => name.clone(),
+                        _ => "Unknown".to_string(),
+                    };
+
+                    let mut methods_map = HashMap::new();
                     for method in &impl_block.methods {
                         let params: Vec<String> =
                             method.params.iter().map(|p| p.name.clone()).collect();
@@ -246,10 +286,17 @@ impl Interpreter {
                             },
                             env: Environment::new(),
                         };
-                        // Register with qualified name for trait dispatch
+                        // Register with qualified name for backward compat
                         let qualified_name = format!("{}_{}", impl_block.trait_name, method.name);
-                        self.env.define(qualified_name, closure);
+                        self.env.define(qualified_name, closure.clone());
+                        methods_map.insert(method.name.clone(), closure);
                     }
+
+                    // Register in the trait impl registry for dispatch
+                    self.trait_impls.push(RuntimeTraitImpl {
+                        target_type_name,
+                        methods: methods_map,
+                    });
                 }
                 Item::TypeDef(type_def) => {
                     // P2.3: Store type definitions for invariant enforcement
@@ -2573,11 +2620,73 @@ impl Interpreter {
                 }
             }
 
-            _ => Err(RuntimeError::unknown_method(
-                &format!("{:?}", receiver),
-                method,
-            )),
+            _ => {
+                // Try trait method dispatch before failing
+                if let Some(result) = self.try_trait_dispatch(receiver, method, args) {
+                    return result;
+                }
+                Err(RuntimeError::unknown_method(
+                    &format!("{:?}", receiver),
+                    method,
+                ))
+            }
         }
+    }
+
+    /// Get the runtime type name of a value (for trait dispatch)
+    fn value_type_name(value: &Value) -> &'static str {
+        match value {
+            Value::Int(_) => "Int",
+            Value::Float(_) => "Float",
+            Value::Bool(_) => "Bool",
+            Value::Text(_) => "Text",
+            Value::Unit => "Unit",
+            Value::List(_) => "List",
+            Value::Tuple(_) => "Tuple",
+            Value::Map(_) => "Map",
+            Value::Set(_) => "Set",
+            Value::Some(_) | Value::None => "Option",
+            Value::Ok(_) | Value::Err(_) => "Result",
+            Value::Record(_) => "Record",
+            Value::Variant { .. } | Value::VariantConstructor { .. } => "Variant",
+            Value::Closure { .. } => "Closure",
+        }
+    }
+
+    /// Try to dispatch a method call through registered trait implementations.
+    /// Returns Some(Result) if a matching impl was found, None otherwise.
+    fn try_trait_dispatch(
+        &mut self,
+        receiver: &Value,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Option<Result<Value, RuntimeError>> {
+        let type_name = Self::value_type_name(receiver);
+
+        // Also try variant name for enum types
+        let variant_type = if let Value::Variant { name, .. } = receiver {
+            Some(name.as_str())
+        } else {
+            None
+        };
+
+        // Search trait impls for a matching method
+        for imp in &self.trait_impls.clone() {
+            let matches = imp.target_type_name == type_name
+                || variant_type.is_some_and(|v| imp.target_type_name == v);
+
+            if matches {
+                if let Some(closure) = imp.methods.get(method) {
+                    let closure = closure.clone();
+                    // Call the method with `self` as first argument
+                    let mut call_args = vec![receiver.clone()];
+                    call_args.extend(args);
+                    return Some(self.call_function(closure, call_args));
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -5602,5 +5711,91 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(42)));
+    }
+
+    // Trait method dispatch tests
+
+    #[test]
+    fn test_trait_method_dispatch() {
+        let source = r#"
+module example
+
+trait Show {
+  fn show(self: Text) -> Text
+}
+
+impl Show for Int {
+  fn show(self: Int) -> Text {
+    "integer"
+  }
+}
+
+fn main() -> Text {
+  let x = 42
+  x.show()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "integer"));
+    }
+
+    #[test]
+    fn test_trait_dispatch_with_args() {
+        let source = r#"
+module example
+
+trait Repeat {
+  fn repeat(self: Text, n: Int) -> Text
+}
+
+impl Repeat for Text {
+  fn repeat(self: Text, n: Int) -> Text {
+    if n <= 0 then "" else self
+  }
+}
+
+fn main() -> Text {
+  let s = "hello"
+  s.repeat(1)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "hello"));
+    }
+
+    // Parameter destructuring tests
+
+    #[test]
+    fn test_record_param_destructuring() {
+        let source = r#"
+module example
+
+fn get_x({x, y}: {x: Int, y: Int}) -> Int {
+  x
+}
+
+fn main() -> Int {
+  get_x({x = 10, y = 20})
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(10)));
+    }
+
+    #[test]
+    fn test_tuple_param_destructuring() {
+        let source = r#"
+module example
+
+fn sum_pair((a, b): (Int, Int)) -> Int {
+  a + b
+}
+
+fn main() -> Int {
+  sum_pair((3, 7))
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(10)));
     }
 }

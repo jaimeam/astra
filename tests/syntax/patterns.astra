@@ -108,7 +108,7 @@ fn let_pattern() -> Int {
   x + y
 }
 
-# Pattern in function parameter destructuring is planned for v2
+# Pattern in function parameter destructuring is supported:
 # For now, use let destructuring inside the function body:
 fn destructure_param_workaround(point: {x: Int, y: Int}) -> Int {
   let {x, y} = point

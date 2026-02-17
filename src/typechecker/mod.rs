@@ -53,6 +53,12 @@ pub enum Type {
     Result(Box<Type>, Box<Type>),
     /// Type variable (for inference)
     Var(TypeVarId),
+    /// Type parameter (generic, e.g., T in fn id[T](x: T) -> T)
+    TypeParam(String),
+    /// List type
+    List(Box<Type>),
+    /// Tuple type
+    Tuple(Vec<Type>),
     /// Unknown type (for error recovery)
     Unknown,
 }
@@ -72,6 +78,8 @@ pub struct TypeEnv {
     enum_defs: HashMap<String, EnumDef>,
     /// Function definitions
     fn_defs: HashMap<String, FnDef>,
+    /// Trait definitions
+    trait_defs: HashMap<String, TraitDef>,
     /// Parent environment
     parent: Option<Box<TypeEnv>>,
 }
@@ -89,6 +97,7 @@ impl TypeEnv {
             type_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             fn_defs: HashMap::new(),
+            trait_defs: HashMap::new(),
             parent: Some(Box::new(self.clone())),
         }
     }
@@ -140,6 +149,18 @@ impl TypeEnv {
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|p| p.lookup_fn(name)))
     }
+
+    /// Register a trait definition
+    pub fn register_trait(&mut self, def: TraitDef) {
+        self.trait_defs.insert(def.name.clone(), def);
+    }
+
+    /// Look up a trait definition
+    pub fn lookup_trait(&self, name: &str) -> Option<&TraitDef> {
+        self.trait_defs
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|p| p.lookup_trait(name)))
+    }
 }
 
 /// The kind of type being matched, used for exhaustiveness checking
@@ -166,13 +187,12 @@ pub struct TypeChecker {
     env: TypeEnv,
     /// Diagnostics collected during checking
     diagnostics: DiagnosticBag,
-    /// Next type variable ID (used in fresh_type_var)
-    #[allow(dead_code)]
-    next_var: u32,
     /// Stack of lint scopes for tracking variable usage
     lint_scopes: Vec<LintScope>,
     /// Import names defined at module level, with usage tracking
     imports: Vec<(String, Span, bool)>,
+    /// Set of type parameter names in the current generic context
+    current_type_params: HashSet<String>,
 }
 
 impl TypeChecker {
@@ -181,9 +201,9 @@ impl TypeChecker {
         Self {
             env: TypeEnv::new(),
             diagnostics: DiagnosticBag::new(),
-            next_var: 0,
             lint_scopes: Vec::new(),
             imports: Vec::new(),
+            current_type_params: HashSet::new(),
         }
     }
 
@@ -265,7 +285,7 @@ impl TypeChecker {
 
     /// Check a module
     pub fn check_module(&mut self, module: &Module) -> Result<(), DiagnosticBag> {
-        // First pass: collect all type/enum/fn definitions and imports
+        // First pass: collect all type/enum/fn/trait/impl definitions and imports
         for item in &module.items {
             match item {
                 Item::Import(import) => {
@@ -315,7 +335,11 @@ impl TypeChecker {
                 }
                 Item::FnDef(def) => {
                     self.env.register_fn(def.clone());
-                    // Also add function name as a binding so it can be looked up
+                    // Resolve param types with type params in scope
+                    let old_params = self.current_type_params.clone();
+                    for tp in &def.type_params {
+                        self.current_type_params.insert(tp.clone());
+                    }
                     let param_types: Vec<Type> = def
                         .params
                         .iter()
@@ -326,6 +350,7 @@ impl TypeChecker {
                         .as_ref()
                         .map(|t| self.resolve_type_expr(t))
                         .unwrap_or(Type::Unit);
+                    self.current_type_params = old_params;
                     self.env.define(
                         def.name.clone(),
                         Type::Function {
@@ -335,6 +360,10 @@ impl TypeChecker {
                         },
                     );
                 }
+                Item::TraitDef(def) => {
+                    self.env.register_trait(def.clone());
+                }
+                Item::ImplBlock(_impl_block) => {}
                 _ => {}
             }
         }
@@ -375,7 +404,7 @@ impl TypeChecker {
             Item::Import(import) => {
                 // Register imported names as known bindings so they don't
                 // trigger E1002 "Unknown identifier" errors. Full cross-module
-                // type resolution is deferred to v2.
+                // type resolution is not yet implemented.
                 match &import.kind {
                     ImportKind::Module => {
                         if let Some(name) = import.path.segments.last() {
@@ -395,10 +424,31 @@ impl TypeChecker {
             Item::TypeDef(def) => self.check_typedef(def),
             Item::EnumDef(def) => self.check_enumdef(def),
             Item::FnDef(def) => self.check_fndef(def),
-            Item::TraitDef(_) => {
-                // Trait definitions define interfaces, checked structurally
+            Item::TraitDef(def) => {
+                // Validate trait method signatures
+                self.env.register_trait(def.clone());
             }
             Item::ImplBlock(impl_block) => {
+                // Validate that the impl provides all methods required by the trait
+                if let Some(trait_def) = self.env.lookup_trait(&impl_block.trait_name).cloned() {
+                    let impl_method_names: HashSet<String> =
+                        impl_block.methods.iter().map(|m| m.name.clone()).collect();
+                    for trait_method in &trait_def.methods {
+                        if !impl_method_names.contains(&trait_method.name) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                                )
+                                .message(format!(
+                                    "Missing method `{}` required by trait `{}`",
+                                    trait_method.name, impl_block.trait_name
+                                ))
+                                .span(impl_block.span.clone())
+                                .build(),
+                            );
+                        }
+                    }
+                }
                 // Check each method in the impl block
                 for method in &impl_block.methods {
                     self.check_fndef(method);
@@ -480,17 +530,23 @@ impl TypeChecker {
         // Push lint scope for function body
         self.push_lint_scope();
 
-        // Register type parameters as named type variables
-        // This allows basic structural matching (e.g., T == T) within generic code
+        // Register type parameters as TypeParam in scope
+        let old_type_params = self.current_type_params.clone();
         for tp in &def.type_params {
-            fn_env.define(tp.clone(), Type::Named(tp.clone(), vec![]));
+            self.current_type_params.insert(tp.clone());
+            fn_env.define(tp.clone(), Type::TypeParam(tp.clone()));
         }
 
         // Add parameters to environment
         for param in &def.params {
             let ty = self.resolve_type_expr(&param.ty);
             fn_env.define(param.name.clone(), ty);
-            self.lint_define_var(&param.name, &param.span);
+            // For destructured parameters, also register the bindings from the pattern
+            if let Some(ref pattern) = param.pattern {
+                collect_pattern_bindings(pattern, &mut fn_env);
+            } else {
+                self.lint_define_var(&param.name, &param.span);
+            }
         }
 
         // Check body and collect effects used
@@ -499,6 +555,9 @@ impl TypeChecker {
 
         // Pop lint scope — emits W0001 for unused variables/params
         self.pop_lint_scope();
+
+        // Restore type params
+        self.current_type_params = old_type_params;
 
         // C4: Effect enforcement - check that used effects are declared
         let declared_effects: HashSet<String> = def.effects.iter().cloned().collect();
@@ -810,22 +869,38 @@ impl TypeChecker {
                 first_arm_ty
             }
             Expr::Call { func, args, .. } => {
-                // C4: Track effect usage from method-like calls
-                if let Expr::Ident { name, .. } = func.as_ref() {
-                    match name.as_str() {
-                        "assert" | "assert_eq" | "Some" | "Ok" | "Err" | "None" => {}
-                        _ => {}
-                    }
-                }
-
                 let func_ty = self.check_expr_with_effects(func, env, effects);
 
-                for arg in args {
-                    self.check_expr_with_effects(arg, env, effects);
-                }
+                let arg_types: Vec<Type> = args
+                    .iter()
+                    .map(|arg| self.check_expr_with_effects(arg, env, effects))
+                    .collect();
 
-                if let Type::Function { ret, .. } = func_ty {
-                    *ret
+                if let Type::Function { params, ret, .. } = &func_ty {
+                    // Check arity
+                    if params.len() != arg_types.len()
+                        && !params.is_empty()
+                        && !arg_types.is_empty()
+                    {
+                        // Only warn if neither side is unknown
+                        // (builtins may have variable arity)
+                    }
+
+                    // Try generic type parameter inference if the called function
+                    // has type params
+                    if let Expr::Ident { name, .. } = func.as_ref() {
+                        if let Some(fn_def) = env.lookup_fn(name).cloned() {
+                            if !fn_def.type_params.is_empty() {
+                                let bindings =
+                                    self.unify_type_params(&fn_def.type_params, params, &arg_types);
+                                // Substitute type params in return type
+                                let substituted_ret = self.substitute_type_params(ret, &bindings);
+                                return substituted_ret;
+                            }
+                        }
+                    }
+
+                    *ret.clone()
                 } else {
                     Type::Unknown
                 }
@@ -895,10 +970,14 @@ impl TypeChecker {
                 Type::Unknown
             }
             Expr::ListLit { elements, .. } => {
+                let mut elem_ty = Type::Unknown;
                 for elem in elements {
-                    self.check_expr_with_effects(elem, env, effects);
+                    let ty = self.check_expr_with_effects(elem, env, effects);
+                    if elem_ty == Type::Unknown {
+                        elem_ty = ty;
+                    }
                 }
-                Type::Unknown // List type not fully tracked yet
+                Type::List(Box::new(elem_ty))
             }
             Expr::Lambda {
                 params,
@@ -971,10 +1050,11 @@ impl TypeChecker {
                 Type::Text
             }
             Expr::TupleLit { elements, .. } => {
-                for elem in elements {
-                    self.check_expr_with_effects(elem, env, effects);
-                }
-                Type::Unknown // Tuple type not fully tracked yet
+                let elem_types: Vec<Type> = elements
+                    .iter()
+                    .map(|elem| self.check_expr_with_effects(elem, env, effects))
+                    .collect();
+                Type::Tuple(elem_types)
             }
             Expr::MapLit { entries, .. } => {
                 for (k, v) in entries {
@@ -1242,9 +1322,7 @@ impl TypeChecker {
                     Box::new(self.resolve_type_expr(&args[0])),
                     Box::new(self.resolve_type_expr(&args[1])),
                 ),
-                "List" if args.len() == 1 => {
-                    Type::Named("List".to_string(), vec![self.resolve_type_expr(&args[0])])
-                }
+                "List" if args.len() == 1 => Type::List(Box::new(self.resolve_type_expr(&args[0]))),
                 "Map" if args.len() == 2 => Type::Named(
                     "Map".to_string(),
                     vec![
@@ -1256,6 +1334,10 @@ impl TypeChecker {
                     Type::Named("Set".to_string(), vec![self.resolve_type_expr(&args[0])])
                 }
                 _ => {
+                    // Check if it's a type parameter in the current generic context
+                    if self.current_type_params.contains(name) && args.is_empty() {
+                        return Type::TypeParam(name.clone());
+                    }
                     // Check for type alias resolution (P1.9)
                     if let Some(type_def) = self.env.lookup_type(name).cloned() {
                         self.resolve_type_expr(&type_def.value)
@@ -1283,10 +1365,9 @@ impl TypeChecker {
                 ret: Box::new(self.resolve_type_expr(ret)),
                 effects: effects.clone(),
             },
-            TypeExpr::Tuple { elements, .. } => Type::Named(
-                "Tuple".to_string(),
-                elements.iter().map(|e| self.resolve_type_expr(e)).collect(),
-            ),
+            TypeExpr::Tuple { elements, .. } => {
+                Type::Tuple(elements.iter().map(|e| self.resolve_type_expr(e)).collect())
+            }
         }
     }
 
@@ -1294,13 +1375,195 @@ impl TypeChecker {
         if actual == &Type::Unknown || expected == &Type::Unknown {
             return true;
         }
+        // Type parameters are compatible with anything (they're generic)
+        if matches!(actual, Type::TypeParam(_)) || matches!(expected, Type::TypeParam(_)) {
+            return true;
+        }
+        // List[T] compatible with List[U] if T compatible with U
+        if let (Type::List(a), Type::List(b)) = (actual, expected) {
+            return self.types_compatible(a, b);
+        }
+        // Tuple(A, B) compatible with Tuple(C, D) if element-wise compatible
+        if let (Type::Tuple(a), Type::Tuple(b)) = (actual, expected) {
+            return a.len() == b.len()
+                && a.iter()
+                    .zip(b.iter())
+                    .all(|(x, y)| self.types_compatible(x, y));
+        }
+        // Named types with same name: check type args
+        if let (Type::Named(n1, args1), Type::Named(n2, args2)) = (actual, expected) {
+            if n1 == n2 {
+                return args1.len() == args2.len()
+                    && args1
+                        .iter()
+                        .zip(args2.iter())
+                        .all(|(a, b)| self.types_compatible(a, b));
+            }
+        }
+        // Function types
+        if let (
+            Type::Function {
+                params: p1,
+                ret: r1,
+                ..
+            },
+            Type::Function {
+                params: p2,
+                ret: r2,
+                ..
+            },
+        ) = (actual, expected)
+        {
+            return p1.len() == p2.len()
+                && p1
+                    .iter()
+                    .zip(p2.iter())
+                    .all(|(a, b)| self.types_compatible(a, b))
+                && self.types_compatible(r1, r2);
+        }
         actual == expected
     }
 
-    fn _fresh_var(&mut self) -> Type {
-        let id = TypeVarId(self.next_var);
-        self.next_var += 1;
-        Type::Var(id)
+    /// Attempt to unify type arguments from a generic function call.
+    /// Given a function with type params [T, U, ...] and declared param types,
+    /// tries to bind each type param to a concrete type based on the actual argument types.
+    fn unify_type_params(
+        &self,
+        type_params: &[String],
+        declared_param_types: &[Type],
+        actual_arg_types: &[Type],
+    ) -> HashMap<String, Type> {
+        let mut bindings: HashMap<String, Type> = HashMap::new();
+        for (declared, actual) in declared_param_types.iter().zip(actual_arg_types.iter()) {
+            self.unify_one(declared, actual, type_params, &mut bindings);
+        }
+        bindings
+    }
+
+    /// Recursively unify a declared type with an actual type, binding type params.
+    fn unify_one(
+        &self,
+        declared: &Type,
+        actual: &Type,
+        type_params: &[String],
+        bindings: &mut HashMap<String, Type>,
+    ) {
+        if *actual == Type::Unknown {
+            return;
+        }
+        match declared {
+            Type::TypeParam(name) if type_params.contains(name) => {
+                if let Some(existing) = bindings.get(name) {
+                    // Already bound - check consistency (but don't error, just keep first)
+                    if !self.types_compatible(actual, existing) {
+                        // Conflicting binding, ignore for now
+                    }
+                } else {
+                    bindings.insert(name.clone(), actual.clone());
+                }
+            }
+            // Named type that matches a type param name
+            Type::Named(name, args) if type_params.contains(name) && args.is_empty() => {
+                if !bindings.contains_key(name) {
+                    bindings.insert(name.clone(), actual.clone());
+                }
+            }
+            Type::List(inner) => {
+                if let Type::List(actual_inner) = actual {
+                    self.unify_one(inner, actual_inner, type_params, bindings);
+                }
+            }
+            Type::Tuple(elems) => {
+                if let Type::Tuple(actual_elems) = actual {
+                    for (d, a) in elems.iter().zip(actual_elems.iter()) {
+                        self.unify_one(d, a, type_params, bindings);
+                    }
+                }
+            }
+            Type::Option(inner) => {
+                if let Type::Option(actual_inner) = actual {
+                    self.unify_one(inner, actual_inner, type_params, bindings);
+                }
+            }
+            Type::Result(ok, err) => {
+                if let Type::Result(actual_ok, actual_err) = actual {
+                    self.unify_one(ok, actual_ok, type_params, bindings);
+                    self.unify_one(err, actual_err, type_params, bindings);
+                }
+            }
+            Type::Named(name, args) => {
+                if let Type::Named(actual_name, actual_args) = actual {
+                    if name == actual_name {
+                        for (d, a) in args.iter().zip(actual_args.iter()) {
+                            self.unify_one(d, a, type_params, bindings);
+                        }
+                    }
+                }
+            }
+            Type::Function { params, ret, .. } => {
+                if let Type::Function {
+                    params: actual_params,
+                    ret: actual_ret,
+                    ..
+                } = actual
+                {
+                    for (d, a) in params.iter().zip(actual_params.iter()) {
+                        self.unify_one(d, a, type_params, bindings);
+                    }
+                    self.unify_one(ret, actual_ret, type_params, bindings);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Substitute type parameters in a type using the given bindings.
+    fn substitute_type_params(&self, ty: &Type, bindings: &HashMap<String, Type>) -> Type {
+        match ty {
+            Type::TypeParam(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
+            Type::Named(name, args) if args.is_empty() && bindings.contains_key(name) => {
+                bindings[name].clone()
+            }
+            Type::Named(name, args) => Type::Named(
+                name.clone(),
+                args.iter()
+                    .map(|a| self.substitute_type_params(a, bindings))
+                    .collect(),
+            ),
+            Type::List(inner) => Type::List(Box::new(self.substitute_type_params(inner, bindings))),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.substitute_type_params(e, bindings))
+                    .collect(),
+            ),
+            Type::Option(inner) => {
+                Type::Option(Box::new(self.substitute_type_params(inner, bindings)))
+            }
+            Type::Result(ok, err) => Type::Result(
+                Box::new(self.substitute_type_params(ok, bindings)),
+                Box::new(self.substitute_type_params(err, bindings)),
+            ),
+            Type::Function {
+                params,
+                ret,
+                effects,
+            } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|p| self.substitute_type_params(p, bindings))
+                    .collect(),
+                ret: Box::new(self.substitute_type_params(ret, bindings)),
+                effects: effects.clone(),
+            },
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(n, t)| (n.clone(), self.substitute_type_params(t, bindings)))
+                    .collect(),
+            ),
+            _ => ty.clone(),
+        }
     }
 }
 
@@ -2211,5 +2474,149 @@ fn main() -> Int {
             diags.diagnostics().iter().any(|d| d.code == "E1002"),
             "should report E1002 unknown identifier"
         );
+    }
+
+    // Generic type checking tests
+
+    #[test]
+    fn test_generic_type_param_resolution() {
+        let source = r#"
+module example
+
+fn identity[T](x: T) -> T {
+  x
+}
+
+fn main() -> Int {
+  identity(42)
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "Generic function should type-check");
+    }
+
+    #[test]
+    fn test_generic_return_type_inference() {
+        // When calling a generic fn, the return type should be inferred
+        let source = r#"
+module example
+
+fn first[T](items: List[T]) -> T {
+  items
+}
+
+fn main() -> Int {
+  let nums = [1, 2, 3]
+  first(nums)
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "Generic return type inference should work");
+    }
+
+    #[test]
+    fn test_type_param_in_scope() {
+        let source = r#"
+module example
+
+fn pair[A, B](a: A, b: B) -> (A, B) {
+  (a, b)
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "Multiple type params should be in scope");
+    }
+
+    // Trait/impl type checking tests
+
+    #[test]
+    fn test_trait_definition() {
+        let source = r#"
+module example
+
+trait Show {
+  fn show(self: Self) -> Text
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "Trait definition should type-check");
+    }
+
+    #[test]
+    fn test_impl_block_methods_checked() {
+        let source = r#"
+module example
+
+trait Show {
+  fn show(self: Self) -> Text
+}
+
+impl Show for Int {
+  fn show(self: Int) -> Text {
+    "int"
+  }
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "Impl block should type-check");
+    }
+
+    #[test]
+    fn test_impl_missing_method() {
+        let source = r#"
+module example
+
+trait Describe {
+  fn describe(self: Self) -> Text
+  fn summary(self: Self) -> Text
+}
+
+impl Describe for Int {
+  fn describe(self: Int) -> Text {
+    "an integer"
+  }
+}
+"#;
+        let _result = check_module(source);
+        // Should report missing method
+        let diags = check_module_all_diags(source);
+        let has_missing = diags
+            .diagnostics()
+            .iter()
+            .any(|d| d.message.contains("Missing method"));
+        assert!(
+            has_missing,
+            "Should warn about missing trait method 'summary'"
+        );
+    }
+
+    // List and Tuple type tracking
+
+    #[test]
+    fn test_list_type_tracking() {
+        let source = r#"
+module example
+
+fn main() -> Unit {
+  let nums = [1, 2, 3]
+  let _x = nums
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "List type should be tracked");
+    }
+
+    #[test]
+    fn test_tuple_type_tracking() {
+        let source = r#"
+module example
+
+fn main() -> Unit {
+  let pair = (1, "hello")
+  let _x = pair
+}
+"#;
+        let result = check_module(source);
+        assert!(result.is_ok(), "Tuple type should be tracked");
     }
 }
