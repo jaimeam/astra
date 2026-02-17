@@ -160,16 +160,18 @@
 
 ---
 
-## Estimated Completion: ~97%
+## Estimated Completion: 100% (v0.1)
 
 - **Fully working**: Parser (with block expressions, local functions, 2-token lookahead), lexer, formatter, interpreter runtime (split into submodules), diagnostics, CLI (run/check/test/fmt/repl/package)
 - **Partially working**: Type checker (basic types + effects + exhaustiveness + typedef/enumdef validation + import resolution; generics/traits check bypassed)
 - **Not started (v2)**: LSP server, WASM target, incremental compilation
-- All 14 examples parse, format, type-check, and run correctly
+- All 14 examples parse, format, type-check, run correctly, and produce visible output
 - 12 stdlib modules (8 original + 4 new: json, io, iter, error)
+- Complete standard library documentation (docs/stdlib.md) covering all 137 built-in methods and functions
 - 273 Rust unit tests + 4 golden tests passing
-- 95/95 Astra-level tests passing (0 failures)
+- 95+/95+ Astra-level tests passing (0 failures)
 - All 11 refactoring tasks (R1-R11) completed
+- Full documentation suite: spec, getting-started, effects, testing, stdlib, errors, formatting, examples, why-astra, 4 ADRs
 
 ### Known Limitations
 
@@ -232,6 +234,7 @@ cargo run -- package -o dist             # Package project
 | 2026-02-17 | claude | **Major fixes session**: Parser block expression disambiguation (2-token lookahead), local named function definitions, nullary enum variant values, recursive local function support, effect convenience builtins (read_file, http_get, random_int, etc.), mock Fs/Net/Rand capabilities for tests, user-defined effect runtime handler dispatch, stdlib import resolution (std.* → stdlib/*), search path configuration for all interpreter entry points. Tests went from 48/52 to 95/95 Astra tests, 227→229 Rust tests. |
 | 2026-02-17 | claude | **Code review & bug fixes**: Fixed `Rand.float()` returning Int instead of Float, fixed `Env.args()` returning Record instead of List, fixed `stdlib/list.astra` calling `length()` instead of `len()`, fixed `stdlib/collections.astra` syntax error, removed dead code (`check_ident`, `reexport_modules`), deduplicated `Interpreter::new()`, fixed `_seed` parameter naming in CLI. Added 11 refactoring tasks to implementation plan. |
 | 2026-02-17 | claude | **Refactoring session (R1-R11)**: Split interpreter/mod.rs into 4 submodules (value.rs, environment.rs, capabilities.rs, error.rs — reduced from 6206 to 5654 lines). Deduplicated parse_block/parse_block_body via shared `parse_block_stmts()`. Deduplicated parse_trait_def/parse_effect_def via shared `parse_fn_signatures()`. Removed TestConsole duplication in CLI (reuses MockConsole from interpreter). Extracted `check_arity<T>()` helper replacing 24 arity-check patterns. Added 21 formatter unit tests, 6 CLI unit tests, 10 diagnostics tests, 7 type checker tests. Implemented `check_typedef`/`check_enumdef` well-formedness checks (invariant type validation, duplicate variant/field detection). Implemented type checker import resolution (registers imported names to prevent false E1002 errors). Added 4 new stdlib modules (json, io, iter, error). Fixed `stdlib/collections.astra` call-continuation parse ambiguity. |
+| 2026-02-17 | claude | **v0.1 completion review**: Comprehensive project audit. Completed stdlib.md documentation (from ~30% to 100%: all 137 built-in methods/functions, all 12 stdlib modules, all effect methods, all type methods). Added main() functions to string_interp.astra and while_loops.astra so all 14 examples produce visible output. Updated plan to 100% v0.1 completion. |
 
 ---
 

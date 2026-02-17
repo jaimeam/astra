@@ -40,6 +40,13 @@ fn fibonacci(n: Int) -> Int
   b
 }
 
+fn main() effects(Console)
+{
+  println("countdown(5) = ${to_text(countdown(5))}")
+  println("find_divisor(15) = ${to_text(find_divisor(15))}")
+  println("fibonacci(10) = ${to_text(fibonacci(10))}")
+}
+
 test "countdown sums correctly" {
   assert_eq(countdown(5), 15)
   assert_eq(countdown(0), 0)
