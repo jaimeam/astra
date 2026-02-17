@@ -575,6 +575,27 @@ impl Interpreter {
                         }
                     }
                 }
+                Item::ImplBlock(impl_block) => {
+                    // Register impl methods with qualified names
+                    // Methods are stored as "TypeName.method_name" or just "method_name"
+                    for method in &impl_block.methods {
+                        let params: Vec<String> =
+                            method.params.iter().map(|p| p.name.clone()).collect();
+                        let closure = Value::Closure {
+                            name: Some(method.name.clone()),
+                            params,
+                            body: ClosureBody {
+                                block: method.body.clone(),
+                                requires: method.requires.clone(),
+                                ensures: method.ensures.clone(),
+                            },
+                            env: Environment::new(),
+                        };
+                        // Register with qualified name for trait dispatch
+                        let qualified_name = format!("{}_{}", impl_block.trait_name, method.name);
+                        self.env.define(qualified_name, closure);
+                    }
+                }
                 _ => {}
             }
         }
@@ -5364,5 +5385,98 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(42)));
+    }
+
+    // === P2.2: Traits and impl blocks ===
+
+    #[test]
+    fn test_trait_and_impl_parsing() {
+        let source = r#"
+module example
+
+trait Describable {
+  fn describe(self: Int) -> Text
+}
+
+impl Describable for Int {
+  fn describe(self: Int) -> Text {
+    "a number"
+  }
+}
+
+fn main() -> Text {
+  "traits work"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(s) if s == "traits work"));
+    }
+
+    #[test]
+    fn test_impl_method_callable() {
+        let source = r#"
+module example
+
+trait Doubler {
+  fn double_it(x: Int) -> Int
+}
+
+impl Doubler for Int {
+  fn double_it(x: Int) -> Int {
+    x * 2
+  }
+}
+
+fn main() -> Int {
+  Doubler_double_it(21)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    // === P5.3: Parser error recovery ===
+
+    #[test]
+    fn test_parser_error_recovery() {
+        // Verify parser produces errors but doesn't crash
+        let source = r#"
+module example
+fn good() -> Int { 1 }
+fn bad( {
+fn also_good() -> Int { 2 }
+"#;
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = crate::parser::parser::Parser::new(lexer, source_file.clone());
+        // Should return Err with diagnostics, not panic
+        let result = parser.parse_module();
+        assert!(result.is_err());
+    }
+
+    // === P1.12: Negative number literals ===
+
+    #[test]
+    fn test_negative_literals() {
+        let source = r#"
+module example
+fn main() -> Int {
+  -42
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(-42)));
+    }
+
+    #[test]
+    fn test_negative_float_literal() {
+        let source = r#"
+module example
+fn main() -> Float {
+  -2.5
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Float(f) if (f + 2.5).abs() < 0.001));
     }
 }

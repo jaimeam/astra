@@ -81,6 +81,8 @@ impl Formatter {
             Item::TypeDef(typedef) => self.format_typedef(typedef),
             Item::EnumDef(enumdef) => self.format_enumdef(enumdef),
             Item::FnDef(fndef) => self.format_fndef(fndef),
+            Item::TraitDef(trait_def) => self.format_trait_def(trait_def),
+            Item::ImplBlock(impl_block) => self.format_impl_block(impl_block),
             Item::Test(test) => self.format_test(test),
             Item::Property(property) => self.format_property(property),
         }
@@ -224,6 +226,63 @@ impl Formatter {
 
         self.newline();
         self.format_block(&fndef.body);
+        self.newline();
+    }
+
+    fn format_trait_def(&mut self, trait_def: &TraitDef) {
+        self.write_indent();
+        self.write("trait ");
+        self.write(&trait_def.name);
+        if !trait_def.type_params.is_empty() {
+            self.write("[");
+            self.write(&trait_def.type_params.join(", "));
+            self.write("]");
+        }
+        self.write(" {");
+        self.newline();
+        self.indent_level += 1;
+        for method in &trait_def.methods {
+            self.write_indent();
+            self.write("fn ");
+            self.write(&method.name);
+            self.write("(");
+            for (i, param) in method.params.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write(&param.name);
+                self.write(": ");
+                self.format_type_expr(&param.ty);
+            }
+            self.write(")");
+            if let Some(ret) = &method.return_type {
+                self.write(" -> ");
+                self.format_type_expr(ret);
+            }
+            self.newline();
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.write("}");
+        self.newline();
+    }
+
+    fn format_impl_block(&mut self, impl_block: &ImplBlock) {
+        self.write_indent();
+        self.write("impl ");
+        self.write(&impl_block.trait_name);
+        self.write(" for ");
+        self.format_type_expr(&impl_block.target_type);
+        self.write(" {");
+        self.newline();
+        self.indent_level += 1;
+        for method in &impl_block.methods {
+            self.format_fndef(method);
+            self.newline();
+        }
+        self.indent_level -= 1;
+        self.write_indent();
+        self.write("}");
         self.newline();
     }
 

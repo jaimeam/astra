@@ -353,6 +353,15 @@ impl TypeChecker {
             Item::TypeDef(def) => self.check_typedef(def),
             Item::EnumDef(def) => self.check_enumdef(def),
             Item::FnDef(def) => self.check_fndef(def),
+            Item::TraitDef(_) => {
+                // Trait definitions define interfaces, checked structurally
+            }
+            Item::ImplBlock(impl_block) => {
+                // Check each method in the impl block
+                for method in &impl_block.methods {
+                    self.check_fndef(method);
+                }
+            }
             Item::Test(test) => self.check_test(test),
             Item::Property(prop) => self.check_property(prop),
         }

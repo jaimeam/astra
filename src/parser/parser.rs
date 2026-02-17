@@ -86,6 +86,8 @@ impl<'a> Parser<'a> {
             TokenKind::Type => self.parse_type_def().map(Item::TypeDef),
             TokenKind::Enum => self.parse_enum_def().map(Item::EnumDef),
             TokenKind::Fn | TokenKind::Public => self.parse_fn_def().map(Item::FnDef),
+            TokenKind::Trait => self.parse_trait_def().map(Item::TraitDef),
+            TokenKind::Impl => self.parse_impl_block().map(Item::ImplBlock),
             TokenKind::Test => self.parse_test().map(Item::Test),
             TokenKind::Property => self.parse_property().map(Item::Property),
             _ => Err(self.error_unexpected("item")),
@@ -224,6 +226,86 @@ impl<'a> Parser<'a> {
             span: start_span.merge(&end_span),
             name,
             ty,
+        })
+    }
+
+    fn parse_trait_def(&mut self) -> Result<TraitDef, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::Trait)?;
+        let name = self.expect_ident()?;
+        let type_params = self.parse_optional_type_params()?;
+        self.expect(TokenKind::LBrace)?;
+
+        let mut methods = Vec::new();
+        while !self.check(TokenKind::RBrace) && !self.is_eof() {
+            self.expect(TokenKind::Fn)?;
+            let method_start = self.current_span();
+            let method_name = self.expect_ident()?;
+            self.expect(TokenKind::LParen)?;
+            let mut params = Vec::new();
+            if !self.check(TokenKind::RParen) {
+                params.push(self.parse_param()?);
+                while self.check(TokenKind::Comma) {
+                    self.advance();
+                    if self.check(TokenKind::RParen) {
+                        break;
+                    }
+                    params.push(self.parse_param()?);
+                }
+            }
+            self.expect(TokenKind::RParen)?;
+
+            let return_type = if self.check(TokenKind::Arrow) {
+                self.advance();
+                Some(self.parse_type_expr()?)
+            } else {
+                None
+            };
+            let method_end = self.current_span();
+
+            methods.push(TraitMethod {
+                id: NodeId::new(),
+                span: method_start.merge(&method_end),
+                name: method_name,
+                params,
+                return_type,
+            });
+        }
+        self.expect(TokenKind::RBrace)?;
+        let end_span = self.current_span();
+
+        Ok(TraitDef {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            name,
+            type_params,
+            methods,
+        })
+    }
+
+    fn parse_impl_block(&mut self) -> Result<ImplBlock, Diagnostic> {
+        let start_span = self.current_span();
+        self.expect(TokenKind::Impl)?;
+        let trait_name = self.expect_ident()?;
+
+        // Expect "for"
+        self.expect(TokenKind::For)?;
+        let target_type = self.parse_type_expr()?;
+        self.expect(TokenKind::LBrace)?;
+
+        let mut methods = Vec::new();
+        while !self.check(TokenKind::RBrace) && !self.is_eof() {
+            methods.push(self.parse_fn_def()?);
+        }
+        self.expect(TokenKind::RBrace)?;
+        let end_span = self.current_span();
+
+        Ok(ImplBlock {
+            id: NodeId::new(),
+            span: start_span.merge(&end_span),
+            trait_name,
+            target_type,
+            methods,
         })
     }
 
@@ -1614,6 +1696,8 @@ impl<'a> Parser<'a> {
                 | TokenKind::Enum
                 | TokenKind::Fn
                 | TokenKind::Public
+                | TokenKind::Trait
+                | TokenKind::Impl
                 | TokenKind::Test
                 | TokenKind::Property => return,
                 _ => {

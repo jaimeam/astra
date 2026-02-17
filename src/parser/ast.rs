@@ -52,6 +52,8 @@ pub enum Item {
     TypeDef(TypeDef),
     EnumDef(EnumDef),
     FnDef(FnDef),
+    TraitDef(TraitDef),
+    ImplBlock(ImplBlock),
     Test(TestBlock),
     Property(PropertyBlock),
 }
@@ -113,6 +115,36 @@ pub struct Field {
     pub span: Span,
     pub name: String,
     pub ty: TypeExpr,
+}
+
+/// Trait definition (e.g., `trait Show { fn to_text(self) -> Text }`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraitDef {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub methods: Vec<TraitMethod>,
+}
+
+/// A method signature in a trait
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraitMethod {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeExpr>,
+}
+
+/// Impl block (e.g., `impl Show for Int { fn to_text(self) -> Text { ... } }`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImplBlock {
+    pub id: NodeId,
+    pub span: Span,
+    pub trait_name: String,
+    pub target_type: TypeExpr,
+    pub methods: Vec<FnDef>,
 }
 
 /// Function definition
