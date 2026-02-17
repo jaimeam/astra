@@ -30,6 +30,8 @@ struct LspServer {
     documents: HashMap<String, String>,
     /// Parsed modules: URI -> Module
     modules: HashMap<String, Module>,
+    /// Cached diagnostics per URI (for code actions)
+    cached_diagnostics: HashMap<String, Vec<crate::diagnostics::Diagnostic>>,
     /// Whether the server has been initialized
     initialized: bool,
 }
@@ -39,6 +41,7 @@ impl LspServer {
         Self {
             documents: HashMap::new(),
             modules: HashMap::new(),
+            cached_diagnostics: HashMap::new(),
             initialized: false,
         }
     }
@@ -92,6 +95,9 @@ impl LspServer {
                                 "documentSymbolProvider": true,
                                 "completionProvider": {
                                     "triggerCharacters": [".", ":"]
+                                },
+                                "codeActionProvider": {
+                                    "codeActionKinds": ["quickfix"]
                                 }
                             },
                             "serverInfo": {
@@ -154,6 +160,7 @@ impl LspServer {
                 let uri = params["textDocument"]["uri"].as_str()?.to_string();
                 self.documents.remove(&uri);
                 self.modules.remove(&uri);
+                self.cached_diagnostics.remove(&uri);
                 // Clear diagnostics
                 let notification = json!({
                     "jsonrpc": "2.0",
@@ -211,6 +218,17 @@ impl LspServer {
                 })
             }
 
+            "textDocument/codeAction" => {
+                let result = self.handle_code_action(&params);
+                id.map(|id| {
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    })
+                })
+            }
+
             _ => {
                 // Unknown method - return error for requests, ignore notifications
                 id.map(|id| {
@@ -242,6 +260,9 @@ impl LspServer {
         let module = match parser.parse_module() {
             Ok(m) => m,
             Err(bag) => {
+                // Cache parse error diagnostics for code actions
+                self.cached_diagnostics
+                    .insert(uri.to_string(), bag.diagnostics().to_vec());
                 // Report parse errors
                 let lsp_diags: Vec<Value> =
                     bag.diagnostics().iter().map(diagnostic_to_lsp).collect();
@@ -267,6 +288,10 @@ impl LspServer {
             Ok(()) => checker.diagnostics().clone(),
             Err(bag) => bag,
         };
+
+        // Cache diagnostics for code actions
+        self.cached_diagnostics
+            .insert(uri.to_string(), type_diags.diagnostics().to_vec());
 
         let lsp_diags: Vec<Value> = type_diags
             .diagnostics()
@@ -649,6 +674,62 @@ impl LspServer {
 
         json!(items)
     }
+
+    /// Handle textDocument/codeAction — convert diagnostic suggestions to quick fixes
+    fn handle_code_action(&self, params: &Value) -> Value {
+        let uri = match params["textDocument"]["uri"].as_str() {
+            Some(u) => u,
+            None => return json!([]),
+        };
+
+        let request_range = &params["range"];
+        let req_start_line = request_range["start"]["line"].as_u64().unwrap_or(0) as usize;
+        let req_end_line = request_range["end"]["line"].as_u64().unwrap_or(0) as usize;
+
+        let diagnostics = match self.cached_diagnostics.get(uri) {
+            Some(d) => d,
+            None => return json!([]),
+        };
+
+        let mut actions = Vec::new();
+
+        for diag in diagnostics {
+            // Check if the diagnostic overlaps with the requested range
+            let diag_start_line = diag.span.start_line.saturating_sub(1);
+            let diag_end_line = diag.span.end_line.saturating_sub(1);
+            if diag_end_line < req_start_line || diag_start_line > req_end_line {
+                continue;
+            }
+
+            // Create a code action for each suggestion
+            for suggestion in &diag.suggestions {
+                if suggestion.edits.is_empty() {
+                    continue;
+                }
+
+                let mut text_edits = Vec::new();
+                for edit in &suggestion.edits {
+                    text_edits.push(json!({
+                        "range": span_to_range(&edit.span),
+                        "newText": edit.replacement
+                    }));
+                }
+
+                actions.push(json!({
+                    "title": suggestion.title,
+                    "kind": "quickfix",
+                    "diagnostics": [diagnostic_to_lsp(diag)],
+                    "edit": {
+                        "changes": {
+                            uri: text_edits
+                        }
+                    }
+                }));
+            }
+        }
+
+        json!(actions)
+    }
 }
 
 /// Read the Content-Length header from the input stream
@@ -913,5 +994,68 @@ mod tests {
         assert_eq!(range["start"]["character"], 9);
         assert_eq!(range["end"]["line"], 2);
         assert_eq!(range["end"]["character"], 14);
+    }
+
+    #[test]
+    fn test_code_action_from_suggestion() {
+        use crate::diagnostics::{Edit, Suggestion};
+
+        let mut server = LspServer::new();
+        let uri = "file:///test.astra";
+
+        // Cache a diagnostic with a suggestion
+        let diag = crate::diagnostics::Diagnostic {
+            code: "E1002".to_string(),
+            message: "Unknown identifier 'prnt'".to_string(),
+            severity: Severity::Error,
+            span: Span::new(std::path::PathBuf::from("/test.astra"), 0, 4, 1, 1, 1, 4),
+            notes: vec![],
+            suggestions: vec![
+                Suggestion::new("Did you mean 'print'?").with_edit(Edit::new(
+                    Span::new(std::path::PathBuf::from("/test.astra"), 0, 4, 1, 1, 1, 4),
+                    "print",
+                )),
+            ],
+        };
+        server
+            .cached_diagnostics
+            .insert(uri.to_string(), vec![diag]);
+
+        // Request code actions for line 0
+        let params = json!({
+            "textDocument": { "uri": uri },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 0, "character": 4 }
+            },
+            "context": { "diagnostics": [] }
+        });
+
+        let result = server.handle_code_action(&params);
+        let actions = result.as_array().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["title"], "Did you mean 'print'?");
+        assert_eq!(actions[0]["kind"], "quickfix");
+
+        // Verify the edit
+        let changes = &actions[0]["edit"]["changes"][uri];
+        let edits = changes.as_array().unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0]["newText"], "print");
+    }
+
+    #[test]
+    fn test_code_action_no_diagnostics() {
+        let server = LspServer::new();
+        let params = json!({
+            "textDocument": { "uri": "file:///empty.astra" },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 0, "character": 0 }
+            },
+            "context": { "diagnostics": [] }
+        });
+        let result = server.handle_code_action(&params);
+        assert_eq!(result, json!([]));
     }
 }

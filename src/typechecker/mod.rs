@@ -176,7 +176,7 @@ pub enum Type {
     Result(Box<Type>, Box<Type>),
     /// Type variable (for inference)
     Var(TypeVarId),
-    /// Type parameter (generic, e.g., T in fn id[T](x: T) -> T)
+    /// Type parameter (generic, e.g., `T` in `fn id\[T\](x: T) -> T`)
     TypeParam(String),
     /// List type
     List(Box<Type>),

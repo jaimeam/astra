@@ -3,6 +3,7 @@
 //! Astra is an LLM/Agent-native programming language designed for verifiability
 //! and deterministic feedback.
 
+pub mod cache;
 pub mod cli;
 pub mod diagnostics;
 pub mod effects;

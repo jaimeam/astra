@@ -15,7 +15,8 @@ Thumbs.db
 
 # Astra build artifacts
 /build/
-/.astra/
+/.astra-cache/
+/docs/api/
 
 # Test artifacts
 *.snap.new
