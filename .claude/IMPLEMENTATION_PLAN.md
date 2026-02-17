@@ -16,13 +16,13 @@
 | **Exhaustive match checking** | Compiler catches forgotten cases | ✅ Implemented |
 | **One canonical format** | No style choices to make | ✅ Formatter wired to CLI |
 | **Contracts (requires/ensures)** | LLMs get pre/postcondition verification | ✅ Parsed + enforced at runtime |
-| **Generic functions** | Type-safe reusable code | ✅ `fn identity[T](x: T) -> T` |
+| **Generic functions** | Type-safe reusable code | 🟡 Parsed + executed; checker treats type params as opaque |
 | **For loops** | Practical iteration over collections | ✅ `for x in list { ... }` |
 | **Multi-field variants** | Ergonomic enum destructuring | ✅ `Rectangle(w, h)` |
-| **Module system** | Cross-file code organization | ✅ Imports + re-exports work |
+| **Module system** | Cross-file code organization | 🟡 Parsed + formatted; runtime import execution limited |
 | **Type invariants** | Machine-verified value constraints | ✅ Runtime enforcement |
 | **Tail call optimization** | Efficient recursion without stack overflow | ✅ Auto-detected TCO |
-| **User-defined effects** | Extensible capability system | ✅ `effect Logger { ... }` |
+| **User-defined effects** | Extensible capability system | 🟡 Parsed; runtime handler dispatch not implemented |
 
 ---
 
@@ -89,21 +89,21 @@
 | **P1.4** | `else if` chains | `if {} else if {} else {}` | ✅ Done |
 | **P1.5** | String interpolation | `"Hello, ${name}!"` | ✅ Done |
 | **P1.6** | `Float` type | 64-bit floating point numbers | ✅ Done |
-| **P1.7** | Tuple types | `(Int, Text)` with destructuring + `.0`/`.1` access | ✅ Done |
+| **P1.7** | Tuple types | `(Int, Text)` in type positions + `.0`/`.1` access | ✅ Done |
 | **P1.8** | `Map[K, V]` type | Immutable map with `Map.new()`, `get`/`set`/`remove` | ✅ Done |
 | **P1.9** | Type alias resolution | `type Name = Text` resolved in checker + runtime | ✅ Done |
 | **P1.10** | `return` statement | Early return from functions | ✅ Done |
 | **P1.11** | Math builtins | `abs`, `min`, `max`, `pow`, `sqrt`, `floor`, `ceil`, `round` | ✅ Done |
 | **P1.12** | Negative number literals | `-42` as unary negation in parser | ✅ Done |
 
-### ✅ Phase 2: Type System Maturity (100% Complete)
+### 🟡 Phase 2: Type System Maturity (75% — checker gaps remain)
 
 | # | Task | Impact | Status |
 |---|------|--------|--------|
-| **P2.1** | Generic type inference | Basic generics work; type params inferred at call sites | ✅ Done |
-| **P2.2** | Traits / type classes | `trait Show { fn to_text(self) -> Text }` + `impl Show for Int` | ✅ Done |
+| **P2.1** | Generic type checking | Type params treated as opaque named types; no HM unification | 🟡 Partial — runs via dynamic typing, checker does basic structural matching |
+| **P2.2** | Traits / type classes | `trait Show { fn to_text(self) -> Text }` + `impl Show for Int` | 🟡 Parsed + formatted; checker validates methods but no trait resolution on calls |
 | **P2.3** | Type invariants enforcement | `type Positive = Int invariant self > 0` checked at runtime | ✅ Done |
-| **P2.4** | Generic type constraints | `fn sort[T: Ord](list: List[T])` syntax parsed | ✅ Done |
+| **P2.4** | Generic type constraints | `fn sort[T: Ord](list: List[T])` syntax parsed | 🟡 Parsed; constraints not enforced by checker |
 | **P2.5** | Recursive / self-referential types | Trees, linked lists (`Cons(h, t: IntList)`) | ✅ Done |
 
 ### ✅ Phase 3: Standard Library Expansion (100% Complete)
@@ -117,14 +117,14 @@
 | **P3.5** | `Set[T]` type | `Set.from([])`, `add`, `remove`, `union`, `intersection` | ✅ Done |
 | **P3.6** | Math module | `stdlib/math.astra` with `clamp`, `is_even`, `is_odd` | ✅ Done |
 
-### ✅ Phase 4: Module System & Imports (100% Complete)
+### 🟡 Phase 4: Module System & Imports (70% — parsing done, runtime limited)
 
 | # | Task | Impact | Status |
 |---|------|--------|--------|
-| **P4.1** | Named import resolution | `import foo.{bar, baz}` runtime filtering | ✅ Done |
+| **P4.1** | Named import resolution | `import foo.{bar, baz}` parsed + formatted | 🟡 Parsed; runtime filters by name but limited cross-file execution |
 | **P4.2** | Circular import detection | `E4018` error on module cycles | ✅ Done |
-| **P4.3** | Re-exports | `public import std.math` syntax parsed + formatted | ✅ Done |
-| **P4.4** | Stdlib as importable modules | `stdlib/math.astra`, `stdlib/string.astra`, `stdlib/collections.astra` | ✅ Done |
+| **P4.3** | Re-exports | `public import std.math` syntax parsed + formatted | 🟡 Parsed; not resolved at runtime |
+| **P4.4** | Stdlib as importable modules | Files exist and parse correctly | 🟡 Files exist; runtime import of stdlib not fully wired |
 
 ### ✅ Phase 5: Testing & Diagnostics (100% Complete)
 
@@ -135,35 +135,47 @@
 | **P5.3** | Parser error recovery | Sync to next item keyword on parse error | ✅ Done |
 | **P5.4** | `expect` with custom error messages | `assert(x > 0, "x must be positive")` | ✅ Done |
 
-### ✅ Phase 6: Advanced Features (100% Complete)
+### 🟡 Phase 6: Advanced Features (80% — parsing done, some runtime gaps)
 
 | # | Task | Impact | Status |
 |---|------|--------|--------|
 | **P6.1** | Pipe operator `\|>` | `x \|> f \|> g` chaining | ✅ Done |
-| **P6.2** | User-defined effects | `effect Logger { fn log(msg: Text) -> Unit }` | ✅ Done |
+| **P6.2** | User-defined effects | `effect Logger { fn log(msg: Text) -> Unit }` | 🟡 Parsed + formatted; no runtime handler dispatch |
 | **P6.3** | Mutable state | `let mut x = 0; x = x + 1` assignment | ✅ Done |
 | **P6.4** | Tail call optimization | Auto-detected TCO for self-recursive tail calls | ✅ Done |
-| **P6.5** | Async/await syntax | `await` keyword parsed + evaluated (single-threaded) | ✅ Done |
+| **P6.5** | Async/await syntax | `await` keyword parsed + evaluated (single-threaded) | 🟡 Parsed; evaluates synchronously |
 
-### ✅ Phase 7: Tooling & Distribution (Core Complete)
+### 🟡 Phase 7: Tooling & Distribution (60% — core commands work, stubs remain)
 
 | # | Task | Impact | Status |
 |---|------|--------|--------|
-| **P7.1** | REPL (`astra repl`) | Interactive expression evaluation + definitions | ✅ Done |
-| **P7.2** | `package` command | Validates, type-checks, bundles .astra files | ✅ Done |
+| **P7.1** | REPL (`astra repl`) | Interactive expression evaluation + definitions | ❌ Stub — prints "not yet implemented" |
+| **P7.2** | `package` command | Validates, type-checks, bundles .astra files | ❌ Stub — prints placeholder message |
 | **P7.3** | LSP / language server | IDE integration | 📋 Planned (v2) |
 | **P7.4** | WASM compilation target | Browser/edge deployment | 📋 Planned (v2) |
 | **P7.5** | Incremental compilation | Fast rebuilds | 📋 Planned (v2) |
 
 ---
 
-## Estimated Completion: ~95%
+## Estimated Completion: ~80%
 
-- **Done**: 70+ features across all phases
-- **Remaining (v2 scope)**: LSP server, WASM compilation target, incremental compilation
-- All language features implemented and tested
-- All tooling commands functional (run, check, test, fmt, repl, package)
-- 224 unit tests + 4 golden tests passing
+- **Fully working**: Parser, lexer, formatter, interpreter runtime, diagnostics, CLI (run/check/test/fmt)
+- **Partially working**: Type checker (basic types + effects + exhaustiveness; generics/traits check bypassed), module system (parsing done, runtime imports limited)
+- **Stubbed**: REPL, package command
+- **Not started (v2)**: LSP server, WASM target, incremental compilation
+- All 14 examples parse, format, type-check, and run correctly
+- 227 Rust unit tests + 4 golden tests passing
+- 48/52 Astra-level tests passing (4 failures in effects test fixtures)
+
+### Known Limitations
+
+| Limitation | Impact | Workaround |
+|-----------|--------|------------|
+| No statement terminator | `let x = expr` followed by `(...)` on next line is parsed as `let x = expr(...)` | Use `return` for final expressions starting with `(`, or restructure code |
+| Generic type params treated as opaque | Type checker doesn't catch type errors in generic code | Programs run correctly via dynamic typing; errors caught at runtime |
+| Traits not resolved on calls | `impl Show for Int` is parsed but method calls aren't dispatched via trait | Use direct method calls or pattern matching |
+| Imports don't execute cross-file | `import std.math` parses but stdlib functions aren't available at runtime | Define functions in the same file |
+| REPL is a stub | `astra repl` prints a message and exits | Use `astra run` with a file |
 
 ---
 
@@ -171,17 +183,15 @@
 
 ```bash
 cargo build                              # Build
-cargo test                               # Run all tests (228)
+cargo test                               # Run all tests (231)
 cargo run -- run examples/hello.astra    # Run a program
-cargo run -- check examples/             # Check syntax + types + effects
-cargo run -- test                        # Run test blocks
+cargo run -- check examples/             # Check syntax + types + effects (0 errors, 14 files)
+cargo run -- test                        # Run test blocks (48/52 pass)
 cargo run -- test "filter"               # Run matching tests
 cargo run -- check --json file.astra     # JSON diagnostics with suggestions
 cargo run -- fmt file.astra              # Format a file
 cargo run -- fmt --check file.astra      # Check formatting without modifying
 cargo run -- fmt .                       # Format all .astra files
-cargo run -- repl                        # Interactive REPL
-cargo run -- package --output build      # Package for distribution
 ```
 
 ---
@@ -212,7 +222,8 @@ cargo run -- package --output build      # Package for distribution
 | 2026-02-17 | claude | P4.1-P4.4: Named imports, circular import detection, re-exports, stdlib modules |
 | 2026-02-17 | claude | P5.1-P5.4: Property testing, stack traces, error recovery, custom assert messages |
 | 2026-02-17 | claude | P6.1-P6.5: Pipe operator, user-defined effects, mutable state, TCO, async/await |
-| 2026-02-17 | claude | P7.1-P7.2: REPL, package command |
+| 2026-02-17 | claude | P7.1-P7.2: REPL, package command (stubs) |
+| 2026-02-17 | claude | **Status review**: Fixed tuple type parsing, enum constructor resolution, generic type params, formatter drift. Updated plan to reflect actual status. |
 
 ---
 
@@ -220,10 +231,10 @@ cargo run -- package --output build      # Package for distribution
 
 | Category | Count | Type |
 |----------|-------|------|
-| Unit tests (Rust) | 224 | `#[test]` in source |
+| Unit tests (Rust) | 227 | `#[test]` in source |
 | Golden tests | 4 | Snapshot comparisons |
-| Astra tests | 48+ | `test` blocks in .astra |
-| **Total** | **276+** | All passing ✅ |
+| Astra tests | 48/52 | `test` blocks in .astra (4 effects fixture failures) |
+| **Total** | **279** | 231 Rust + 48 Astra passing |
 
 ---
 
@@ -234,7 +245,7 @@ cargo run -- package --output build      # Package for distribution
 | Lexer | `src/parser/lexer.rs` | In-file |
 | Parser | `src/parser/parser.rs` | In-file + golden |
 | AST | `src/parser/ast.rs` | - |
-| Type Checker | `src/typechecker/mod.rs` | In-file (17+) |
+| Type Checker | `src/typechecker/mod.rs` | In-file (20+) |
 | Effects | `src/effects/mod.rs` | In-file |
 | Interpreter | `src/interpreter/mod.rs` | In-file (150+) |
 | CLI | `src/cli/mod.rs` | Integration |
@@ -257,9 +268,9 @@ cargo run -- package --output build      # Package for distribution
 | `generics.astra` | Generic functions, higher-order |
 | `while_loops.astra` | While loops, break, return, fibonacci |
 | `string_interp.astra` | String interpolation `"${expr}"` |
-| `tuples_and_maps.astra` | Tuples, maps, sets |
+| `tuples_and_maps.astra` | Tuples, maps, sets, tuple types in signatures |
 | `tail_recursion.astra` | TCO with accumulator patterns |
-| `traits_and_types.astra` | Traits, type aliases, invariants |
+| `traits_and_types.astra` | Traits, type aliases, invariants, enum constructors |
 
 ### Stdlib Modules
 | Module | Functions |
@@ -269,11 +280,14 @@ cargo run -- package --output build      # Package for distribution
 | `std.collections` | `group_by_even`, `frequencies`, `chunks` |
 
 ### V2 Roadmap (Future)
-| Feature | Description |
-|---------|-------------|
-| LSP Server | Language Server Protocol for IDE integration |
-| WASM Target | Compile to WebAssembly for browser/edge deployment |
-| Incremental Compilation | Cache and reuse compilation artifacts |
-| Full Type Inference | Hindley-Milner style type unification |
-| Borrow Checker | Ownership-based memory safety |
-| Concurrency | True async/await with green threads |
+| Feature | Description | Priority |
+|---------|-------------|----------|
+| **Full generic type checking** | Hindley-Milner unification for type params | High |
+| **Trait method dispatch** | Resolve `impl` methods on trait-typed values | High |
+| **Runtime module imports** | Execute imported files and make definitions available | High |
+| **Interactive REPL** | Evaluate expressions and definitions interactively | Medium |
+| **Package bundling** | Create distributable `.astra` archives | Medium |
+| **LSP Server** | Language Server Protocol for IDE integration | Medium |
+| **WASM Target** | Compile to WebAssembly for browser/edge deployment | Low |
+| **Incremental Compilation** | Cache and reuse compilation artifacts | Low |
+| **Statement terminators** | Optional `;` or newline-aware parsing to resolve `let x = y` / `(z)` ambiguity | Medium |

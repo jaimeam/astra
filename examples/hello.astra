@@ -1,7 +1,7 @@
 module hello
 
-# A simple hello world program demonstrating basic Astra syntax
-
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println("Hello, Astra!")
 }

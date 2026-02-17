@@ -434,6 +434,16 @@ impl Formatter {
                     self.write(")");
                 }
             }
+            TypeExpr::Tuple { elements, .. } => {
+                self.write("(");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.format_type_expr(elem);
+                }
+                self.write(")");
+            }
         }
     }
 

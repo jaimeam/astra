@@ -1,9 +1,7 @@
 module result_chaining
 
-# Demonstrates Result type for error handling
-# Operations that can fail return Result[T, E]
-
-fn parse_int(s: Text) -> Result[Int, Text] {
+fn parse_int(s: Text) -> Result[Int, Text]
+{
   if s == "" {
     Err("empty input")
   } else {
@@ -19,14 +17,17 @@ fn parse_int(s: Text) -> Result[Int, Text] {
   }
 }
 
-fn describe_parse(s: Text) -> Text {
+fn describe_parse(s: Text) -> Text
+{
   match parse_int(s) {
     Ok(n) => "Success: parsed number"
     Err(msg) => "Error: " + msg
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println(describe_parse("42"))
   Console.println(describe_parse("100"))
   Console.println(describe_parse(""))

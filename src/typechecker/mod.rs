@@ -287,7 +287,32 @@ impl TypeChecker {
                     self.imports.push((import_name, import.span.clone(), false));
                 }
                 Item::TypeDef(def) => self.env.register_type(def.clone()),
-                Item::EnumDef(def) => self.env.register_enum(def.clone()),
+                Item::EnumDef(def) => {
+                    self.env.register_enum(def.clone());
+                    // Register each variant as a callable constructor
+                    let enum_type = Type::Named(def.name.clone(), vec![]);
+                    for variant in &def.variants {
+                        if variant.fields.is_empty() {
+                            // Nullary variant (e.g., None, Red)
+                            self.env.define(variant.name.clone(), enum_type.clone());
+                        } else {
+                            // Variant with fields (e.g., Circle(r: Float))
+                            let param_types: Vec<Type> = variant
+                                .fields
+                                .iter()
+                                .map(|f| self.resolve_type_expr(&f.ty))
+                                .collect();
+                            self.env.define(
+                                variant.name.clone(),
+                                Type::Function {
+                                    params: param_types,
+                                    ret: Box::new(enum_type.clone()),
+                                    effects: vec![],
+                                },
+                            );
+                        }
+                    }
+                }
                 Item::FnDef(def) => {
                     self.env.register_fn(def.clone());
                     // Also add function name as a binding so it can be looked up
@@ -384,9 +409,10 @@ impl TypeChecker {
         // Push lint scope for function body
         self.push_lint_scope();
 
-        // Register type parameters as unknown types
+        // Register type parameters as named type variables
+        // This allows basic structural matching (e.g., T == T) within generic code
         for tp in &def.type_params {
-            fn_env.define(tp.clone(), Type::Unknown);
+            fn_env.define(tp.clone(), Type::Named(tp.clone(), vec![]));
         }
 
         // Add parameters to environment
@@ -1186,6 +1212,10 @@ impl TypeChecker {
                 ret: Box::new(self.resolve_type_expr(ret)),
                 effects: effects.clone(),
             },
+            TypeExpr::Tuple { elements, .. } => Type::Named(
+                "Tuple".to_string(),
+                elements.iter().map(|e| self.resolve_type_expr(e)).collect(),
+            ),
         }
     }
 
@@ -1919,5 +1949,68 @@ fn main() -> Int {
         let diags = check_module_all_diags(source);
         assert!(diags.has_warnings(), "should have warnings");
         assert!(!diags.has_errors(), "should not have errors");
+    }
+
+    // Enum constructor resolution
+
+    #[test]
+    fn test_enum_variant_constructors_resolved() {
+        let source = r#"
+module example
+
+enum Shape =
+  | Circle(radius: Float)
+  | Rectangle(width: Float, height: Float)
+
+fn main() -> Float {
+  let c = Circle(5.0)
+  let r = Rectangle(3.0, 4.0)
+  0.0
+}
+"#;
+        let result = check_module(source);
+        assert!(
+            result.is_ok(),
+            "enum variant constructors should be resolved: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_enum_nullary_variant_resolved() {
+        let source = r#"
+module example
+
+enum Color = | Red | Green | Blue
+
+fn pick() -> Color {
+  Red
+}
+"#;
+        let result = check_module(source);
+        assert!(
+            result.is_ok(),
+            "nullary enum variants should be resolved: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    // Tuple type parsing
+
+    #[test]
+    fn test_tuple_type_in_function_signature() {
+        let source = r#"
+module example
+
+fn swap(pair: (Int, Int)) -> (Int, Int) {
+  (pair.1, pair.0)
+}
+"#;
+        let result = check_module(source);
+        assert!(
+            result.is_ok(),
+            "tuple types in signatures should parse and check: {:?}",
+            result.unwrap_err()
+        );
     }
 }

@@ -1,15 +1,18 @@
 module examples.string_interp
 
-fn greet(name: Text) -> Text {
+fn greet(name: Text) -> Text
+{
   "Hello, ${name}!"
 }
 
-fn describe(x: Int) -> Text {
+fn describe(x: Int) -> Text
+{
   let doubled = x * 2
   "${x} doubled is ${doubled}"
 }
 
-fn format_list(items: List[Int]) -> Text {
+fn format_list(items: List[Int]) -> Text
+{
   let count = len(items)
   "List has ${count} items: ${to_text(items)}"
 }

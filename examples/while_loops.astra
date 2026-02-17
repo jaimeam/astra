@@ -1,7 +1,7 @@
 module examples.while_loops
 
-# Counting with while
-fn countdown(n: Int) -> Int {
+fn countdown(n: Int) -> Int
+{
   let mut i = n
   let mut sum = 0
   while i > 0 {
@@ -11,8 +11,8 @@ fn countdown(n: Int) -> Int {
   sum
 }
 
-# While with break
-fn find_divisor(n: Int) -> Int {
+fn find_divisor(n: Int) -> Int
+{
   let mut i = 2
   while i < n {
     if n % i == 0 {
@@ -23,8 +23,8 @@ fn find_divisor(n: Int) -> Int {
   n
 }
 
-# Fibonacci using while
-fn fibonacci(n: Int) -> Int {
+fn fibonacci(n: Int) -> Int
+{
   if n <= 1 {
     return n
   }

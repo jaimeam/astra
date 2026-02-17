@@ -1,11 +1,9 @@
 module option_example
 
-# Demonstrates Option type for handling values that may be absent
-# No null in Astra - use Option[T] instead!
-
 type User = { name: Text, age: Int }
 
-fn find_user(id: Int) -> Option[User] {
+fn find_user(id: Int) -> Option[User]
+{
   if id == 1 {
     Some({ name = "Alice", age = 30 })
   } else {
@@ -17,14 +15,17 @@ fn find_user(id: Int) -> Option[User] {
   }
 }
 
-fn greet_user(id: Int) -> Text {
+fn greet_user(id: Int) -> Text
+{
   match find_user(id) {
     Some(user) => "Hello, " + user.name + "!"
     None => "User not found"
   }
 }
 
-fn main() effects(Console) {
+fn main()
+  effects(Console)
+{
   Console.println(greet_user(1))
   Console.println(greet_user(2))
   Console.println(greet_user(999))
