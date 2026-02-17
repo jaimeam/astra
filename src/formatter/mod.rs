@@ -424,6 +424,9 @@ impl Formatter {
             Expr::IntLit { value, .. } => {
                 self.write(&value.to_string());
             }
+            Expr::FloatLit { value, .. } => {
+                self.write(&format!("{}", value));
+            }
             Expr::BoolLit { value, .. } => {
                 self.write(if *value { "true" } else { "false" });
             }
@@ -643,6 +646,9 @@ impl Formatter {
             }
             Pattern::IntLit { value, .. } => {
                 self.write(&value.to_string());
+            }
+            Pattern::FloatLit { value, .. } => {
+                self.write(&format!("{}", value));
             }
             Pattern::BoolLit { value, .. } => {
                 self.write(if *value { "true" } else { "false" });

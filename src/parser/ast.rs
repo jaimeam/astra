@@ -272,6 +272,11 @@ pub enum Expr {
         span: Span,
         value: i64,
     },
+    FloatLit {
+        id: NodeId,
+        span: Span,
+        value: f64,
+    },
     BoolLit {
         id: NodeId,
         span: Span,
@@ -436,6 +441,7 @@ impl Expr {
     pub fn span(&self) -> &Span {
         match self {
             Expr::IntLit { span, .. }
+            | Expr::FloatLit { span, .. }
             | Expr::BoolLit { span, .. }
             | Expr::TextLit { span, .. }
             | Expr::UnitLit { span, .. }
@@ -485,6 +491,9 @@ pub enum BinaryOp {
     // Logical
     And,
     Or,
+
+    // Pipe
+    Pipe,
 }
 
 impl BinaryOp {
@@ -504,6 +513,7 @@ impl BinaryOp {
             BinaryOp::Ge => ">=",
             BinaryOp::And => "and",
             BinaryOp::Or => "or",
+            BinaryOp::Pipe => "|>",
         }
     }
 }
@@ -561,6 +571,11 @@ pub enum Pattern {
         id: NodeId,
         span: Span,
         value: i64,
+    },
+    FloatLit {
+        id: NodeId,
+        span: Span,
+        value: f64,
     },
     BoolLit {
         id: NodeId,

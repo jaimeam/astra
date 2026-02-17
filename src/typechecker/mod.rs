@@ -31,6 +31,8 @@ pub enum Type {
     Unit,
     /// Integer type
     Int,
+    /// Float type
+    Float,
     /// Boolean type
     Bool,
     /// Text/string type
@@ -556,6 +558,7 @@ impl TypeChecker {
     ) -> Type {
         match expr {
             Expr::IntLit { .. } => Type::Int,
+            Expr::FloatLit { .. } => Type::Float,
             Expr::BoolLit { .. } => Type::Bool,
             Expr::TextLit { .. } => Type::Text,
             Expr::UnitLit { .. } => Type::Unit,
@@ -611,11 +614,21 @@ impl TypeChecker {
                     | BinaryOp::Mod => {
                         if left_ty == Type::Int && right_ty == Type::Int {
                             Type::Int
+                        } else if left_ty == Type::Float || right_ty == Type::Float {
+                            Type::Float
                         } else if left_ty == Type::Text
                             && right_ty == Type::Text
                             && *op == BinaryOp::Add
                         {
                             Type::Text
+                        } else {
+                            Type::Unknown
+                        }
+                    }
+                    // Pipe operator returns the return type of the right-hand function
+                    BinaryOp::Pipe => {
+                        if let Type::Function { ret, .. } = right_ty {
+                            *ret
                         } else {
                             Type::Unknown
                         }
@@ -1090,6 +1103,7 @@ impl TypeChecker {
         match ty {
             TypeExpr::Named { name, args, .. } => match name.as_str() {
                 "Int" => Type::Int,
+                "Float" => Type::Float,
                 "Bool" => Type::Bool,
                 "Text" => Type::Text,
                 "Unit" => Type::Unit,
@@ -1162,6 +1176,7 @@ fn collect_pattern_bindings(pattern: &Pattern, env: &mut TypeEnv) {
         }
         Pattern::Wildcard { .. }
         | Pattern::IntLit { .. }
+        | Pattern::FloatLit { .. }
         | Pattern::BoolLit { .. }
         | Pattern::TextLit { .. } => {}
     }

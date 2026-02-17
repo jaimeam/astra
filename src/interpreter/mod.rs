@@ -205,6 +205,8 @@ pub enum Value {
     Unit,
     /// Integer
     Int(i64),
+    /// Float
+    Float(f64),
     /// Boolean
     Bool(bool),
     /// Text string
@@ -256,6 +258,7 @@ fn values_equal(left: &Value, right: &Value) -> bool {
     match (left, right) {
         (Value::Unit, Value::Unit) => true,
         (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Text(a), Value::Text(b)) => a == b,
         (Value::None, Value::None) => true,
@@ -290,6 +293,7 @@ fn values_equal(left: &Value, right: &Value) -> bool {
 fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => a.cmp(b),
+        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
         (Value::Text(a), Value::Text(b)) => a.cmp(b),
         (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
         _ => std::cmp::Ordering::Equal,
@@ -561,6 +565,7 @@ impl Interpreter {
         match expr {
             // Literals
             Expr::IntLit { value, .. } => Ok(Value::Int(*value)),
+            Expr::FloatLit { value, .. } => Ok(Value::Float(*value)),
             Expr::BoolLit { value, .. } => Ok(Value::Bool(*value)),
             Expr::TextLit { value, .. } => Ok(Value::Text(value.clone())),
             Expr::UnitLit { .. } => Ok(Value::Unit),
@@ -602,6 +607,12 @@ impl Interpreter {
             Expr::Binary {
                 op, left, right, ..
             } => {
+                // Pipe operator: x |> f evaluates as f(x)
+                if *op == BinaryOp::Pipe {
+                    let left_val = self.eval_expr(left)?;
+                    let right_val = self.eval_expr(right)?;
+                    return self.call_function(right_val, vec![left_val]);
+                }
                 let left_val = self.eval_expr(left)?;
                 let right_val = self.eval_expr(right)?;
                 self.eval_binary_op(*op, &left_val, &right_val)
@@ -619,15 +630,22 @@ impl Interpreter {
                 if let Expr::Ident { name, .. } = func.as_ref() {
                     match name.as_str() {
                         "assert" => {
-                            if args.len() != 1 {
+                            if args.is_empty() || args.len() > 2 {
                                 return Err(RuntimeError::arity_mismatch(1, args.len()));
                             }
                             let cond = self.eval_expr(&args[0])?;
+                            let msg = if args.len() == 2 {
+                                let m = self.eval_expr(&args[1])?;
+                                match m {
+                                    Value::Text(s) => s,
+                                    other => format_value(&other),
+                                }
+                            } else {
+                                "assertion failed".to_string()
+                            };
                             return match cond {
                                 Value::Bool(true) => Ok(Value::Unit),
-                                Value::Bool(false) => {
-                                    Err(RuntimeError::new("E4020", "assertion failed"))
-                                }
+                                Value::Bool(false) => Err(RuntimeError::new("E4020", msg)),
                                 _ => {
                                     Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond)))
                                 }
@@ -746,7 +764,11 @@ impl Interpreter {
                             let val = self.eval_expr(&args[0])?;
                             return match val {
                                 Value::Int(n) => Ok(Value::Int(n.abs())),
-                                _ => Err(RuntimeError::type_mismatch("Int", &format!("{:?}", val))),
+                                Value::Float(n) => Ok(Value::Float(n.abs())),
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "Int or Float",
+                                    &format!("{:?}", val),
+                                )),
                             };
                         }
                         "min" => {
@@ -757,7 +779,11 @@ impl Interpreter {
                             let b = self.eval_expr(&args[1])?;
                             return match (a, b) {
                                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.min(b))),
-                                _ => Err(RuntimeError::type_mismatch("(Int, Int)", "other")),
+                                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.min(b))),
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "(Int, Int) or (Float, Float)",
+                                    "other",
+                                )),
                             };
                         }
                         "max" => {
@@ -768,7 +794,11 @@ impl Interpreter {
                             let b = self.eval_expr(&args[1])?;
                             return match (a, b) {
                                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a.max(b))),
-                                _ => Err(RuntimeError::type_mismatch("(Int, Int)", "other")),
+                                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.max(b))),
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "(Int, Int) or (Float, Float)",
+                                    "other",
+                                )),
                             };
                         }
                         "pow" => {
@@ -788,7 +818,106 @@ impl Interpreter {
                                         Ok(Value::Int(b.pow(e as u32)))
                                     }
                                 }
-                                _ => Err(RuntimeError::type_mismatch("(Int, Int)", "other")),
+                                (Value::Float(b), Value::Float(e)) => Ok(Value::Float(b.powf(e))),
+                                (Value::Float(b), Value::Int(e)) => {
+                                    Ok(Value::Float(b.powi(e as i32)))
+                                }
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "(Int, Int) or (Float, Float)",
+                                    "other",
+                                )),
+                            };
+                        }
+                        // P3.4: Conversion functions
+                        "to_int" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Int(n) => Ok(Value::Int(n)),
+                                Value::Float(f) => Ok(Value::Int(f as i64)),
+                                Value::Text(s) => match s.parse::<i64>() {
+                                    Ok(n) => Ok(Value::Some(Box::new(Value::Int(n)))),
+                                    Err(_) => Ok(Value::None),
+                                },
+                                Value::Bool(b) => Ok(Value::Int(if b { 1 } else { 0 })),
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "Int, Float, Text, or Bool",
+                                    &format!("{:?}", val),
+                                )),
+                            };
+                        }
+                        "to_float" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Int(n) => Ok(Value::Float(n as f64)),
+                                Value::Float(f) => Ok(Value::Float(f)),
+                                Value::Text(s) => match s.parse::<f64>() {
+                                    Ok(f) => Ok(Value::Some(Box::new(Value::Float(f)))),
+                                    Err(_) => Ok(Value::None),
+                                },
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "Int, Float, or Text",
+                                    &format!("{:?}", val),
+                                )),
+                            };
+                        }
+                        // P3.6: Math functions for Float
+                        "sqrt" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Float(f) => Ok(Value::Float(f.sqrt())),
+                                Value::Int(n) => Ok(Value::Float((n as f64).sqrt())),
+                                _ => Err(RuntimeError::type_mismatch(
+                                    "Float or Int",
+                                    &format!("{:?}", val),
+                                )),
+                            };
+                        }
+                        "floor" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Float(f) => Ok(Value::Float(f.floor())),
+                                Value::Int(n) => Ok(Value::Int(n)),
+                                _ => {
+                                    Err(RuntimeError::type_mismatch("Float", &format!("{:?}", val)))
+                                }
+                            };
+                        }
+                        "ceil" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Float(f) => Ok(Value::Float(f.ceil())),
+                                Value::Int(n) => Ok(Value::Int(n)),
+                                _ => {
+                                    Err(RuntimeError::type_mismatch("Float", &format!("{:?}", val)))
+                                }
+                            };
+                        }
+                        "round" => {
+                            if args.len() != 1 {
+                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                            }
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Float(f) => Ok(Value::Float(f.round())),
+                                Value::Int(n) => Ok(Value::Int(n)),
+                                _ => {
+                                    Err(RuntimeError::type_mismatch("Float", &format!("{:?}", val)))
+                                }
                             };
                         }
                         _ => {}
@@ -1162,6 +1291,37 @@ impl Interpreter {
             (BinaryOp::Mod, Value::Int(_), Value::Int(0)) => Err(RuntimeError::division_by_zero()),
             (BinaryOp::Mod, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
 
+            // Float arithmetic
+            (BinaryOp::Add, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+            (BinaryOp::Sub, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+            (BinaryOp::Mul, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+            (BinaryOp::Div, Value::Float(a), Value::Float(b)) => {
+                if *b == 0.0 {
+                    Err(RuntimeError::division_by_zero())
+                } else {
+                    Ok(Value::Float(a / b))
+                }
+            }
+            (BinaryOp::Mod, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a % b)),
+
+            // Float comparison
+            (BinaryOp::Eq, Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a == b)),
+            (BinaryOp::Ne, Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a != b)),
+            (BinaryOp::Lt, Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a < b)),
+            (BinaryOp::Le, Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
+            (BinaryOp::Gt, Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
+            (BinaryOp::Ge, Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
+
+            // Int-Float mixed arithmetic (auto-promote Int to Float)
+            (BinaryOp::Add, Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
+            (BinaryOp::Add, Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
+            (BinaryOp::Sub, Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
+            (BinaryOp::Sub, Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - *b as f64)),
+            (BinaryOp::Mul, Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 * b)),
+            (BinaryOp::Mul, Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * *b as f64)),
+            (BinaryOp::Div, Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 / b)),
+            (BinaryOp::Div, Value::Float(a), Value::Int(b)) => Ok(Value::Float(a / *b as f64)),
+
             // String concatenation
             (BinaryOp::Add, Value::Text(a), Value::Text(b)) => {
                 Ok(Value::Text(format!("{}{}", a, b)))
@@ -1198,6 +1358,7 @@ impl Interpreter {
     fn eval_unary_op(&self, op: UnaryOp, val: &Value) -> Result<Value, RuntimeError> {
         match (op, val) {
             (UnaryOp::Neg, Value::Int(n)) => Ok(Value::Int(-n)),
+            (UnaryOp::Neg, Value::Float(n)) => Ok(Value::Float(-n)),
             (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
             _ => Err(RuntimeError::type_mismatch(
                 &format!("valid type for {:?}", op),
@@ -2094,6 +2255,14 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
             }
             None
         }
+        Pattern::FloatLit { value: pat_val, .. } => {
+            if let Value::Float(v) = value {
+                if v == pat_val {
+                    return Some(vec![]);
+                }
+            }
+            None
+        }
         Pattern::BoolLit { value: pat_val, .. } => {
             if let Value::Bool(v) = value {
                 if v == pat_val {
@@ -2231,6 +2400,13 @@ fn format_value(value: &Value) -> String {
     match value {
         Value::Unit => "()".to_string(),
         Value::Int(n) => n.to_string(),
+        Value::Float(f) => {
+            if f.fract() == 0.0 {
+                format!("{:.1}", f)
+            } else {
+                f.to_string()
+            }
+        }
         Value::Bool(b) => b.to_string(),
         Value::Text(s) => s.clone(),
         Value::Record(fields) => {
@@ -4429,5 +4605,176 @@ fn main() -> Text {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Text(ref s) if s == "small"));
+    }
+
+    // === P1.6: Float type ===
+
+    #[test]
+    fn test_float_literal() {
+        let source = r#"
+module example
+fn main() -> Float {
+  2.75
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Float(f) if (f - 2.75).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_float_arithmetic() {
+        let source = r#"
+module example
+fn main() -> Float {
+  1.5 + 2.5
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Float(f) if (f - 4.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_float_int_mixed() {
+        let source = r#"
+module example
+fn main() -> Float {
+  2 * 1.5
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Float(f) if (f - 3.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn test_float_comparison() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  3.14 > 2.71
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_float_neg() {
+        let source = r#"
+module example
+fn main() -> Float {
+  -2.75
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Float(f) if (f + 2.75).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_sqrt() {
+        let source = r#"
+module example
+fn main() -> Float {
+  sqrt(16.0)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Float(f) if (f - 4.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_floor_ceil_round() {
+        let source = r#"
+module example
+fn main() -> Float {
+  floor(3.7) + ceil(3.2) + round(3.5)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        // floor(3.7)=3.0 + ceil(3.2)=4.0 + round(3.5)=4.0 = 11.0
+        assert!(matches!(result, Value::Float(f) if (f - 11.0).abs() < 0.001));
+    }
+
+    // === P6.1: Pipe operator ===
+
+    #[test]
+    fn test_pipe_basic() {
+        let source = r#"
+module example
+fn double(x: Int) -> Int { x * 2 }
+fn add_one(x: Int) -> Int { x + 1 }
+fn main() -> Int {
+  5 |> double |> add_one
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(11)));
+    }
+
+    #[test]
+    fn test_pipe_with_lambda() {
+        let source = r#"
+module example
+fn main() -> Int {
+  10 |> fn(x) { x * x }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(100)));
+    }
+
+    // === P3.4: Conversion functions ===
+
+    #[test]
+    fn test_to_int_from_float() {
+        let source = r#"
+module example
+fn main() -> Int {
+  to_int(3.14)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_to_float_from_int() {
+        let source = r#"
+module example
+fn main() -> Float {
+  to_float(42)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Float(f) if (f - 42.0).abs() < 0.001));
+    }
+
+    // === P5.4: Assert with custom messages ===
+
+    #[test]
+    fn test_assert_with_message_passes() {
+        let source = r#"
+module example
+fn main() -> Int {
+  assert(true, "should pass")
+  42
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_assert_with_message_fails() {
+        let source = r#"
+module example
+fn main() -> Int {
+  assert(false, "custom error message")
+  42
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("custom error message"));
     }
 }

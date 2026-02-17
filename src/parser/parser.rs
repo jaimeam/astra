@@ -653,6 +653,7 @@ impl<'a> Parser<'a> {
 
         loop {
             let (op, prec) = match self.peek().kind {
+                TokenKind::PipeArrow => (BinaryOp::Pipe, 0),
                 TokenKind::Or => (BinaryOp::Or, 1),
                 TokenKind::And => (BinaryOp::And, 2),
                 TokenKind::EqEq => (BinaryOp::Eq, 3),
@@ -812,6 +813,15 @@ impl<'a> Parser<'a> {
         let token = self.peek().clone();
 
         match &token.kind {
+            TokenKind::FloatLit(n) => {
+                let value = *n;
+                self.advance();
+                Ok(Expr::FloatLit {
+                    id: NodeId::new(),
+                    span: token.span,
+                    value,
+                })
+            }
             TokenKind::IntLit(n) => {
                 let value = *n;
                 self.advance();
@@ -1121,8 +1131,22 @@ impl<'a> Parser<'a> {
     fn parse_assert_expr(&mut self) -> Result<Expr, Diagnostic> {
         let start_span = self.current_span();
         self.expect(TokenKind::Assert)?;
-        let arg = self.parse_expr()?;
-        let end_span = arg.span().clone();
+
+        // If followed by '(', parse as assert(cond) or assert(cond, msg)
+        let args = if self.check(TokenKind::LParen) {
+            self.advance();
+            let mut args = vec![self.parse_expr()?];
+            if self.check(TokenKind::Comma) {
+                self.advance();
+                args.push(self.parse_expr()?);
+            }
+            self.expect(TokenKind::RParen)?;
+            args
+        } else {
+            vec![self.parse_expr()?]
+        };
+
+        let end_span = self.current_span();
 
         // Parse assert as a call to the builtin assert function
         Ok(Expr::Call {
@@ -1133,7 +1157,7 @@ impl<'a> Parser<'a> {
                 span: start_span.clone(),
                 name: "assert".to_string(),
             }),
-            args: vec![arg],
+            args,
         })
     }
 
@@ -1489,6 +1513,7 @@ impl<'a> Parser<'a> {
     fn expr_span(&self, expr: &Expr) -> Span {
         match expr {
             Expr::IntLit { span, .. }
+            | Expr::FloatLit { span, .. }
             | Expr::BoolLit { span, .. }
             | Expr::TextLit { span, .. }
             | Expr::UnitLit { span, .. }
