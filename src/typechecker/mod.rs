@@ -495,7 +495,29 @@ impl TypeChecker {
 
         // Check body and collect effects used
         let mut effects_used = HashSet::new();
-        let _body_type = self.check_block_with_effects(&def.body, &mut fn_env, &mut effects_used);
+        let body_type = self.check_block_with_effects(&def.body, &mut fn_env, &mut effects_used);
+
+        // Verify return type matches body type
+        if let Some(ref ret_ty_expr) = def.return_type {
+            let declared_ret = self.resolve_type_expr(ret_ty_expr);
+            if !self.types_compatible(&body_type, &declared_ret) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                    )
+                    .message(format!(
+                        "Function `{}` declares return type {:?} but body returns {:?}",
+                        def.name, declared_ret, body_type
+                    ))
+                    .span(def.span.clone())
+                    .suggestion(Suggestion::new(format!(
+                        "Change the return type to `{:?}` or fix the function body",
+                        body_type
+                    )))
+                    .build(),
+                );
+            }
+        }
 
         // Pop lint scope — emits W0001 for unused variables/params
         self.pop_lint_scope();
