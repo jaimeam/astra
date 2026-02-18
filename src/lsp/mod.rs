@@ -6,8 +6,12 @@
 //! - Hover information (type info)
 //! - Document symbols
 
+mod transport;
+
 use std::collections::HashMap;
-use std::io::{self, BufRead, Read as IoRead, Write as IoWrite};
+use std::io::{self, Read as IoRead};
+
+use transport::{read_content_length, send_message};
 
 use serde_json::{json, Value};
 
@@ -851,40 +855,6 @@ impl LspServer {
 
         json!(actions)
     }
-}
-
-/// Read the Content-Length header from the input stream
-fn read_content_length(reader: &mut impl BufRead) -> io::Result<usize> {
-    let mut header = String::new();
-    loop {
-        header.clear();
-        let bytes_read = reader.read_line(&mut header)?;
-        if bytes_read == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "EOF"));
-        }
-        let header = header.trim();
-        if header.is_empty() {
-            continue;
-        }
-        if let Some(len_str) = header.strip_prefix("Content-Length: ") {
-            let len: usize = len_str.parse().map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("Invalid length: {}", e))
-            })?;
-            // Read the empty line after headers
-            let mut empty = String::new();
-            reader.read_line(&mut empty)?;
-            return Ok(len);
-        }
-    }
-}
-
-/// Send a JSON-RPC message to stdout
-fn send_message(msg: &Value) -> io::Result<()> {
-    let body = serde_json::to_string(msg)?;
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    write!(out, "Content-Length: {}\r\n\r\n{}", body.len(), body)?;
-    out.flush()
 }
 
 /// Convert a URI to a file path
