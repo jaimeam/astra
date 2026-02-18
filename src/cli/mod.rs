@@ -2522,6 +2522,12 @@ test "hello works" {{
     let gitignore = "# Astra build artifacts\n/build/\n/.astra-cache/\n";
     std::fs::write(project_dir.join(".gitignore"), gitignore)?;
 
+    // Write .claude/CLAUDE.md for AI agent onboarding
+    let claude_dir = project_dir.join(".claude");
+    std::fs::create_dir_all(&claude_dir)?;
+    let claude_md = generate_claude_md(&project_name, lib);
+    std::fs::write(claude_dir.join("CLAUDE.md"), claude_md)?;
+
     if name.is_some() {
         println!("Created new Astra project '{}'", project_name);
         println!("  cd {}", project_name);
@@ -2539,6 +2545,89 @@ test "hello works" {{
     }
 
     Ok(())
+}
+
+fn generate_claude_md(project_name: &str, is_lib: bool) -> String {
+    let run_hint = if is_lib {
+        String::new()
+    } else {
+        "astra run src/main.astra      # Run the program\n".to_string()
+    };
+
+    format!(
+        r#"# {name}
+
+This project uses the [Astra](https://github.com/jaimeam/astra) programming language.
+
+## Commands
+
+```bash
+astra check src/              # Type-check all files (must pass with 0 errors)
+astra check --json src/       # Same, with machine-readable JSON output
+astra test                    # Run all tests (must pass)
+astra fix src/                # Auto-apply suggested fixes
+astra fmt src/                # Format all code canonically
+{run_hint}astra explain E1001           # Explain any error code
+```
+
+## Workflow
+
+1. Write or edit `.astra` files in `src/`
+2. Run `astra check src/` — fix any errors before moving on
+3. Run `astra test` — fix any failures
+4. Run `astra fmt src/` — format before committing
+
+Use `astra check --json src/` for structured error output. Each diagnostic
+includes an error code, file location, message, and suggested fix.
+
+## Language Quick Reference
+
+- Every file starts with `module <name>`
+- Functions: `fn name(param: Type) -> ReturnType {{ body }}`
+- Side effects must be declared: `fn name() effects(Console, Fs) {{ ... }}`
+- No null — use `Option[T]` with `Some(value)` / `None`
+- Errors use `Result[T, E]` with `Ok(value)` / `Err(error)`
+- Export with `public fn`, import with `import module.{{name}}`
+- Tests are inline `test "name" {{ ... }}` blocks
+- Comments use `#`, no semicolons
+
+## Effects
+
+Functions that perform I/O must declare their effects:
+
+| Effect    | Description         | Example                              |
+|-----------|---------------------|--------------------------------------|
+| `Console` | Terminal I/O        | `println("hello")`                   |
+| `Fs`      | File system         | `Fs.read("path")`                    |
+| `Net`     | Network requests    | `Net.get("https://...")`             |
+| `Clock`   | Current time        | `Clock.now()`                        |
+| `Rand`    | Random numbers      | `Rand.int(1, 100)`                   |
+| `Env`     | Environment vars    | `Env.get("KEY")`                     |
+
+Pure functions (no `effects` clause) have no side effects and are safe to
+call from anywhere.
+
+## Error Codes
+
+- `E0xxx` — Syntax / parsing errors
+- `E1xxx` — Type errors
+- `E2xxx` — Effect errors
+- `E3xxx` — Contract violations
+- `E4xxx` — Runtime errors
+
+Run `astra explain <code>` for a detailed explanation of any error.
+
+## Docs
+
+- [Getting Started](https://github.com/jaimeam/astra/blob/main/docs/getting-started.md)
+- [Language Spec](https://github.com/jaimeam/astra/blob/main/docs/spec.md)
+- [Standard Library](https://github.com/jaimeam/astra/blob/main/docs/stdlib.md)
+- [Effects System](https://github.com/jaimeam/astra/blob/main/docs/effects.md)
+- [Error Codes](https://github.com/jaimeam/astra/blob/main/docs/errors.md)
+"#,
+        name = project_name,
+        run_hint = run_hint,
+    )
 }
 
 fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
@@ -3070,5 +3159,51 @@ mod tests {
         assert!(result.is_some());
         let text = result.unwrap();
         assert!(text.contains("Unused variable"));
+    }
+
+    #[test]
+    fn test_generate_claude_md_app() {
+        let md = generate_claude_md("my_app", false);
+        assert!(md.contains("# my_app"));
+        assert!(md.contains("astra check src/"));
+        assert!(md.contains("astra test"));
+        assert!(md.contains("astra fmt src/"));
+        assert!(md.contains("astra fix src/"));
+        assert!(md.contains("astra run src/main.astra"));
+        assert!(md.contains("astra explain"));
+        assert!(md.contains("effects"));
+        assert!(md.contains("E0xxx"));
+        assert!(md.contains("Option[T]"));
+    }
+
+    #[test]
+    fn test_generate_claude_md_lib() {
+        let md = generate_claude_md("my_lib", true);
+        assert!(md.contains("# my_lib"));
+        assert!(md.contains("astra check src/"));
+        assert!(md.contains("astra test"));
+        // Lib projects should not include a run command
+        assert!(!md.contains("astra run src/main.astra"));
+    }
+
+    #[test]
+    fn test_init_creates_claude_md() {
+        let tmp = std::env::temp_dir().join("astra_test_init_claude_md");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Simulate what run_init does for the .claude directory
+        let claude_dir = tmp.join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let md = generate_claude_md("test_project", false);
+        std::fs::write(claude_dir.join("CLAUDE.md"), &md).unwrap();
+
+        let path = tmp.join(".claude").join("CLAUDE.md");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("# test_project"));
+        assert!(content.contains("astra check"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

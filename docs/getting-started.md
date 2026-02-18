@@ -45,6 +45,8 @@ This creates:
 ```
 my_project/
 ├── astra.toml          # Project manifest
+├── .claude/
+│   └── CLAUDE.md       # AI agent instructions (Claude Code, etc.)
 ├── src/
 │   └── main.astra      # Entry point with a hello-world and test
 └── .gitignore
@@ -58,54 +60,36 @@ astra test                # Run tests (expect: 1 passed)
 astra run src/main.astra  # Run the program (expect: prints hello)
 ```
 
-### Telling an Agent to Use Astra
+### Using Astra with Claude Code
 
-If you want an AI agent (Claude, etc.) to work with Astra in your repo, add this to your project's `CLAUDE.md` or equivalent instructions file:
+`astra init` generates a `.claude/CLAUDE.md` file that teaches Claude Code (and
+other AI agents) how to work with your Astra project. This means any new Astra
+project is agent-ready out of the box — just open the project in Claude Code and
+start working.
 
-````markdown
-## Astra
+The generated `CLAUDE.md` includes:
+- All key commands (`astra check`, `astra test`, `astra fmt`, `astra fix`)
+- The development workflow (check → test → format → commit)
+- A language quick reference (syntax, effects, Option/Result)
+- Effect and error code tables
+- Links to documentation
 
-This project uses the [Astra](https://github.com/jaimeam/astra) programming language.
+You can customize `.claude/CLAUDE.md` to add project-specific instructions
+(e.g., architecture notes, coding conventions, or domain context).
 
-### Setup (run once)
+### Adding Astra to an Existing Project
+
+If you have an existing repo and want to add Astra support, run `astra init`
+from the project root (without a name argument) to scaffold the manifest and
+agent instructions into the current directory:
 
 ```bash
-# Install Astra (requires Rust 1.70+)
-git clone https://github.com/jaimeam/astra.git /tmp/astra
-cd /tmp/astra && cargo build --release
-export PATH="$PATH:/tmp/astra/target/release"
+cd my_existing_project
+astra init
 ```
 
-### Key Commands
-
-```bash
-astra check src/              # Type-check all files (must pass with 0 errors)
-astra check --json src/       # Same, with machine-readable JSON output
-astra test                    # Run all tests (must pass)
-astra fix src/                # Auto-apply suggested fixes
-astra fmt src/                # Format all code canonically
-astra run src/main.astra      # Run the program
-astra explain E1001           # Explain any error code
-```
-
-### Development Workflow
-
-1. Write or edit `.astra` files
-2. Run `astra check src/` — fix any errors
-3. Run `astra test` — fix any failures
-4. Run `astra fmt src/` — format before committing
-
-### Language Quick Reference
-
-- Every file starts with `module <name>`
-- Functions: `fn name(param: Type) -> ReturnType { body }`
-- Side effects must be declared: `fn name() effects(Console, Fs) { ... }`
-- No null — use `Option[T]` with `Some(value)` / `None`
-- Errors use `Result[T, E]` with `Ok(value)` / `Err(error)`
-- Export with `public fn`, import with `import module.{name}`
-- Comments use `#`
-- No semicolons
-````
+This adds `astra.toml`, `src/main.astra`, `.gitignore`, and
+`.claude/CLAUDE.md` without overwriting existing files.
 
 ## Your First Program
 
