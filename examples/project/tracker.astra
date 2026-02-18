@@ -1,0 +1,224 @@
+module tracker
+
+## A priority level for tasks.
+enum Priority =
+  | Low
+  | Medium
+  | High
+  | Critical
+
+## Errors that can occur when managing tasks.
+enum TaskError =
+  | NotFound(id: Int)
+  | DuplicateId(id: Int)
+  | InvalidTitle
+
+## Returns a human-readable label for a priority.
+public fn priority_label(p: Priority) -> Text
+{
+  match p {
+    Low => "low"
+    Medium => "medium"
+    High => "high"
+    Critical => "CRITICAL"
+  }
+}
+
+## Creates a new task record with the given fields.
+public fn make_task(id: Int, title: Text, priority: Text) -> Result[{id: Int, title: Text, priority: Text, done: Bool}, Text]
+{
+  if title.len() == 0 {
+    Err("invalid title: title cannot be empty")
+  } else {
+    Ok({
+      id = id,
+      title = title,
+      priority = priority,
+      done = false,
+    })
+  }
+}
+
+## Marks a task record as done.
+public fn complete_task(task: {id: Int, title: Text, priority: Text, done: Bool}) -> {id: Int, title: Text, priority: Text, done: Bool}
+{
+  {
+    id = task.id,
+    title = task.title,
+    priority = task.priority,
+    done = true,
+  }
+}
+
+## Formats a task for display.
+public fn format_task(task: {id: Int, title: Text, priority: Text, done: Bool}) -> Text
+{
+  let status = if task.done { "[x]" } else { "[ ]" }
+  "${status} #${task.id} [${task.priority}] ${task.title}"
+}
+
+## Finds a task by ID in the list. Returns None if not found.
+public fn find_task(tasks: List[{id: Int, title: Text, priority: Text, done: Bool}], target_id: Int) -> Option[{id: Int, title: Text, priority: Text, done: Bool}]
+{
+  for t in tasks {
+    if t.id == target_id {
+      return Some(t)
+    }
+  }
+  None
+}
+
+## Marks a task as complete by ID.
+public fn mark_done(tasks: List[{id: Int, title: Text, priority: Text, done: Bool}], target_id: Int) -> Result[List[{id: Int, title: Text, priority: Text, done: Bool}], Text]
+{
+  let mut found = false
+  let mut new_list = tasks.filter(fn(t) { false })
+  for t in tasks {
+    if t.id == target_id {
+      found = true
+      new_list = new_list + [complete_task(t)]
+    } else {
+      new_list = new_list + [t]
+    }
+  }
+  if found {
+    Ok(new_list)
+  } else {
+    Err("task not found: ${target_id}")
+  }
+}
+
+## Returns only the tasks that are not yet completed.
+public fn pending_tasks(tasks: List[{id: Int, title: Text, priority: Text, done: Bool}]) -> List[{id: Int, title: Text, priority: Text, done: Bool}]
+{
+  tasks.filter(fn(t) { t.done == false })
+}
+
+## Counts how many tasks are done.
+public fn done_count(tasks: List[{id: Int, title: Text, priority: Text, done: Bool}]) -> Int
+{
+  let mut count = 0
+  for t in tasks {
+    if t.done == true {
+      count += 1
+    }
+  }
+  count
+}
+
+## Formats all tasks as a multi-line report.
+public fn format_report(tasks: List[{id: Int, title: Text, priority: Text, done: Bool}]) -> Text
+{
+  let total = tasks.len()
+  let mut done = 0
+  for t in tasks {
+    if t.done == true {
+      done = done + 1
+    }
+  }
+  let mut lines = "Task Report: ${done}/${total} complete\n"
+  for t in tasks {
+    let status = if t.done { "[x]" } else { "[ ]" }
+    lines = lines + "  ${status} #${t.id} [${t.priority}] ${t.title}\n"
+  }
+  lines
+}
+
+test "make_task rejects empty title" {
+  let result = make_task(1, "", "high")
+  match result {
+    Ok(_) => assert(false)
+    Err(msg) => assert(msg.contains("empty"))
+  }
+}
+
+test "make_task creates valid task" {
+  let result = make_task(1, "Write docs", "high")
+  match result {
+    Ok(task) => {
+      assert_eq(task.id, 1)
+      assert_eq(task.title, "Write docs")
+      assert_eq(task.done, false)
+    }
+    Err(_) => assert(false)
+  }
+}
+
+test "complete_task marks done" {
+  let task = { id = 1, title = "Test", priority = "low", done = false }
+  let completed = complete_task(task)
+  assert_eq(completed.done, true)
+  assert_eq(completed.id, 1)
+}
+
+test "find_task returns matching task" {
+  let tasks = [
+    { id = 1, title = "A", priority = "low", done = false },
+    { id = 2, title = "B", priority = "high", done = false },
+  ]
+  let found = find_task(tasks, 2)
+  match found {
+    Some(t) => assert_eq(t.title, "B")
+    None => assert(false)
+  }
+}
+
+test "find_task returns None for missing id" {
+  let tasks = [
+    { id = 1, title = "A", priority = "low", done = false },
+  ]
+  let found = find_task(tasks, 99)
+  match found {
+    Some(_) => assert(false)
+    None => assert(true)
+  }
+}
+
+test "mark_done updates task" {
+  let tasks = [
+    { id = 1, title = "Do something", priority = "high", done = false },
+  ]
+  let result = mark_done(tasks, 1)
+  match result {
+    Ok(updated) => {
+      let t = find_task(updated, 1)
+      match t {
+        Some(task) => assert_eq(task.done, true)
+        None => assert(false)
+      }
+    }
+    Err(_) => assert(false)
+  }
+}
+
+test "pending_tasks filters correctly" {
+  let tasks = [
+    { id = 1, title = "A", priority = "low", done = true },
+    { id = 2, title = "B", priority = "high", done = false },
+    { id = 3, title = "C", priority = "medium", done = false },
+  ]
+  let pending = pending_tasks(tasks)
+  assert_eq(pending.len(), 2)
+}
+
+test "done_count works" {
+  let tasks = [
+    { id = 1, title = "A", priority = "low", done = true },
+    { id = 2, title = "B", priority = "high", done = true },
+    { id = 3, title = "C", priority = "medium", done = false },
+  ]
+  assert_eq(done_count(tasks), 2)
+}
+
+test "format_task shows correct format" {
+  let task = { id = 1, title = "Test task", priority = "high", done = false }
+  let formatted = format_task(task)
+  assert(formatted.contains("#1"))
+  assert(formatted.contains("[high]"))
+  assert(formatted.contains("Test task"))
+}
+
+test "priority_label returns correct labels" {
+  assert_eq(priority_label(Low), "low")
+  assert_eq(priority_label(Critical), "CRITICAL")
+}

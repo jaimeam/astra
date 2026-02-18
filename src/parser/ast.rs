@@ -470,6 +470,9 @@ pub enum Expr {
         id: NodeId,
         span: Span,
         binding: String,
+        /// E8: Optional pattern for destructuring in for loops
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<Pattern>,
         iter: Box<Expr>,
         body: Box<Block>,
     },
@@ -508,7 +511,15 @@ pub enum Expr {
         inclusive: bool,
     },
 
-    // Await expression (P6.5: async/await)
+    // E2: Index access (e.g., `list[0]`, `map[key]`)
+    IndexAccess {
+        id: NodeId,
+        span: Span,
+        expr: Box<Expr>,
+        index: Box<Expr>,
+    },
+
+    // Await expression (P6.5: async/await — reserved, produces parse error)
     Await {
         id: NodeId,
         span: Span,
@@ -554,6 +565,7 @@ impl Expr {
             | Expr::Continue { span, .. }
             | Expr::StringInterp { span, .. }
             | Expr::Range { span, .. }
+            | Expr::IndexAccess { span, .. }
             | Expr::Await { span, .. }
             | Expr::Hole { span, .. } => span,
         }

@@ -19,6 +19,8 @@ pub struct RuntimeError {
     pub is_continue: bool,
     /// Function return signal
     pub is_return: bool,
+    /// B5: Source location where the error occurred
+    pub span: Option<crate::diagnostics::Span>,
 }
 
 impl RuntimeError {
@@ -31,7 +33,14 @@ impl RuntimeError {
             is_break: false,
             is_continue: false,
             is_return: false,
+            span: None,
         }
+    }
+
+    /// Create a runtime error with source location
+    pub fn with_span(mut self, span: crate::diagnostics::Span) -> Self {
+        self.span = Some(span);
+        self
     }
 
     /// Create an early return (for ? operator)
@@ -43,6 +52,7 @@ impl RuntimeError {
             is_break: false,
             is_continue: false,
             is_return: false,
+            span: None,
         }
     }
 
@@ -55,6 +65,7 @@ impl RuntimeError {
             is_break: true,
             is_continue: false,
             is_return: false,
+            span: None,
         }
     }
 
@@ -67,6 +78,7 @@ impl RuntimeError {
             is_break: false,
             is_continue: true,
             is_return: false,
+            span: None,
         }
     }
 
@@ -79,6 +91,7 @@ impl RuntimeError {
             is_break: false,
             is_continue: false,
             is_return: true,
+            span: None,
         }
     }
 
@@ -187,7 +200,19 @@ impl RuntimeError {
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
+        if let Some(span) = &self.span {
+            write!(
+                f,
+                "[{}] {}\n  --> {}:{}:{}",
+                self.code,
+                self.message,
+                span.file.display(),
+                span.start_line,
+                span.start_col
+            )
+        } else {
+            write!(f, "[{}] {}", self.code, self.message)
+        }
     }
 }
 

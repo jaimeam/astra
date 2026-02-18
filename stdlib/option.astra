@@ -1,6 +1,7 @@
 module std.option
 
-fn is_some[T](opt: Option[T]) -> Bool
+## Returns true if the option contains a value.
+public fn is_some[T](opt: Option[T]) -> Bool
 {
   match opt {
     Some(_) => true
@@ -8,7 +9,8 @@ fn is_some[T](opt: Option[T]) -> Bool
   }
 }
 
-fn is_none[T](opt: Option[T]) -> Bool
+## Returns true if the option is None.
+public fn is_none[T](opt: Option[T]) -> Bool
 {
   match opt {
     Some(_) => false
@@ -16,7 +18,8 @@ fn is_none[T](opt: Option[T]) -> Bool
   }
 }
 
-fn unwrap_or[T](opt: Option[T], default: T) -> T
+## Returns the contained value or the given default.
+public fn unwrap_or[T](opt: Option[T], default: T) -> T
 {
   match opt {
     Some(v) => v
@@ -24,7 +27,8 @@ fn unwrap_or[T](opt: Option[T], default: T) -> T
   }
 }
 
-fn map[T, U](opt: Option[T], f: (T) -> U) -> Option[U]
+## Applies a function to the contained value, or returns None.
+public fn map[T, U](opt: Option[T], f: (T) -> U) -> Option[U]
 {
   match opt {
     Some(v) => Some(f(v))

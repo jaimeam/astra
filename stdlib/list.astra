@@ -1,15 +1,32 @@
 module std.list
 
-fn is_empty[T](list: List[T]) -> Bool
+## Returns true if the list has no elements.
+public fn is_empty[T](list: List[T]) -> Bool
 {
   list.len() == 0
 }
 
-fn head[T](list: List[T]) -> Option[T]
+## Returns the first element of the list, or None if empty.
+public fn head[T](list: List[T]) -> Option[T]
 {
   if list.len() == 0 {
     None
   } else {
     Some(list.get(0))
+  }
+}
+
+## Sorts a list using a custom comparison function.
+## The comparator should return true if the first argument should come before the second.
+public fn sort_by[T](list: List[T], compare: (T, T) -> Bool) -> List[T]
+{
+  if list.len() <= 1 {
+    list
+  } else {
+    let pivot = list.get(0)
+    let rest = list.slice(1, list.len())
+    let before = rest.filter(fn(x) { compare(x, pivot) })
+    let after = rest.filter(fn(x) { compare(x, pivot) == false })
+    sort_by(before, compare) + [pivot] + sort_by(after, compare)
   }
 }

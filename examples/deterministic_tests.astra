@@ -1,11 +1,11 @@
 module deterministic_tests
 
-fn compute_hash(n: Int) -> Int
+public fn compute_hash(n: Int) -> Int
 {
   n * 31 + 17
 }
 
-fn verify_determinism(a: Int, b: Int) -> Bool
+public fn verify_determinism(a: Int, b: Int) -> Bool
 {
   compute_hash(a) == compute_hash(a) and compute_hash(b) == compute_hash(b)
 }

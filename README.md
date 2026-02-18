@@ -33,7 +33,7 @@ LLM generates code → astra check → JSON errors with fix suggestions → LLM 
 
 ## Status
 
-🚧 **Early Development** - Astra is currently in the initial development phase (v0.1).
+**v1.0** - Astra is ready for first projects. The language, toolchain, and standard library support real multi-file projects with type checking, effect tracking, testing, and formatting.
 
 ## Quick Start
 
@@ -138,6 +138,22 @@ astra/
 ├── docs/                # Documentation
 └── examples/            # Example programs
 ```
+
+## Known Limitations (v1.0)
+
+These are intentional limitations of the v1.0 release. They are documented here so users are not surprised.
+
+**KL1. No Full Hindley-Milner Type Inference** - Astra v1.0 uses practical type inference rather than full Hindley-Milner. Generic type parameters use basic unification at call sites. Add explicit type annotations if the checker cannot infer types in complex generic scenarios.
+
+**KL2. Traits Are Runtime-Dispatched** - Trait method calls are resolved at runtime, not compile time. The type checker validates trait impl blocks but does not resolve trait methods on arbitrary expressions. Incorrect trait usage is caught at runtime.
+
+**KL3. No Concurrency** - Astra v1.0 is single-threaded. There is no async/await, no threads, and no parallelism. `async` and `await` are reserved keywords that produce errors. Concurrency is planned for a future version.
+
+**KL4. Interpreted Only** - All execution is via a tree-walking interpreter. Performance is adequate for small and medium programs but not suitable for compute-heavy workloads. For performance-critical code, consider calling out to external tools via effects.
+
+**KL5. No Package Manager / Registry** - There is no way to install third-party packages. Projects use only the standard library and their own modules. Organize code as modules within your project. A package system is planned for a future version.
+
+**KL6. No Debugger** - There is no step-through debugger. Use `println` for debugging output, `assert`/`assert_eq` for runtime checks, and `test` blocks for verifying behavior.
 
 ## Contributing
 

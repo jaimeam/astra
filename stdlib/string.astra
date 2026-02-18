@@ -1,11 +1,13 @@
 module std.string
 
-fn is_blank(s: Text) -> Bool
+## Returns true if the string is empty or contains only whitespace.
+public fn is_blank(s: Text) -> Bool
 {
   s.trim().len() == 0
 }
 
-fn pad_left(s: Text, width: Int, pad_char: Text) -> Text
+## Pads a string on the left to the given width using the specified character.
+public fn pad_left(s: Text, width: Int, pad_char: Text) -> Text
 {
   let current = s.len()
   if current >= width {
@@ -16,7 +18,8 @@ fn pad_left(s: Text, width: Int, pad_char: Text) -> Text
   }
 }
 
-fn pad_right(s: Text, width: Int, pad_char: Text) -> Text
+## Pads a string on the right to the given width using the specified character.
+public fn pad_right(s: Text, width: Int, pad_char: Text) -> Text
 {
   let current = s.len()
   if current >= width {
@@ -25,4 +28,26 @@ fn pad_right(s: Text, width: Int, pad_char: Text) -> Text
     let padding = pad_char.repeat(width - current)
     s + padding
   }
+}
+
+## Splits a string into a list of individual characters.
+public fn chars(s: Text) -> List[Text]
+{
+  let mut result: List[Text] = []
+  let mut i = 0
+  while i < s.len() {
+    result = result + [s.slice(i, i + 1)]
+    i = i + 1
+  }
+  result
+}
+
+## Joins a list of characters (single-character strings) into a single string.
+public fn from_chars(char_list: List[Text]) -> Text
+{
+  let mut result = ""
+  for c in char_list {
+    result = result + c
+  }
+  result
 }

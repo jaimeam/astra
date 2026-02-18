@@ -1,6 +1,7 @@
 module std.iter
 
-fn sum(list: List[Int]) -> Int
+## Returns the sum of all integers in the list.
+public fn sum(list: List[Int]) -> Int
 {
   let mut acc = 0
   for x in list {
@@ -9,7 +10,8 @@ fn sum(list: List[Int]) -> Int
   acc
 }
 
-fn product(list: List[Int]) -> Int
+## Returns the product of all integers in the list.
+public fn product(list: List[Int]) -> Int
 {
   let mut acc = 1
   for x in list {
@@ -18,7 +20,8 @@ fn product(list: List[Int]) -> Int
   acc
 }
 
-fn all(list: List[Bool]) -> Bool
+## Returns true if all elements in the list are true.
+public fn all(list: List[Bool]) -> Bool
 {
   for x in list {
     if x == false {
@@ -28,7 +31,8 @@ fn all(list: List[Bool]) -> Bool
   true
 }
 
-fn any(list: List[Bool]) -> Bool
+## Returns true if any element in the list is true.
+public fn any(list: List[Bool]) -> Bool
 {
   for x in list {
     if x == true {
@@ -38,7 +42,8 @@ fn any(list: List[Bool]) -> Bool
   false
 }
 
-fn count[T](list: List[T], pred: (T) -> Bool) -> Int
+## Counts elements in the list that satisfy the predicate.
+public fn count[T](list: List[T], pred: (T) -> Bool) -> Int
 {
   let mut n = 0
   for x in list {
@@ -49,7 +54,8 @@ fn count[T](list: List[T], pred: (T) -> Bool) -> Int
   n
 }
 
-fn flat_map[T, U](list: List[T], f: (T) -> List[U]) -> List[U]
+## Applies a function that returns a list to each element and flattens the results.
+public fn flat_map[T, U](list: List[T], f: (T) -> List[U]) -> List[U]
 {
   let mut result: List[U] = []
   for x in list {
@@ -61,7 +67,9 @@ fn flat_map[T, U](list: List[T], f: (T) -> List[U]) -> List[U]
   result
 }
 
-fn reduce[T](list: List[T], f: (T, T) -> T) -> Option[T]
+## Reduces a list to a single value by applying a function pairwise.
+## Returns None for empty lists.
+public fn reduce[T](list: List[T], f: (T, T) -> T) -> Option[T]
 {
   if len(list) == 0 {
     None

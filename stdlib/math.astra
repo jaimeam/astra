@@ -1,21 +1,26 @@
 module std.math
 
-fn abs_val(x: Int) -> Int
+## Returns the absolute value of an integer.
+public fn abs_val(x: Int) -> Int
 {
   abs(x)
 }
 
-fn min_val(a: Int, b: Int) -> Int
+## Returns the smaller of two integers.
+public fn min_val(a: Int, b: Int) -> Int
 {
   min(a, b)
 }
 
-fn max_val(a: Int, b: Int) -> Int
+## Returns the larger of two integers.
+public fn max_val(a: Int, b: Int) -> Int
 {
   max(a, b)
 }
 
-fn clamp(x: Int, low: Int, high: Int) -> Int
+## Clamps a value between a lower and upper bound.
+## Returns low if x < low, high if x > high, otherwise x.
+public fn clamp(x: Int, low: Int, high: Int) -> Int
 {
   if x < low {
     low
@@ -26,12 +31,14 @@ fn clamp(x: Int, low: Int, high: Int) -> Int
   }
 }
 
-fn is_even(n: Int) -> Bool
+## Returns true if the integer is even.
+public fn is_even(n: Int) -> Bool
 {
   n % 2 == 0
 }
 
-fn is_odd(n: Int) -> Bool
+## Returns true if the integer is odd.
+public fn is_odd(n: Int) -> Bool
 {
   n % 2 != 0
 }

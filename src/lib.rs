@@ -3,6 +3,8 @@
 //! Astra is an LLM/Agent-native programming language designed for verifiability
 //! and deterministic feedback.
 
+#![allow(clippy::result_large_err)]
+
 pub mod cache;
 pub mod cli;
 pub mod diagnostics;

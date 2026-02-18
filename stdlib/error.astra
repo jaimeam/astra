@@ -1,21 +1,25 @@
 module std.error
 
-fn wrap(msg: Text, cause: Text) -> Text
+## Wraps an error message with a contextual prefix.
+public fn wrap(msg: Text, cause: Text) -> Text
 {
   msg + ": " + cause
 }
 
-fn from_text(msg: Text) -> Result[Unit, Text]
+## Creates an Err result from a text message.
+public fn from_text(msg: Text) -> Result[Unit, Text]
 {
   Err(msg)
 }
 
-fn ok_unit() -> Result[Unit, Text]
+## Creates a successful Unit result.
+public fn ok_unit() -> Result[Unit, Text]
 {
   Ok(())
 }
 
-fn map_error[T](result: Result[T, Text], prefix: Text) -> Result[T, Text]
+## Prefixes the error message in a Result, leaving Ok values unchanged.
+public fn map_error[T](result: Result[T, Text], prefix: Text) -> Result[T, Text]
 {
   match result {
     Ok(v) => Ok(v)
@@ -23,7 +27,8 @@ fn map_error[T](result: Result[T, Text], prefix: Text) -> Result[T, Text]
   }
 }
 
-fn or_else[T](result: Result[T, Text], fallback: () -> Result[T, Text]) -> Result[T, Text]
+## Returns the result if Ok, otherwise calls the fallback function.
+public fn or_else[T](result: Result[T, Text], fallback: () -> Result[T, Text]) -> Result[T, Text]
 {
   match result {
     Ok(v) => Ok(v)

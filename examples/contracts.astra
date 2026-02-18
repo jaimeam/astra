@@ -1,11 +1,11 @@
 module contracts
 
-fn divide(a: Int, b: Int) -> Int
+public fn divide(a: Int, b: Int) -> Int
 {
   a / b
 }
 
-fn safe_sqrt(n: Int) -> Int
+public fn safe_sqrt(n: Int) -> Int
 {
   if n == 0 {
     0

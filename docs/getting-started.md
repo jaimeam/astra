@@ -683,3 +683,51 @@ Err(error)
 | `// comment` | `# comment` |
 | Ownership/borrowing | Garbage collected |
 | `pub fn` | `public fn` |
+
+## Known Limitations
+
+Astra v1.0 has a few intentional limitations to be aware of:
+
+- **No full Hindley-Milner type inference** - Add explicit type annotations if the checker cannot infer types in complex generic scenarios
+- **Traits are runtime-dispatched** - The type checker validates trait impls but does not resolve trait methods on expressions
+- **No concurrency** - Single-threaded only; `async`/`await` are reserved keywords
+- **Interpreted only** - Tree-walking interpreter; adequate for small/medium programs
+- **No package manager** - Projects use the stdlib and their own modules only
+- **No debugger** - Use `println`, `assert`, and `test` blocks for debugging
+
+## Imports and Multi-File Projects
+
+Astra supports splitting code across multiple files using the module system:
+
+```astra
+# file: math_utils.astra
+module math_utils
+
+public fn double(x: Int) -> Int {
+  x * 2
+}
+
+public fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+```
+
+```astra
+# file: main.astra
+module main
+
+import math_utils.{double, add}
+
+fn main()
+  effects(Console)
+{
+  let result = double(5)
+  Console.println("double(5) = ${result}")
+}
+```
+
+Key points:
+- Use `public fn` to export functions from a module
+- Use `import module_name.{fn1, fn2}` to import specific functions
+- The type checker validates cross-file function calls (argument types, counts, effects)
+- Stdlib modules are imported with `import std.math.{clamp}`, etc.

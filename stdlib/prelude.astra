@@ -1,7 +1,7 @@
 module std.prelude
 
-import std.option
+public import std.option
 
-import std.result
+public import std.result
 
-import std.core
+public import std.core

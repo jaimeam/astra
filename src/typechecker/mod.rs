@@ -338,6 +338,10 @@ pub struct TypeChecker {
     defined_fns: Vec<(String, Span, Visibility)>,
     /// Functions that have been referenced/called
     called_fns: HashSet<String>,
+    /// B1: Search paths for resolving imports
+    search_paths: Vec<std::path::PathBuf>,
+    /// B1: Already-resolved modules to prevent infinite recursion
+    resolved_modules: HashSet<String>,
 }
 
 impl TypeChecker {
@@ -352,6 +356,176 @@ impl TypeChecker {
             trait_impls: HashSet::new(),
             defined_fns: Vec::new(),
             called_fns: HashSet::new(),
+            search_paths: Vec::new(),
+            resolved_modules: HashSet::new(),
+        }
+    }
+
+    /// B1: Add a search path for module resolution
+    pub fn add_search_path(&mut self, path: std::path::PathBuf) {
+        self.search_paths.push(path);
+    }
+
+    /// B1: Resolve import path segments to a filesystem path
+    fn resolve_module_path(&self, segments: &[String]) -> Option<std::path::PathBuf> {
+        let relative = segments.join("/") + ".astra";
+
+        // Map `std.*` imports to `stdlib/*`
+        let stdlib_relative =
+            if segments.first().map(|s| s.as_str()) == Some("std") && segments.len() > 1 {
+                let mut stdlib_segments = vec!["stdlib".to_string()];
+                stdlib_segments.extend(segments[1..].iter().cloned());
+                Some(stdlib_segments.join("/") + ".astra")
+            } else {
+                None
+            };
+
+        for search_path in &self.search_paths {
+            let candidate = search_path.join(&relative);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            if let Some(ref stdlib_rel) = stdlib_relative {
+                let candidate = search_path.join(stdlib_rel);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+        // Check relative to cwd
+        let candidate = std::path::PathBuf::from(&relative);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if let Some(ref stdlib_rel) = stdlib_relative {
+            let candidate = std::path::PathBuf::from(stdlib_rel);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// B1: Resolve an import — parse the imported module and extract type information
+    fn resolve_import_types(&mut self, import: &ImportDecl) {
+        let segments = &import.path.segments;
+        let module_key = segments.join(".");
+
+        // Prevent circular resolution
+        if self.resolved_modules.contains(&module_key) {
+            return;
+        }
+        self.resolved_modules.insert(module_key);
+
+        let file_path = match self.resolve_module_path(segments) {
+            Some(p) => p,
+            None => return, // Can't resolve — will use Unknown types
+        };
+
+        let source = match std::fs::read_to_string(&file_path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let source_file = crate::parser::span::SourceFile::new(file_path.clone(), source.clone());
+        let lexer = crate::parser::lexer::Lexer::new(&source_file);
+        let mut parser = crate::parser::parser::Parser::new(lexer, source_file.clone());
+        let module = match parser.parse_module() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        // Extract type information from the module's items
+        let filter = match &import.kind {
+            ImportKind::Items(names) => Some(names.clone()),
+            _ => None,
+        };
+
+        for item in &module.items {
+            match item {
+                Item::FnDef(fn_def) => {
+                    // Only register if it matches the import filter
+                    if let Some(ref names) = filter {
+                        if !names.contains(&fn_def.name) {
+                            continue;
+                        }
+                    }
+                    // Build function type from signature
+                    let param_types: Vec<Type> = fn_def
+                        .params
+                        .iter()
+                        .map(|p| self.resolve_type_expr(&p.ty))
+                        .collect();
+                    let ret_type = fn_def
+                        .return_type
+                        .as_ref()
+                        .map(|t| self.resolve_type_expr(t))
+                        .unwrap_or(Type::Unit);
+                    let effects: Vec<String> =
+                        fn_def.effects.iter().map(|e| e.to_string()).collect();
+                    let fn_type = Type::Function {
+                        params: param_types,
+                        ret: Box::new(ret_type),
+                        effects,
+                    };
+                    self.env.define(fn_def.name.clone(), fn_type);
+                }
+                Item::TypeDef(def) => {
+                    if let Some(ref names) = filter {
+                        if !names.contains(&def.name) {
+                            continue;
+                        }
+                    }
+                    self.env.register_type(def.clone());
+                }
+                Item::EnumDef(def) => {
+                    if let Some(ref names) = filter {
+                        if !names.contains(&def.name) {
+                            // Check if any variant name matches
+                            let has_variant = def.variants.iter().any(|v| names.contains(&v.name));
+                            if !has_variant {
+                                continue;
+                            }
+                        }
+                    }
+                    self.env.register_enum(def.clone());
+                    let enum_type = Type::Named(def.name.clone(), vec![]);
+                    for variant in &def.variants {
+                        if let Some(ref names) = filter {
+                            if !names.contains(&variant.name) && !names.contains(&def.name) {
+                                continue;
+                            }
+                        }
+                        if variant.fields.is_empty() {
+                            self.env.define(variant.name.clone(), enum_type.clone());
+                        } else {
+                            let param_types: Vec<Type> = variant
+                                .fields
+                                .iter()
+                                .map(|f| self.resolve_type_expr(&f.ty))
+                                .collect();
+                            self.env.define(
+                                variant.name.clone(),
+                                Type::Function {
+                                    params: param_types,
+                                    ret: Box::new(enum_type.clone()),
+                                    effects: vec![],
+                                },
+                            );
+                        }
+                    }
+                }
+                Item::TraitDef(def) => {
+                    if let Some(ref names) = filter {
+                        if !names.contains(&def.name) {
+                            continue;
+                        }
+                    }
+                    self.env
+                        .define(def.name.clone(), Type::Named(def.name.clone(), vec![]));
+                }
+                _ => {}
+            }
         }
     }
 
@@ -461,6 +635,37 @@ impl TypeChecker {
         }
     }
 
+    /// E8: Register all variables from a pattern into the environment
+    fn register_pattern_vars(&mut self, pattern: &Pattern, env: &mut TypeEnv, ty: Type) {
+        match pattern {
+            Pattern::Ident { name, span, .. } => {
+                env.define(name.clone(), ty);
+                self.lint_define_var(name, span);
+            }
+            Pattern::Tuple { elements, .. } => {
+                for elem in elements {
+                    self.register_pattern_vars(elem, env, Type::Unknown);
+                }
+            }
+            Pattern::Record { fields, .. } => {
+                for (name, pat) in fields {
+                    let _ = name; // field name
+                    self.register_pattern_vars(pat, env, Type::Unknown);
+                }
+            }
+            Pattern::Variant { fields, .. } => {
+                for field in fields {
+                    self.register_pattern_vars(field, env, Type::Unknown);
+                }
+            }
+            Pattern::Wildcard { .. }
+            | Pattern::IntLit { .. }
+            | Pattern::FloatLit { .. }
+            | Pattern::BoolLit { .. }
+            | Pattern::TextLit { .. } => {}
+        }
+    }
+
     /// Mark a variable as used across all lint scopes (innermost first)
     fn lint_use_var(&mut self, name: &str) {
         for scope in self.lint_scopes.iter_mut().rev() {
@@ -490,6 +695,10 @@ impl TypeChecker {
                     self.validate_import_path(import);
 
                     // Track imports for W0002 (unused import)
+                    // Skip public re-exports — they exist for external consumers
+                    if import.public {
+                        continue;
+                    }
                     let import_name = match &import.kind {
                         ImportKind::Module => {
                             import.path.segments.last().cloned().unwrap_or_default()
@@ -635,21 +844,30 @@ impl TypeChecker {
     fn check_item(&mut self, item: &Item) {
         match item {
             Item::Import(import) => {
-                // Register imported names as known bindings so they don't
-                // trigger E1002 "Unknown identifier" errors. Full cross-module
-                // type resolution is not yet implemented.
+                // B1: Resolve imported module and register types of all
+                // imported symbols for cross-file type checking.
+                self.resolve_import_types(import);
+
+                // Fallback: register any unresolved names as Unknown so they
+                // don't trigger E1002 "Unknown identifier" errors.
                 match &import.kind {
                     ImportKind::Module => {
                         if let Some(name) = import.path.segments.last() {
-                            self.env.define(name.clone(), Type::Unknown);
+                            if self.env.lookup(name).is_none() {
+                                self.env.define(name.clone(), Type::Unknown);
+                            }
                         }
                     }
                     ImportKind::Alias(alias) => {
-                        self.env.define(alias.clone(), Type::Unknown);
+                        if self.env.lookup(alias).is_none() {
+                            self.env.define(alias.clone(), Type::Unknown);
+                        }
                     }
                     ImportKind::Items(items) => {
                         for item_name in items {
-                            self.env.define(item_name.clone(), Type::Unknown);
+                            if self.env.lookup(item_name).is_none() {
+                                self.env.define(item_name.clone(), Type::Unknown);
+                            }
                         }
                     }
                 }
@@ -784,7 +1002,25 @@ impl TypeChecker {
 
         // Check body and collect effects used
         let mut effects_used = HashSet::new();
-        let _body_type = self.check_block_with_effects(&def.body, &mut fn_env, &mut effects_used);
+        let body_type = self.check_block_with_effects(&def.body, &mut fn_env, &mut effects_used);
+
+        // P1: Infer return type for private functions without explicit annotation
+        if def.return_type.is_none() && def.visibility == crate::parser::ast::Visibility::Private {
+            // Update the registered function type with the inferred body type
+            let param_types: Vec<Type> = def
+                .params
+                .iter()
+                .map(|p| self.resolve_type_expr(&p.ty))
+                .collect();
+            self.env.define(
+                def.name.clone(),
+                Type::Function {
+                    params: param_types,
+                    ret: Box::new(body_type),
+                    effects: def.effects.clone(),
+                },
+            );
+        }
 
         // Pop lint scope — emits W0001 for unused variables/params
         self.pop_lint_scope();
@@ -1127,14 +1363,59 @@ impl TypeChecker {
                     .map(|arg| self.check_expr_with_effects(arg, env, effects))
                     .collect();
 
-                if let Type::Function { params, ret, .. } = &func_ty {
+                if let Type::Function {
+                    params,
+                    ret,
+                    effects: fn_effects,
+                } = &func_ty
+                {
                     // Check arity
                     if params.len() != arg_types.len()
                         && !params.is_empty()
                         && !arg_types.is_empty()
                     {
-                        // Only warn if neither side is unknown
-                        // (builtins may have variable arity)
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                crate::diagnostics::error_codes::types::WRONG_ARGUMENT_COUNT,
+                            )
+                            .message(format!(
+                                "Expected {} argument(s) but found {}",
+                                params.len(),
+                                arg_types.len()
+                            ))
+                            .span(func.span().clone())
+                            .build(),
+                        );
+                    }
+
+                    // B1: Check argument types against parameter types
+                    for (i, (param_ty, arg_ty)) in params.iter().zip(arg_types.iter()).enumerate() {
+                        if !self.types_compatible(param_ty, arg_ty) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                                )
+                                .message(format!(
+                                    "Type mismatch in argument {}: expected `{}`, found `{}`",
+                                    i + 1,
+                                    format_type(param_ty),
+                                    format_type(arg_ty)
+                                ))
+                                .span(if i < args.len() {
+                                    args[i].span().clone()
+                                } else {
+                                    func.span().clone()
+                                })
+                                .build(),
+                            );
+                        }
+                    }
+
+                    // B1: Propagate effects from called function to caller
+                    // This allows the existing effect enforcement (in check_fndef)
+                    // to verify the caller declares the necessary effects.
+                    for fn_effect in fn_effects {
+                        effects.insert(fn_effect.clone());
                     }
 
                     // Try generic type parameter inference if the called function
@@ -1296,15 +1577,21 @@ impl TypeChecker {
             }
             Expr::ForIn {
                 binding,
+                pattern,
                 iter,
                 body,
                 ..
             } => {
                 self.check_expr_with_effects(iter, env, effects);
                 let mut loop_env = env.clone();
-                loop_env.define(binding.clone(), Type::Unknown);
                 self.push_lint_scope();
-                self.lint_define_var(binding, iter.span());
+                // E8: If there's a destructuring pattern, register pattern vars
+                if let Some(pat) = pattern {
+                    self.register_pattern_vars(pat, &mut loop_env, Type::Unknown);
+                } else {
+                    loop_env.define(binding.clone(), Type::Unknown);
+                    self.lint_define_var(binding, iter.span());
+                }
                 self.check_block_with_effects(body, &mut loop_env, effects);
                 self.pop_lint_scope();
                 Type::Unit
@@ -1363,6 +1650,30 @@ impl TypeChecker {
                     );
                 }
                 Type::List(Box::new(Type::Int))
+            }
+            // E2: Index access — check the inner expression and index
+            Expr::IndexAccess { expr, index, .. } => {
+                let collection_type = self.check_expr_with_effects(expr, env, effects);
+                let _index_type = self.check_expr_with_effects(index, env, effects);
+                // Return the element type if we can determine it
+                match collection_type {
+                    Type::List(inner) => *inner,
+                    Type::Text => Type::Text,
+                    Type::Tuple(elements) => {
+                        // If the index is a literal int, we can be precise
+                        if let Expr::IntLit { value, .. } = index.as_ref() {
+                            let idx = *value as usize;
+                            if idx < elements.len() {
+                                elements[idx].clone()
+                            } else {
+                                Type::Unknown
+                            }
+                        } else {
+                            Type::Unknown
+                        }
+                    }
+                    _ => Type::Unknown,
+                }
             }
             Expr::Await { expr, .. } => {
                 // P6.5: await just checks the inner expression
