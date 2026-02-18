@@ -11,7 +11,7 @@ Astra is currently built from source using Rust's Cargo toolchain.
 - [Rust](https://rustup.rs/) (1.70 or later)
 - Git
 
-### Build from Source
+### Build and Install
 
 ```bash
 # Clone the repository
@@ -21,15 +21,16 @@ cd astra
 # Build the toolchain
 cargo build --release
 
-# Verify installation
-cargo run -- --help
-```
-
-The built binary is at `target/release/astra`. You can add it to your PATH:
-
-```bash
+# Add to your PATH (add this to your shell profile to make it permanent)
 export PATH="$PATH:$(pwd)/target/release"
+
+# Verify installation
+astra --help
 ```
+
+The built binary is at `target/release/astra`. The `export PATH` line above makes the `astra` command available in your current shell. To make it permanent, add the export to your `~/.bashrc`, `~/.zshrc`, or equivalent.
+
+> **Development shortcut**: If you're working on the Astra toolchain itself, you can skip the PATH setup and use `cargo run -- <command>` instead of `astra <command>`.
 
 ## Your First Program
 
@@ -48,7 +49,7 @@ fn main()
 Run it:
 
 ```bash
-cargo run -- run hello.astra
+astra run hello.astra
 ```
 
 Output:
@@ -494,19 +495,19 @@ Astra is designed for this workflow:
 Write code
     |
     v
-Run: cargo run -- check file.astra
+Run: astra check file.astra
     |
     v
 Parse error output (JSON available with --json)
     |
     v
-Apply suggested fixes
+Apply suggested fixes (or run: astra fix file.astra)
     |
     v
 Repeat until: "0 errors"
     |
     v
-Run: cargo run -- run file.astra
+Run: astra run file.astra
 ```
 
 For LLMs: When you receive an error, look at:
@@ -519,22 +520,35 @@ For LLMs: When you receive an error, look at:
 
 | Command | Description |
 |---------|-------------|
-| `cargo run -- run <file>` | Execute an Astra program |
-| `cargo run -- check <files>` | Type-check without running |
-| `cargo run -- fmt <files>` | Format code canonically |
-| `cargo run -- test` | Run tests |
+| `astra run <file>` | Execute an Astra program |
+| `astra check [files...]` | Type-check without running |
+| `astra test [filter]` | Run tests deterministically |
+| `astra fmt [files...]` | Format code canonically |
+| `astra fix [files...]` | Auto-apply diagnostic suggestions |
+| `astra explain <code>` | Explain an error code (e.g., `astra explain E1001`) |
+| `astra repl` | Interactive REPL |
+| `astra init <name>` | Scaffold a new project |
+| `astra doc [files...]` | Generate API documentation |
+| `astra lsp` | Start the LSP server |
 
 ### Useful Options
 
 ```bash
 # Check with JSON output (for programmatic parsing)
-cargo run -- check --json myfile.astra
+astra check --json myfile.astra
 
 # Check all files in a directory
-cargo run -- check src/
+astra check src/
 
-# Run with specific file
-cargo run -- run examples/hello.astra
+# Watch mode — re-checks on file changes
+astra check --watch .
+
+# Auto-fix diagnostics (dry run first)
+astra fix --dry-run .
+astra fix .
+
+# Run tests with watch mode
+astra test --watch
 ```
 
 ## Complete Example: Fibonacci
@@ -566,7 +580,7 @@ fn main()
 Run it:
 
 ```bash
-cargo run -- run fibonacci.astra
+astra run fibonacci.astra
 ```
 
 ## Next Steps
