@@ -11,25 +11,101 @@ Astra is currently built from source using Rust's Cargo toolchain.
 - [Rust](https://rustup.rs/) (1.70 or later)
 - Git
 
-### Build from Source
+### Build and Install
 
 ```bash
 # Clone the repository
-git clone https://github.com/astra-lang/astra.git
+git clone https://github.com/jaimeam/astra.git
 cd astra
 
 # Build the toolchain
 cargo build --release
 
+# Add to your PATH (add this to your shell profile to make it permanent)
+export PATH="$PATH:$(pwd)/target/release"
+
 # Verify installation
-cargo run -- --help
+astra --help
 ```
 
-The built binary is at `target/release/astra`. You can add it to your PATH:
+The built binary is at `target/release/astra`. The `export PATH` line above makes the `astra` command available in your current shell. To make it permanent, add the export to your `~/.bashrc`, `~/.zshrc`, or equivalent.
+
+> **Development shortcut**: If you're working on the Astra toolchain itself, you can skip the PATH setup and use `cargo run -- <command>` instead of `astra <command>`.
+
+## Setting Up Astra in a New Project
+
+To start a new Astra project:
 
 ```bash
-export PATH="$PATH:$(pwd)/target/release"
+astra init my_project
+cd my_project
 ```
+
+This creates:
+```
+my_project/
+├── astra.toml          # Project manifest
+├── src/
+│   └── main.astra      # Entry point with a hello-world and test
+└── .gitignore
+```
+
+Verify it works:
+
+```bash
+astra check src/          # Type-check (expect: no errors)
+astra test                # Run tests (expect: 1 passed)
+astra run src/main.astra  # Run the program (expect: prints hello)
+```
+
+### Telling an Agent to Use Astra
+
+If you want an AI agent (Claude, etc.) to work with Astra in your repo, add this to your project's `CLAUDE.md` or equivalent instructions file:
+
+````markdown
+## Astra
+
+This project uses the [Astra](https://github.com/jaimeam/astra) programming language.
+
+### Setup (run once)
+
+```bash
+# Install Astra (requires Rust 1.70+)
+git clone https://github.com/jaimeam/astra.git /tmp/astra
+cd /tmp/astra && cargo build --release
+export PATH="$PATH:/tmp/astra/target/release"
+```
+
+### Key Commands
+
+```bash
+astra check src/              # Type-check all files (must pass with 0 errors)
+astra check --json src/       # Same, with machine-readable JSON output
+astra test                    # Run all tests (must pass)
+astra fix src/                # Auto-apply suggested fixes
+astra fmt src/                # Format all code canonically
+astra run src/main.astra      # Run the program
+astra explain E1001           # Explain any error code
+```
+
+### Development Workflow
+
+1. Write or edit `.astra` files
+2. Run `astra check src/` — fix any errors
+3. Run `astra test` — fix any failures
+4. Run `astra fmt src/` — format before committing
+
+### Language Quick Reference
+
+- Every file starts with `module <name>`
+- Functions: `fn name(param: Type) -> ReturnType { body }`
+- Side effects must be declared: `fn name() effects(Console, Fs) { ... }`
+- No null — use `Option[T]` with `Some(value)` / `None`
+- Errors use `Result[T, E]` with `Ok(value)` / `Err(error)`
+- Export with `public fn`, import with `import module.{name}`
+- Comments use `#`
+- No semicolons
+````
 
 ## Your First Program
 
@@ -48,7 +124,7 @@ fn main()
 Run it:
 
 ```bash
-cargo run -- run hello.astra
+astra run hello.astra
 ```
 
 Output:
@@ -494,19 +570,19 @@ Astra is designed for this workflow:
 Write code
     |
     v
-Run: cargo run -- check file.astra
+Run: astra check file.astra
     |
     v
 Parse error output (JSON available with --json)
     |
     v
-Apply suggested fixes
+Apply suggested fixes (or run: astra fix file.astra)
     |
     v
 Repeat until: "0 errors"
     |
     v
-Run: cargo run -- run file.astra
+Run: astra run file.astra
 ```
 
 For LLMs: When you receive an error, look at:
@@ -519,22 +595,35 @@ For LLMs: When you receive an error, look at:
 
 | Command | Description |
 |---------|-------------|
-| `cargo run -- run <file>` | Execute an Astra program |
-| `cargo run -- check <files>` | Type-check without running |
-| `cargo run -- fmt <files>` | Format code canonically |
-| `cargo run -- test` | Run tests |
+| `astra run <file>` | Execute an Astra program |
+| `astra check [files...]` | Type-check without running |
+| `astra test [filter]` | Run tests deterministically |
+| `astra fmt [files...]` | Format code canonically |
+| `astra fix [files...]` | Auto-apply diagnostic suggestions |
+| `astra explain <code>` | Explain an error code (e.g., `astra explain E1001`) |
+| `astra repl` | Interactive REPL |
+| `astra init <name>` | Scaffold a new project |
+| `astra doc [files...]` | Generate API documentation |
+| `astra lsp` | Start the LSP server |
 
 ### Useful Options
 
 ```bash
 # Check with JSON output (for programmatic parsing)
-cargo run -- check --json myfile.astra
+astra check --json myfile.astra
 
 # Check all files in a directory
-cargo run -- check src/
+astra check src/
 
-# Run with specific file
-cargo run -- run examples/hello.astra
+# Watch mode — re-checks on file changes
+astra check --watch .
+
+# Auto-fix diagnostics (dry run first)
+astra fix --dry-run .
+astra fix .
+
+# Run tests with watch mode
+astra test --watch
 ```
 
 ## Complete Example: Fibonacci
@@ -566,7 +655,7 @@ fn main()
 Run it:
 
 ```bash
-cargo run -- run fibonacci.astra
+astra run fibonacci.astra
 ```
 
 ## Next Steps

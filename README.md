@@ -39,20 +39,25 @@ LLM generates code → astra check → JSON errors with fix suggestions → LLM 
 
 ```bash
 # Build the toolchain
-cargo build
+cargo build --release
 
-# Format Astra code
-cargo run -- fmt examples/
-
-# Check for errors
-cargo run -- check examples/
-
-# Run tests
-cargo run -- test examples/
+# Add to PATH (or use 'cargo run --' instead of 'astra')
+export PATH="$PATH:$(pwd)/target/release"
 
 # Run a program
-cargo run -- run examples/hello.astra
+astra run examples/hello.astra
+
+# Check for errors
+astra check examples/
+
+# Run tests
+astra test
+
+# Format code
+astra fmt examples/
 ```
+
+See [Getting Started](docs/getting-started.md) for the full tutorial.
 
 ## Language Example
 
@@ -104,11 +109,16 @@ test "rejects zero amount" {
 
 | Command | Description |
 |---------|-------------|
-| `astra fmt [files...]` | Format files canonically |
+| `astra run <file>` | Execute an Astra program |
 | `astra check [files...]` | Parse + typecheck + lint |
 | `astra test [filter]` | Run tests deterministically |
-| `astra run <target>` | Run main entrypoint |
-| `astra package` | Create distributable artifact |
+| `astra fmt [files...]` | Format files canonically |
+| `astra fix [files...]` | Auto-apply diagnostic suggestions |
+| `astra explain <code>` | Explain an error code |
+| `astra repl` | Interactive REPL |
+| `astra init <name>` | Scaffold a new project |
+| `astra doc [files...]` | Generate API documentation |
+| `astra lsp` | Start LSP server |
 
 ## Documentation
 

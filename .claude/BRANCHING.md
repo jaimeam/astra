@@ -33,9 +33,7 @@ Examples:
    git checkout -b claude/{your-feature}-{session-id}
    ```
 
-2. **Update IMPLEMENTATION_PLAN.md** to mark your task as "In Progress"
-
-3. **Make changes** with frequent commits
+2. **Make changes** with frequent commits
 
 4. **Push your branch**:
    ```bash
@@ -81,9 +79,7 @@ Each agent type works on specific areas:
 
 ## Conflict Prevention
 
-1. **Check IMPLEMENTATION_PLAN.md** before starting work
-2. **Claim tasks** by updating the plan with your session ID
-3. **Avoid overlapping files** when possible
+1. **Avoid overlapping files** when possible
 4. **Communicate via commit messages** for interface changes
 
 ## Current Main Branch
