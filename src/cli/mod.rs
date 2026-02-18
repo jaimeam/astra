@@ -145,6 +145,46 @@ pub enum Command {
 
     /// Start Language Server Protocol server (for IDE integration)
     Lsp,
+
+    /// v1.1: Package management commands
+    Pkg {
+        #[command(subcommand)]
+        action: PkgAction,
+    },
+}
+
+/// v1.1: Package management actions
+#[derive(Subcommand, Debug)]
+pub enum PkgAction {
+    /// Install dependencies from astra.toml
+    Install,
+
+    /// Add a dependency to astra.toml
+    Add {
+        /// Package name
+        name: String,
+
+        /// Version requirement (e.g., "1.0", "^2.0")
+        #[arg(long)]
+        version: Option<String>,
+
+        /// Git repository URL
+        #[arg(long)]
+        git: Option<String>,
+
+        /// Local path
+        #[arg(long)]
+        path: Option<String>,
+    },
+
+    /// Remove a dependency from astra.toml
+    Remove {
+        /// Package name to remove
+        name: String,
+    },
+
+    /// List installed packages
+    List,
 }
 
 impl Cli {
@@ -210,6 +250,9 @@ impl Cli {
             }
             Command::Package { output, target } => {
                 run_package(&output, &target)?;
+            }
+            Command::Pkg { action } => {
+                run_pkg(action)?;
             }
         }
 
@@ -2734,6 +2777,151 @@ fn run_package(output: &PathBuf, target: &str) -> Result<(), Box<dyn std::error:
 
     println!("  Package created at {:?} (target: {})", output, target);
     println!("  {} files packaged successfully", source_files.len());
+
+    Ok(())
+}
+
+/// v1.1: Run package management commands
+fn run_pkg(action: PkgAction) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = std::env::current_dir()?;
+    let manifest_path = cwd.join("astra.toml");
+
+    match action {
+        PkgAction::Install => {
+            if !manifest_path.exists() {
+                return Err(
+                    "No astra.toml found. Run `astra init` to create a project first.".into(),
+                );
+            }
+
+            let manifest = crate::manifest::Manifest::load(&manifest_path)
+                .map_err(|e| format!("Failed to load manifest: {}", e))?;
+
+            let mut registry = crate::manifest::registry::PackageRegistry::new(cwd.clone());
+            let packages = registry
+                .resolve(&manifest)
+                .map_err(|e| format!("Failed to resolve dependencies: {}", e))?;
+
+            if packages.is_empty() {
+                println!("No dependencies to install.");
+                return Ok(());
+            }
+
+            println!("Installing {} dependencies...", packages.len());
+            registry
+                .install(&packages)
+                .map_err(|e| format!("Failed to install: {}", e))?;
+
+            // Generate lockfile
+            let lockfile = registry.generate_lockfile(&packages);
+            let lockfile_path = cwd.join("astra.lock");
+            lockfile
+                .save(&lockfile_path)
+                .map_err(|e| format!("Failed to write lockfile: {}", e))?;
+
+            for pkg in &packages {
+                println!("  Installed {} v{}", pkg.name, pkg.version);
+            }
+            println!("Done.");
+        }
+        PkgAction::Add {
+            name,
+            version,
+            git,
+            path,
+        } => {
+            if !manifest_path.exists() {
+                return Err(
+                    "No astra.toml found. Run `astra init` to create a project first.".into(),
+                );
+            }
+
+            let mut manifest = crate::manifest::Manifest::load(&manifest_path)
+                .map_err(|e| format!("Failed to load manifest: {}", e))?;
+
+            // Build the dependency spec
+            if path.is_some() || git.is_some() {
+                manifest.dependencies.insert(
+                    name.clone(),
+                    crate::manifest::Dependency::Detailed(crate::manifest::DetailedDependency {
+                        version,
+                        git,
+                        branch: None,
+                        tag: None,
+                        rev: None,
+                        path,
+                        features: Vec::new(),
+                        default_features: true,
+                        optional: false,
+                    }),
+                );
+            } else {
+                let ver = version.unwrap_or_else(|| "*".to_string());
+                manifest
+                    .dependencies
+                    .insert(name.clone(), crate::manifest::Dependency::Simple(ver));
+            }
+
+            // Write back
+            let toml_str = manifest
+                .to_toml()
+                .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
+            std::fs::write(&manifest_path, toml_str)?;
+            println!("Added `{}` to dependencies.", name);
+        }
+        PkgAction::Remove { name } => {
+            if !manifest_path.exists() {
+                return Err(
+                    "No astra.toml found. Run `astra init` to create a project first.".into(),
+                );
+            }
+
+            let mut manifest = crate::manifest::Manifest::load(&manifest_path)
+                .map_err(|e| format!("Failed to load manifest: {}", e))?;
+
+            if manifest.dependencies.remove(&name).is_some() {
+                let toml_str = manifest
+                    .to_toml()
+                    .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
+                std::fs::write(&manifest_path, toml_str)?;
+                println!("Removed `{}` from dependencies.", name);
+            } else {
+                println!("Dependency `{}` not found.", name);
+            }
+        }
+        PkgAction::List => {
+            if !manifest_path.exists() {
+                return Err(
+                    "No astra.toml found. Run `astra init` to create a project first.".into(),
+                );
+            }
+
+            let manifest = crate::manifest::Manifest::load(&manifest_path)
+                .map_err(|e| format!("Failed to load manifest: {}", e))?;
+
+            if manifest.dependencies.is_empty() {
+                println!("No dependencies.");
+            } else {
+                println!("Dependencies:");
+                for (name, dep) in &manifest.dependencies {
+                    match dep {
+                        crate::manifest::Dependency::Simple(v) => {
+                            println!("  {} = \"{}\"", name, v);
+                        }
+                        crate::manifest::Dependency::Detailed(d) => {
+                            if let Some(ref v) = d.version {
+                                println!("  {} = \"{}\"", name, v);
+                            } else if let Some(ref g) = d.git {
+                                println!("  {} (git: {})", name, g);
+                            } else if let Some(ref p) = d.path {
+                                println!("  {} (path: {})", name, p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
 }

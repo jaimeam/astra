@@ -165,6 +165,9 @@ pub struct FnDef {
     pub id: NodeId,
     pub span: Span,
     pub visibility: Visibility,
+    /// v1.1: Whether this function is async
+    #[serde(default)]
+    pub is_async: bool,
     pub name: String,
     pub type_params: Vec<String>,
     /// Trait bounds for type parameters (e.g., `T: Show` maps "T" -> "Show").
@@ -519,7 +522,7 @@ pub enum Expr {
         index: Box<Expr>,
     },
 
-    // Await expression (P6.5: async/await — reserved, produces parse error)
+    // v1.1: Await expression - suspends until a future resolves
     Await {
         id: NodeId,
         span: Span,

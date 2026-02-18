@@ -1,0 +1,36 @@
+module tests.runtime.async_v11
+
+## v1.1: Async/await tests
+
+async fn compute_value() -> Int {
+  42
+}
+
+async fn add_async(a: Int, b: Int) -> Int {
+  a + b
+}
+
+async fn greeting(name: Text) -> Text {
+  "Hello, " + name + "!"
+}
+
+test "async fn returns future, await resolves it" {
+  let result = await compute_value()
+  assert_eq(result, 42)
+}
+
+test "async fn with parameters" {
+  let result = await add_async(10, 20)
+  assert_eq(result, 30)
+}
+
+test "async fn with text" {
+  let result = await greeting("World")
+  assert_eq(result, "Hello, World!")
+}
+
+test "await on non-future is passthrough" {
+  let x = 100
+  let result = await x
+  assert_eq(result, 100)
+}

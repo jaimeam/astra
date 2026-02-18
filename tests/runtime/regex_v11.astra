@@ -1,0 +1,51 @@
+module tests.runtime.regex_v11
+
+## v1.1: Regular expression tests
+
+test "regex is_match positive" {
+  assert(regex_is_match("\\d+", "abc123"))
+}
+
+test "regex is_match negative" {
+  assert(regex_is_match("\\d+", "no digits") == false)
+}
+
+test "regex match returns record" {
+  let result = regex_match("(\\w+)@(\\w+)", "user@host.com")
+  match result {
+    Some(m) => {
+      assert_eq(m.matched, "user@host")
+      assert_eq(m.start, 0)
+    }
+    None => assert(false)
+  }
+}
+
+test "regex find_all" {
+  let matches = regex_find_all("\\d+", "a1 b22 c333")
+  assert_eq(matches.len(), 3)
+}
+
+test "regex replace all" {
+  let result = regex_replace("[aeiou]", "hello", "*")
+  assert_eq(result, "h*ll*")
+}
+
+test "regex split" {
+  let parts = regex_split("\\s+", "one  two  three")
+  assert_eq(parts.len(), 3)
+  assert_eq(parts.get(0).unwrap(), "one")
+}
+
+test "text matches method" {
+  assert("abc123".matches("[a-z]+\\d+"))
+}
+
+test "text replace_pattern method" {
+  assert_eq("a1b2".replace_pattern("\\d", "X"), "aXbX")
+}
+
+test "text split_pattern method" {
+  let parts = "a::b::c".split_pattern(":+")
+  assert_eq(parts.len(), 3)
+}

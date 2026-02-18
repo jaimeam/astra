@@ -1,5 +1,7 @@
 //! Manifest parsing for Astra projects (astra.toml)
 
+pub mod registry;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

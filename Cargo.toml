@@ -1,6 +1,6 @@
 [package]
 name = "astra"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Astra programming language - an LLM/Agent-native language"
 license = "MIT OR Apache-2.0"
@@ -28,6 +28,9 @@ logos = "0.14"
 
 # HTTP client (for Net capability)
 ureq = "2"
+
+# Regular expression support (v1.1)
+regex = "1"
 
 # File watching (for --watch mode)
 notify = "6"

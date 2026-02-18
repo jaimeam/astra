@@ -55,6 +55,14 @@ pub enum Value {
         name: String,
         field_names: Vec<String>,
     },
+    /// v1.1: Future value — represents an async computation that can be awaited.
+    /// Contains the closure to execute and a flag indicating if it has been resolved.
+    Future {
+        /// The async function body (as a closure)
+        func: Box<Value>,
+        /// Arguments to pass when resolving
+        args: Vec<Value>,
+    },
 }
 
 /// Closure body containing the AST block and optional contracts
@@ -106,9 +114,10 @@ pub fn values_equal(left: &Value, right: &Value) -> bool {
                         .any(|(k2, v2)| values_equal(k, k2) && values_equal(v, v2))
                 })
         }
-        // Closures and constructors are never equal
+        // Closures, constructors, and futures are never equal
         (Value::Closure { .. }, Value::Closure { .. }) => false,
         (Value::VariantConstructor { .. }, Value::VariantConstructor { .. }) => false,
+        (Value::Future { .. }, Value::Future { .. }) => false,
         _ => false,
     }
 }
@@ -154,6 +163,7 @@ pub fn format_value(value: &Value) -> String {
         }
         Value::Closure { .. } => "<closure>".to_string(),
         Value::VariantConstructor { name, .. } => format!("<constructor:{}>", name),
+        Value::Future { .. } => "<future>".to_string(),
         Value::List(items) => {
             let item_strs: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", item_strs.join(", "))
