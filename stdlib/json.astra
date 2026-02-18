@@ -35,3 +35,19 @@ public fn escape(s: Text) -> Text
 {
   s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t")
 }
+
+## v1.1: Parses a full JSON string into an Astra value.
+## Objects become Records, arrays become Lists, strings become Text,
+## numbers become Int or Float, booleans become Bool, null becomes None.
+public fn parse(s: Text) -> Result[Any, Text]
+{
+  json_parse(s)
+}
+
+## v1.1: Converts any Astra value into a JSON string.
+## Records become objects, Lists become arrays, Text becomes strings,
+## Int/Float become numbers, Bool becomes booleans, None/Unit become null.
+public fn to_json(value: Any) -> Text
+{
+  json_stringify(value)
+}

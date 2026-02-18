@@ -104,6 +104,8 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::Fn => self.parse_fn_def().map(Item::FnDef),
+            // v1.1: async fn support
+            TokenKind::Async => self.parse_fn_def().map(Item::FnDef),
             TokenKind::Trait => self.parse_trait_def().map(Item::TraitDef),
             TokenKind::Impl => self.parse_impl_block().map(Item::ImplBlock),
             TokenKind::Effect => self.parse_effect_def().map(Item::EffectDef),
@@ -371,6 +373,14 @@ impl<'a> Parser<'a> {
             Visibility::Private
         };
 
+        // v1.1: Parse optional `async` keyword before `fn`
+        let is_async = if self.check(TokenKind::Async) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         self.expect(TokenKind::Fn)?;
         let name = self.expect_ident()?;
         let (type_params, type_param_bounds) = self.parse_optional_type_params()?;
@@ -420,6 +430,7 @@ impl<'a> Parser<'a> {
             id: NodeId::new(),
             span: start_span.merge(&end_span),
             visibility,
+            is_async,
             name,
             type_params,
             type_param_bounds,
@@ -994,21 +1005,20 @@ impl<'a> Parser<'a> {
                 expr: Box::new(expr),
             });
         }
-        // B2: async/await are reserved keywords — not implemented in v1.0
+        // v1.1: await expression support
         if self.check(TokenKind::Await) {
-            let span = self.current_span();
-            return Err(Diagnostic::error("E0006")
-                .message("`await` is a reserved keyword. Astra v1.0 is single-threaded and does not support async/await. Remove the `await` keyword — the expression will be evaluated synchronously.")
-                .span(span)
-                .build());
+            let start_span = self.current_span();
+            self.advance();
+            let expr = self.parse_unary_expr()?;
+            let end_span = self.expr_span(&expr);
+            return Ok(Expr::Await {
+                id: NodeId::new(),
+                span: start_span.merge(&end_span),
+                expr: Box::new(expr),
+            });
         }
-        if self.check(TokenKind::Async) {
-            let span = self.current_span();
-            return Err(Diagnostic::error("E0006")
-                .message("`async` is a reserved keyword. Astra v1.0 is single-threaded and does not support async/await.")
-                .span(span)
-                .build());
-        }
+        // Note: `async` as an expression prefix is not needed here;
+        // `async fn` is parsed at the item level.
         self.parse_postfix_expr()
     }
 

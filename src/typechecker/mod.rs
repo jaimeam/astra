@@ -190,6 +190,254 @@ pub enum Type {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeVarId(pub u32);
 
+// =============================================================================
+// v1.1: Hindley-Milner type inference with constraint-based unification
+// =============================================================================
+
+/// Substitution map for type variable resolution (union-find).
+/// Maps type variable IDs to their resolved types.
+#[derive(Debug, Clone, Default)]
+pub struct Substitution {
+    /// Resolved type variable bindings
+    bindings: HashMap<TypeVarId, Type>,
+    /// Counter for generating fresh type variables
+    next_var: u32,
+}
+
+impl Substitution {
+    pub fn new() -> Self {
+        Self {
+            bindings: HashMap::new(),
+            next_var: 0,
+        }
+    }
+
+    /// Generate a fresh type variable
+    pub fn fresh_var(&mut self) -> Type {
+        let id = TypeVarId(self.next_var);
+        self.next_var += 1;
+        Type::Var(id)
+    }
+
+    /// Look up the current binding for a type variable, following chains
+    pub fn resolve(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Var(id) => {
+                if let Some(bound) = self.bindings.get(id) {
+                    self.resolve(bound)
+                } else {
+                    ty.clone()
+                }
+            }
+            _ => ty.clone(),
+        }
+    }
+
+    /// Apply substitution to a type, resolving all type variables
+    pub fn apply(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Var(id) => {
+                if let Some(bound) = self.bindings.get(id) {
+                    self.apply(bound)
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::Option(inner) => Type::Option(Box::new(self.apply(inner))),
+            Type::Result(ok, err) => {
+                Type::Result(Box::new(self.apply(ok)), Box::new(self.apply(err)))
+            }
+            Type::List(inner) => Type::List(Box::new(self.apply(inner))),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.apply(e)).collect()),
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.apply(v)))
+                    .collect(),
+            ),
+            Type::Function {
+                params,
+                ret,
+                effects,
+            } => Type::Function {
+                params: params.iter().map(|p| self.apply(p)).collect(),
+                ret: Box::new(self.apply(ret)),
+                effects: effects.clone(),
+            },
+            Type::Named(name, args) => {
+                Type::Named(name.clone(), args.iter().map(|a| self.apply(a)).collect())
+            }
+            _ => ty.clone(),
+        }
+    }
+
+    /// Unify two types, updating the substitution.
+    /// Returns true on success, false if the types are incompatible.
+    pub fn unify(&mut self, a: &Type, b: &Type) -> bool {
+        let a = self.resolve(a);
+        let b = self.resolve(b);
+
+        // Unknown matches anything (error recovery)
+        if a == Type::Unknown || b == Type::Unknown {
+            return true;
+        }
+
+        // TypeParam matches anything (generic parameter)
+        if matches!(&a, Type::TypeParam(_)) || matches!(&b, Type::TypeParam(_)) {
+            return true;
+        }
+
+        // Same type — trivially unifies
+        if a == b {
+            return true;
+        }
+
+        // Bind type variables
+        if let Type::Var(id) = &a {
+            if !self.occurs_in(*id, &b) {
+                self.bindings.insert(*id, b);
+                return true;
+            }
+            return false; // occurs check failure
+        }
+        if let Type::Var(id) = &b {
+            if !self.occurs_in(*id, &a) {
+                self.bindings.insert(*id, a);
+                return true;
+            }
+            return false;
+        }
+
+        // Structural unification
+        match (&a, &b) {
+            (Type::Option(a_inner), Type::Option(b_inner)) => self.unify(a_inner, b_inner),
+            (Type::Result(a_ok, a_err), Type::Result(b_ok, b_err)) => {
+                self.unify(a_ok, b_ok) && self.unify(a_err, b_err)
+            }
+            (Type::List(a_inner), Type::List(b_inner)) => self.unify(a_inner, b_inner),
+            (Type::Tuple(a_elems), Type::Tuple(b_elems)) => {
+                a_elems.len() == b_elems.len()
+                    && a_elems
+                        .iter()
+                        .zip(b_elems.iter())
+                        .all(|(x, y)| self.unify(x, y))
+            }
+            (Type::Record(a_fields), Type::Record(b_fields)) => {
+                // For records, check that all fields in a exist in b and vice versa
+                if a_fields.len() != b_fields.len() {
+                    return false;
+                }
+                for (name, a_ty) in a_fields {
+                    if let Some((_, b_ty)) = b_fields.iter().find(|(n, _)| n == name) {
+                        if !self.unify(a_ty, b_ty) {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+                true
+            }
+            (
+                Type::Function {
+                    params: p1,
+                    ret: r1,
+                    ..
+                },
+                Type::Function {
+                    params: p2,
+                    ret: r2,
+                    ..
+                },
+            ) => {
+                p1.len() == p2.len()
+                    && p1.iter().zip(p2.iter()).all(|(a, b)| self.unify(a, b))
+                    && self.unify(r1, r2)
+            }
+            (Type::Named(n1, args1), Type::Named(n2, args2)) => {
+                n1 == n2
+                    && args1.len() == args2.len()
+                    && args1
+                        .iter()
+                        .zip(args2.iter())
+                        .all(|(a, b)| self.unify(a, b))
+            }
+            _ => false,
+        }
+    }
+
+    /// Occurs check: does type variable `id` appear in `ty`?
+    fn occurs_in(&self, id: TypeVarId, ty: &Type) -> bool {
+        let ty = self.resolve(ty);
+        match &ty {
+            Type::Var(other_id) => id == *other_id,
+            Type::Option(inner) | Type::List(inner) => self.occurs_in(id, inner),
+            Type::Result(ok, err) => self.occurs_in(id, ok) || self.occurs_in(id, err),
+            Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in(id, e)),
+            Type::Record(fields) => fields.iter().any(|(_, t)| self.occurs_in(id, t)),
+            Type::Function { params, ret, .. } => {
+                params.iter().any(|p| self.occurs_in(id, p)) || self.occurs_in(id, ret)
+            }
+            Type::Named(_, args) => args.iter().any(|a| self.occurs_in(id, a)),
+            _ => false,
+        }
+    }
+
+    /// Instantiate a type scheme by replacing TypeParams with fresh type variables.
+    /// This is the "inst" operation in HM: when using a polymorphic value,
+    /// each type parameter gets a fresh type variable.
+    pub fn instantiate(&mut self, ty: &Type, param_map: &mut HashMap<String, Type>) -> Type {
+        match ty {
+            Type::TypeParam(name) => {
+                if let Some(existing) = param_map.get(name) {
+                    existing.clone()
+                } else {
+                    let fresh = self.fresh_var();
+                    param_map.insert(name.clone(), fresh.clone());
+                    fresh
+                }
+            }
+            Type::Option(inner) => Type::Option(Box::new(self.instantiate(inner, param_map))),
+            Type::Result(ok, err) => Type::Result(
+                Box::new(self.instantiate(ok, param_map)),
+                Box::new(self.instantiate(err, param_map)),
+            ),
+            Type::List(inner) => Type::List(Box::new(self.instantiate(inner, param_map))),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.instantiate(e, param_map))
+                    .collect(),
+            ),
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.instantiate(v, param_map)))
+                    .collect(),
+            ),
+            Type::Function {
+                params,
+                ret,
+                effects,
+            } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|p| self.instantiate(p, param_map))
+                    .collect(),
+                ret: Box::new(self.instantiate(ret, param_map)),
+                effects: effects.clone(),
+            },
+            Type::Named(name, args) => Type::Named(
+                name.clone(),
+                args.iter()
+                    .map(|a| self.instantiate(a, param_map))
+                    .collect(),
+            ),
+            _ => ty.clone(),
+        }
+    }
+}
+
 /// Type environment for tracking bindings
 #[derive(Debug, Clone, Default)]
 pub struct TypeEnv {
@@ -316,6 +564,7 @@ const KNOWN_STDLIB_MODULES: &[&str] = &[
     "math",
     "option",
     "prelude",
+    "regex",
     "result",
     "string",
 ];
@@ -342,6 +591,8 @@ pub struct TypeChecker {
     search_paths: Vec<std::path::PathBuf>,
     /// B1: Already-resolved modules to prevent infinite recursion
     resolved_modules: HashSet<String>,
+    /// v1.1: Substitution for HM type inference unification
+    subst: Substitution,
 }
 
 impl TypeChecker {
@@ -358,6 +609,7 @@ impl TypeChecker {
             called_fns: HashSet::new(),
             search_paths: Vec::new(),
             resolved_modules: HashSet::new(),
+            subst: Substitution::new(),
         }
     }
 
@@ -1984,26 +2236,42 @@ impl TypeChecker {
     }
 
     fn types_compatible(&self, actual: &Type, expected: &Type) -> bool {
-        if actual == &Type::Unknown || expected == &Type::Unknown {
+        // v1.1: Use the substitution to resolve type variables before comparing
+        let actual = self.subst.apply(actual);
+        let expected = self.subst.apply(expected);
+
+        if actual == Type::Unknown || expected == Type::Unknown {
             return true;
         }
         // Type parameters are compatible with anything (they're generic)
-        if matches!(actual, Type::TypeParam(_)) || matches!(expected, Type::TypeParam(_)) {
+        if matches!(&actual, Type::TypeParam(_)) || matches!(&expected, Type::TypeParam(_)) {
+            return true;
+        }
+        // Type variables are compatible (will be resolved during unification)
+        if matches!(&actual, Type::Var(_)) || matches!(&expected, Type::Var(_)) {
             return true;
         }
         // List[T] compatible with List[U] if T compatible with U
-        if let (Type::List(a), Type::List(b)) = (actual, expected) {
+        if let (Type::List(a), Type::List(b)) = (&actual, &expected) {
             return self.types_compatible(a, b);
         }
         // Tuple(A, B) compatible with Tuple(C, D) if element-wise compatible
-        if let (Type::Tuple(a), Type::Tuple(b)) = (actual, expected) {
+        if let (Type::Tuple(a), Type::Tuple(b)) = (&actual, &expected) {
             return a.len() == b.len()
                 && a.iter()
                     .zip(b.iter())
                     .all(|(x, y)| self.types_compatible(x, y));
         }
+        // Option types
+        if let (Type::Option(a), Type::Option(b)) = (&actual, &expected) {
+            return self.types_compatible(a, b);
+        }
+        // Result types
+        if let (Type::Result(a_ok, a_err), Type::Result(b_ok, b_err)) = (&actual, &expected) {
+            return self.types_compatible(a_ok, b_ok) && self.types_compatible(a_err, b_err);
+        }
         // Named types with same name: check type args
-        if let (Type::Named(n1, args1), Type::Named(n2, args2)) = (actual, expected) {
+        if let (Type::Named(n1, args1), Type::Named(n2, args2)) = (&actual, &expected) {
             if n1 == n2 {
                 return args1.len() == args2.len()
                     && args1
@@ -2024,7 +2292,7 @@ impl TypeChecker {
                 ret: r2,
                 ..
             },
-        ) = (actual, expected)
+        ) = (&actual, &expected)
         {
             return p1.len() == p2.len()
                 && p1
@@ -2039,17 +2307,91 @@ impl TypeChecker {
     /// Attempt to unify type arguments from a generic function call.
     /// Given a function with type params [T, U, ...] and declared param types,
     /// tries to bind each type param to a concrete type based on the actual argument types.
+    /// v1.1: Uses the Substitution-based unification for more accurate inference.
     fn unify_type_params(
-        &self,
+        &mut self,
         type_params: &[String],
         declared_param_types: &[Type],
         actual_arg_types: &[Type],
     ) -> HashMap<String, Type> {
+        // Create fresh type variables for each type parameter
+        let mut param_vars: HashMap<String, Type> = HashMap::new();
+        for tp in type_params {
+            let fresh = self.subst.fresh_var();
+            param_vars.insert(tp.clone(), fresh);
+        }
+
+        // Substitute type params with fresh vars in declared types
+        for (declared, actual) in declared_param_types.iter().zip(actual_arg_types.iter()) {
+            let instantiated = self.substitute_type_params(declared, &param_vars);
+            // Unify the instantiated declared type with the actual type
+            self.subst.unify(&instantiated, actual);
+        }
+
+        // Extract the resolved bindings
         let mut bindings: HashMap<String, Type> = HashMap::new();
+        for (name, var) in &param_vars {
+            let resolved = self.subst.apply(var);
+            if !matches!(resolved, Type::Var(_)) {
+                bindings.insert(name.clone(), resolved);
+            }
+        }
+
+        // Fallback: also try the old unification for any params not resolved
         for (declared, actual) in declared_param_types.iter().zip(actual_arg_types.iter()) {
             self.unify_one(declared, actual, type_params, &mut bindings);
         }
+
         bindings
+    }
+
+    /// Substitute TypeParam references with provided types.
+    fn substitute_type_params(&self, ty: &Type, params: &HashMap<String, Type>) -> Type {
+        match ty {
+            Type::TypeParam(name) => params.get(name).cloned().unwrap_or_else(|| ty.clone()),
+            Type::Named(name, args) if params.contains_key(name) && args.is_empty() => {
+                params[name].clone()
+            }
+            Type::Option(inner) => {
+                Type::Option(Box::new(self.substitute_type_params(inner, params)))
+            }
+            Type::Result(ok, err) => Type::Result(
+                Box::new(self.substitute_type_params(ok, params)),
+                Box::new(self.substitute_type_params(err, params)),
+            ),
+            Type::List(inner) => Type::List(Box::new(self.substitute_type_params(inner, params))),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.substitute_type_params(e, params))
+                    .collect(),
+            ),
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.substitute_type_params(v, params)))
+                    .collect(),
+            ),
+            Type::Function {
+                params: p,
+                ret,
+                effects,
+            } => Type::Function {
+                params: p
+                    .iter()
+                    .map(|t| self.substitute_type_params(t, params))
+                    .collect(),
+                ret: Box::new(self.substitute_type_params(ret, params)),
+                effects: effects.clone(),
+            },
+            Type::Named(name, args) => Type::Named(
+                name.clone(),
+                args.iter()
+                    .map(|a| self.substitute_type_params(a, params))
+                    .collect(),
+            ),
+            _ => ty.clone(),
+        }
     }
 
     /// Recursively unify a declared type with an actual type, binding type params.
@@ -2126,55 +2468,6 @@ impl TypeChecker {
                 }
             }
             _ => {}
-        }
-    }
-
-    /// Substitute type parameters in a type using the given bindings.
-    fn substitute_type_params(&self, ty: &Type, bindings: &HashMap<String, Type>) -> Type {
-        match ty {
-            Type::TypeParam(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
-            Type::Named(name, args) if args.is_empty() && bindings.contains_key(name) => {
-                bindings[name].clone()
-            }
-            Type::Named(name, args) => Type::Named(
-                name.clone(),
-                args.iter()
-                    .map(|a| self.substitute_type_params(a, bindings))
-                    .collect(),
-            ),
-            Type::List(inner) => Type::List(Box::new(self.substitute_type_params(inner, bindings))),
-            Type::Tuple(elems) => Type::Tuple(
-                elems
-                    .iter()
-                    .map(|e| self.substitute_type_params(e, bindings))
-                    .collect(),
-            ),
-            Type::Option(inner) => {
-                Type::Option(Box::new(self.substitute_type_params(inner, bindings)))
-            }
-            Type::Result(ok, err) => Type::Result(
-                Box::new(self.substitute_type_params(ok, bindings)),
-                Box::new(self.substitute_type_params(err, bindings)),
-            ),
-            Type::Function {
-                params,
-                ret,
-                effects,
-            } => Type::Function {
-                params: params
-                    .iter()
-                    .map(|p| self.substitute_type_params(p, bindings))
-                    .collect(),
-                ret: Box::new(self.substitute_type_params(ret, bindings)),
-                effects: effects.clone(),
-            },
-            Type::Record(fields) => Type::Record(
-                fields
-                    .iter()
-                    .map(|(n, t)| (n.clone(), self.substitute_type_params(t, bindings)))
-                    .collect(),
-            ),
-            _ => ty.clone(),
         }
     }
 }

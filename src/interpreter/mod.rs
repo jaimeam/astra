@@ -54,6 +54,8 @@ pub struct Interpreter {
     effect_defs: HashMap<String, EffectDecl>,
     /// Trait implementations for method dispatch
     trait_impls: Vec<RuntimeTraitImpl>,
+    /// v1.1: Set of async function names
+    async_fns: std::collections::HashSet<String>,
 }
 
 impl Interpreter {
@@ -74,6 +76,7 @@ impl Interpreter {
             type_defs: HashMap::new(),
             effect_defs: HashMap::new(),
             trait_impls: Vec::new(),
+            async_fns: std::collections::HashSet::new(),
         }
     }
 
@@ -233,6 +236,10 @@ impl Interpreter {
                         },
                         env: Environment::new(), // Will use global env at call time
                     };
+                    // v1.1: Track async functions
+                    if fn_def.is_async {
+                        self.async_fns.insert(fn_def.name.clone());
+                    }
                     self.env.define(fn_def.name.clone(), closure);
                 }
                 Item::EnumDef(enum_def) => {
@@ -850,6 +857,75 @@ impl Interpreter {
                             let name = self.eval_expr(&args[0])?;
                             return self.call_env_method("get", vec![name]);
                         }
+                        // v1.1: Full JSON parsing
+                        "json_parse" => {
+                            check_arity(args, 1)?;
+                            let val = self.eval_expr(&args[0])?;
+                            return match val {
+                                Value::Text(s) => json_parse_value(&s),
+                                _ => {
+                                    Err(RuntimeError::type_mismatch("Text", &format!("{:?}", val)))
+                                }
+                            };
+                        }
+                        "json_stringify" => {
+                            check_arity(args, 1)?;
+                            let val = self.eval_expr(&args[0])?;
+                            return Ok(Value::Text(json_stringify_value(&val)));
+                        }
+                        // v1.1: Regex support
+                        "regex_match" => {
+                            check_arity(args, 2)?;
+                            let pattern = self.eval_expr(&args[0])?;
+                            let text = self.eval_expr(&args[1])?;
+                            return match (&pattern, &text) {
+                                (Value::Text(pat), Value::Text(s)) => regex_match(pat, s),
+                                _ => Err(RuntimeError::type_mismatch("(Text, Text)", "other")),
+                            };
+                        }
+                        "regex_find_all" => {
+                            check_arity(args, 2)?;
+                            let pattern = self.eval_expr(&args[0])?;
+                            let text = self.eval_expr(&args[1])?;
+                            return match (&pattern, &text) {
+                                (Value::Text(pat), Value::Text(s)) => regex_find_all(pat, s),
+                                _ => Err(RuntimeError::type_mismatch("(Text, Text)", "other")),
+                            };
+                        }
+                        "regex_replace" => {
+                            if args.len() != 3 {
+                                return Err(RuntimeError::arity_mismatch(3, args.len()));
+                            }
+                            let pattern = self.eval_expr(&args[0])?;
+                            let text = self.eval_expr(&args[1])?;
+                            let replacement = self.eval_expr(&args[2])?;
+                            return match (&pattern, &text, &replacement) {
+                                (Value::Text(pat), Value::Text(s), Value::Text(rep)) => {
+                                    regex_replace(pat, s, rep)
+                                }
+                                _ => {
+                                    Err(RuntimeError::type_mismatch("(Text, Text, Text)", "other"))
+                                }
+                            };
+                        }
+                        "regex_split" => {
+                            check_arity(args, 2)?;
+                            let pattern = self.eval_expr(&args[0])?;
+                            let text = self.eval_expr(&args[1])?;
+                            return match (&pattern, &text) {
+                                (Value::Text(pat), Value::Text(s)) => regex_split(pat, s),
+                                _ => Err(RuntimeError::type_mismatch("(Text, Text)", "other")),
+                            };
+                        }
+                        "regex_is_match" => {
+                            check_arity(args, 2)?;
+                            let pattern = self.eval_expr(&args[0])?;
+                            let text = self.eval_expr(&args[1])?;
+                            return match (&pattern, &text) {
+                                (Value::Text(pat), Value::Text(s)) => regex_is_match(pat, s),
+                                _ => Err(RuntimeError::type_mismatch("(Text, Text)", "other")),
+                            };
+                        }
                         _ => {}
                     }
                 }
@@ -859,13 +935,29 @@ impl Interpreter {
                 for arg in args {
                     arg_vals.push(self.eval_expr(arg)?);
                 }
-                self.call_function(func_val, arg_vals).map_err(|e| {
-                    if e.span.is_none() && !e.is_control_flow() {
-                        e.with_span(span.clone())
-                    } else {
-                        e
-                    }
-                })
+
+                // v1.1: Check if this is an async function call
+                let is_async_call = if let Expr::Ident { name, .. } = func.as_ref() {
+                    self.async_fns.contains(name.as_str())
+                } else {
+                    false
+                };
+
+                if is_async_call {
+                    // Return a Future instead of executing immediately
+                    Ok(Value::Future {
+                        func: Box::new(func_val),
+                        args: arg_vals,
+                    })
+                } else {
+                    self.call_function(func_val, arg_vals).map_err(|e| {
+                        if e.span.is_none() && !e.is_control_flow() {
+                            e.with_span(span.clone())
+                        } else {
+                            e
+                        }
+                    })
+                }
             }
 
             // Method calls (for effects)
@@ -1265,8 +1357,18 @@ impl Interpreter {
                 }
             }
 
-            // P6.5: Await evaluates the inner expression (single-threaded execution)
-            Expr::Await { expr, .. } => self.eval_expr(expr),
+            // v1.1: Await expression - resolves a future by executing the deferred computation
+            Expr::Await { expr, .. } => {
+                let val = self.eval_expr(expr)?;
+                match val {
+                    Value::Future { func, args } => {
+                        // Resolve the future by calling the function
+                        self.call_function(*func, args)
+                    }
+                    // If it's not a future, just return the value (backwards compatible)
+                    other => Ok(other),
+                }
+            }
 
             Expr::Hole { .. } => Err(RuntimeError::hole_encountered()),
         }
@@ -2651,6 +2753,49 @@ impl Interpreter {
                     Err(RuntimeError::arity_mismatch(2, args.len()))
                 }
             }
+            // v1.1: Regex text methods
+            (Value::Text(s), "matches") => {
+                if let Some(Value::Text(pattern)) = args.first() {
+                    regex_is_match(pattern, s)
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "find_pattern") => {
+                if let Some(Value::Text(pattern)) = args.first() {
+                    regex_match(pattern, s)
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "find_all_pattern") => {
+                if let Some(Value::Text(pattern)) = args.first() {
+                    regex_find_all(pattern, s)
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+            (Value::Text(s), "replace_pattern") => {
+                if args.len() == 2 {
+                    if let (Some(Value::Text(pattern)), Some(Value::Text(replacement))) =
+                        (args.first(), args.get(1))
+                    {
+                        regex_replace(pattern, s, replacement)
+                    } else {
+                        Err(RuntimeError::type_mismatch("(Text, Text)", "other"))
+                    }
+                } else {
+                    Err(RuntimeError::arity_mismatch(2, args.len()))
+                }
+            }
+            (Value::Text(s), "split_pattern") => {
+                if let Some(Value::Text(pattern)) = args.first() {
+                    regex_split(pattern, s)
+                } else {
+                    Err(RuntimeError::type_mismatch("Text", "other"))
+                }
+            }
+
             // List join method (on List[Text])
             (Value::List(items), "join") => {
                 if let Some(Value::Text(sep)) = args.first() {
@@ -2822,6 +2967,7 @@ impl Interpreter {
             Value::Record(_) => "Record",
             Value::Variant { .. } | Value::VariantConstructor { .. } => "Variant",
             Value::Closure { .. } => "Closure",
+            Value::Future { .. } => "Future",
         }
     }
 
@@ -3040,6 +3186,445 @@ pub fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Va
     }
 }
 
+// =============================================================================
+// v1.1: Full JSON parsing and stringifying
+// =============================================================================
+
+/// Parse a JSON string into an Astra Value
+fn json_parse_value(input: &str) -> Result<Value, RuntimeError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(RuntimeError::new("E4016", "Empty JSON input"));
+    }
+    let (val, rest) = json_parse_inner(trimmed)?;
+    let rest = rest.trim();
+    if !rest.is_empty() {
+        return Err(RuntimeError::new(
+            "E4016",
+            format!("Unexpected trailing content in JSON: {:?}", rest),
+        ));
+    }
+    Ok(val)
+}
+
+/// Recursive JSON parser — returns (Value, remaining_input)
+fn json_parse_inner(input: &str) -> Result<(Value, &str), RuntimeError> {
+    let input = input.trim_start();
+    if input.is_empty() {
+        return Err(RuntimeError::new("E4016", "Unexpected end of JSON"));
+    }
+
+    match input.as_bytes()[0] {
+        b'"' => json_parse_string(input),
+        b'{' => json_parse_object(input),
+        b'[' => json_parse_array(input),
+        b't' | b'f' => json_parse_bool(input),
+        b'n' => json_parse_null(input),
+        b'-' | b'0'..=b'9' => json_parse_number(input),
+        ch => Err(RuntimeError::new(
+            "E4016",
+            format!("Unexpected character in JSON: '{}'", ch as char),
+        )),
+    }
+}
+
+fn json_parse_string(input: &str) -> Result<(Value, &str), RuntimeError> {
+    debug_assert!(input.starts_with('"'));
+    let rest = &input[1..];
+    let mut result = String::new();
+    let mut chars = rest.char_indices();
+
+    while let Some((i, ch)) = chars.next() {
+        match ch {
+            '"' => return Ok((Value::Text(result), &rest[i + 1..])),
+            '\\' => {
+                if let Some((_, esc)) = chars.next() {
+                    match esc {
+                        '"' => result.push('"'),
+                        '\\' => result.push('\\'),
+                        '/' => result.push('/'),
+                        'n' => result.push('\n'),
+                        'r' => result.push('\r'),
+                        't' => result.push('\t'),
+                        'b' => result.push('\u{0008}'),
+                        'f' => result.push('\u{000C}'),
+                        'u' => {
+                            let mut hex = String::new();
+                            for _ in 0..4 {
+                                if let Some((_, h)) = chars.next() {
+                                    hex.push(h);
+                                }
+                            }
+                            if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                                if let Some(c) = char::from_u32(code) {
+                                    result.push(c);
+                                }
+                            }
+                        }
+                        _ => {
+                            result.push('\\');
+                            result.push(esc);
+                        }
+                    }
+                }
+            }
+            _ => result.push(ch),
+        }
+    }
+    Err(RuntimeError::new("E4016", "Unterminated JSON string"))
+}
+
+fn json_parse_object(input: &str) -> Result<(Value, &str), RuntimeError> {
+    debug_assert!(input.starts_with('{'));
+    let mut rest = input[1..].trim_start();
+    let mut fields = HashMap::new();
+
+    if let Some(stripped) = rest.strip_prefix('}') {
+        return Ok((Value::Record(fields), stripped));
+    }
+
+    loop {
+        // Parse key (must be a string)
+        if !rest.starts_with('"') {
+            return Err(RuntimeError::new(
+                "E4016",
+                "Expected string key in JSON object",
+            ));
+        }
+        let (key_val, after_key) = json_parse_string(rest)?;
+        let key = match key_val {
+            Value::Text(s) => s,
+            _ => unreachable!(),
+        };
+        rest = after_key.trim_start();
+
+        // Expect colon
+        if !rest.starts_with(':') {
+            return Err(RuntimeError::new(
+                "E4016",
+                "Expected ':' after key in JSON object",
+            ));
+        }
+        rest = rest[1..].trim_start();
+
+        // Parse value
+        let (val, after_val) = json_parse_inner(rest)?;
+        fields.insert(key, val);
+        rest = after_val.trim_start();
+
+        if rest.starts_with(',') {
+            rest = rest[1..].trim_start();
+        } else if rest.starts_with('}') {
+            rest = &rest[1..];
+            break;
+        } else {
+            return Err(RuntimeError::new(
+                "E4016",
+                "Expected ',' or '}' in JSON object",
+            ));
+        }
+    }
+
+    Ok((Value::Record(fields), rest))
+}
+
+fn json_parse_array(input: &str) -> Result<(Value, &str), RuntimeError> {
+    debug_assert!(input.starts_with('['));
+    let mut rest = input[1..].trim_start();
+    let mut elements = Vec::new();
+
+    if let Some(stripped) = rest.strip_prefix(']') {
+        return Ok((Value::List(elements), stripped));
+    }
+
+    loop {
+        let (val, after_val) = json_parse_inner(rest)?;
+        elements.push(val);
+        rest = after_val.trim_start();
+
+        if rest.starts_with(',') {
+            rest = rest[1..].trim_start();
+        } else if rest.starts_with(']') {
+            rest = &rest[1..];
+            break;
+        } else {
+            return Err(RuntimeError::new(
+                "E4016",
+                "Expected ',' or ']' in JSON array",
+            ));
+        }
+    }
+
+    Ok((Value::List(elements), rest))
+}
+
+fn json_parse_bool(input: &str) -> Result<(Value, &str), RuntimeError> {
+    if let Some(rest) = input.strip_prefix("true") {
+        Ok((Value::Bool(true), rest))
+    } else if let Some(rest) = input.strip_prefix("false") {
+        Ok((Value::Bool(false), rest))
+    } else {
+        Err(RuntimeError::new(
+            "E4016",
+            format!(
+                "Invalid JSON value starting with '{}'",
+                &input[..1.min(input.len())]
+            ),
+        ))
+    }
+}
+
+fn json_parse_null(input: &str) -> Result<(Value, &str), RuntimeError> {
+    if let Some(rest) = input.strip_prefix("null") {
+        Ok((Value::None, rest))
+    } else {
+        Err(RuntimeError::new("E4016", "Invalid JSON null"))
+    }
+}
+
+fn json_parse_number(input: &str) -> Result<(Value, &str), RuntimeError> {
+    let mut end = 0;
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+
+    // Optional minus
+    if end < len && bytes[end] == b'-' {
+        end += 1;
+    }
+    // Digits
+    while end < len && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    // Fractional part
+    let mut is_float = false;
+    if end < len && bytes[end] == b'.' {
+        is_float = true;
+        end += 1;
+        while end < len && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+    }
+    // Exponent
+    if end < len && (bytes[end] == b'e' || bytes[end] == b'E') {
+        is_float = true;
+        end += 1;
+        if end < len && (bytes[end] == b'+' || bytes[end] == b'-') {
+            end += 1;
+        }
+        while end < len && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+    }
+
+    let num_str = &input[..end];
+    let rest = &input[end..];
+
+    if is_float {
+        match num_str.parse::<f64>() {
+            Ok(f) => Ok((Value::Float(f), rest)),
+            Err(_) => Err(RuntimeError::new(
+                "E4016",
+                format!("Invalid JSON number: {}", num_str),
+            )),
+        }
+    } else {
+        match num_str.parse::<i64>() {
+            Ok(n) => Ok((Value::Int(n), rest)),
+            Err(_) => {
+                // Try as float if it doesn't fit in i64
+                match num_str.parse::<f64>() {
+                    Ok(f) => Ok((Value::Float(f), rest)),
+                    Err(_) => Err(RuntimeError::new(
+                        "E4016",
+                        format!("Invalid JSON number: {}", num_str),
+                    )),
+                }
+            }
+        }
+    }
+}
+
+/// Stringify an Astra value to a JSON string
+fn json_stringify_value(value: &Value) -> String {
+    match value {
+        Value::Unit => "null".to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(f) => {
+            if f.is_infinite() || f.is_nan() {
+                "null".to_string()
+            } else {
+                let s = f.to_string();
+                // Ensure float representation
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    s
+                } else {
+                    format!("{}.0", s)
+                }
+            }
+        }
+        Value::Bool(b) => b.to_string(),
+        Value::Text(s) => {
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            format!("\"{}\"", escaped)
+        }
+        Value::None => "null".to_string(),
+        Value::Some(inner) => json_stringify_value(inner),
+        Value::Ok(inner) => json_stringify_value(inner),
+        Value::Err(inner) => {
+            // Represent as {"error": ...}
+            format!("{{\"error\":{}}}", json_stringify_value(inner))
+        }
+        Value::Record(fields) => {
+            let mut sorted_keys: Vec<&String> = fields.keys().collect();
+            sorted_keys.sort();
+            let parts: Vec<String> = sorted_keys
+                .iter()
+                .map(|k| {
+                    format!(
+                        "\"{}\":{}",
+                        k,
+                        json_stringify_value(fields.get(*k).unwrap())
+                    )
+                })
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        Value::List(items) => {
+            let parts: Vec<String> = items.iter().map(json_stringify_value).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::Tuple(elements) => {
+            let parts: Vec<String> = elements.iter().map(json_stringify_value).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::Map(entries) => {
+            let parts: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| {
+                    let key_str = match k {
+                        Value::Text(s) => s.clone(),
+                        _ => format_value(k),
+                    };
+                    format!(
+                        "\"{}\":{}",
+                        key_str.replace('\\', "\\\\").replace('"', "\\\""),
+                        json_stringify_value(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        Value::Set(elements) => {
+            let parts: Vec<String> = elements.iter().map(json_stringify_value).collect();
+            format!("[{}]", parts.join(","))
+        }
+        Value::Variant { name, data } => {
+            if let Some(d) = data {
+                format!(
+                    "{{\"variant\":\"{}\",\"data\":{}}}",
+                    name,
+                    json_stringify_value(d)
+                )
+            } else {
+                format!("\"{}\"", name)
+            }
+        }
+        Value::Closure { .. } | Value::VariantConstructor { .. } | Value::Future { .. } => {
+            "null".to_string()
+        }
+    }
+}
+
+// =============================================================================
+// v1.1: Regular expression support
+// =============================================================================
+
+/// Check if a regex pattern matches a string, returns Option with match info
+fn regex_match(pattern: &str, text: &str) -> Result<Value, RuntimeError> {
+    let re = regex::Regex::new(pattern)
+        .map_err(|e| RuntimeError::new("E4016", format!("Invalid regex pattern: {}", e)))?;
+
+    match re.captures(text) {
+        Some(caps) => {
+            let full_match = caps.get(0).map_or("", |m| m.as_str());
+            let mut fields = HashMap::new();
+            fields.insert("matched".to_string(), Value::Text(full_match.to_string()));
+            fields.insert(
+                "start".to_string(),
+                Value::Int(caps.get(0).map_or(0, |m| m.start()) as i64),
+            );
+            fields.insert(
+                "end".to_string(),
+                Value::Int(caps.get(0).map_or(0, |m| m.end()) as i64),
+            );
+
+            // Collect capture groups
+            let groups: Vec<Value> = caps
+                .iter()
+                .skip(1) // skip full match
+                .map(|m| match m {
+                    Some(m) => Value::Some(Box::new(Value::Text(m.as_str().to_string()))),
+                    None => Value::None,
+                })
+                .collect();
+            fields.insert("groups".to_string(), Value::List(groups));
+
+            Ok(Value::Some(Box::new(Value::Record(fields))))
+        }
+        None => Ok(Value::None),
+    }
+}
+
+/// Find all matches of a regex pattern in a string
+fn regex_find_all(pattern: &str, text: &str) -> Result<Value, RuntimeError> {
+    let re = regex::Regex::new(pattern)
+        .map_err(|e| RuntimeError::new("E4016", format!("Invalid regex pattern: {}", e)))?;
+
+    let matches: Vec<Value> = re
+        .find_iter(text)
+        .map(|m| {
+            let mut fields = HashMap::new();
+            fields.insert("matched".to_string(), Value::Text(m.as_str().to_string()));
+            fields.insert("start".to_string(), Value::Int(m.start() as i64));
+            fields.insert("end".to_string(), Value::Int(m.end() as i64));
+            Value::Record(fields)
+        })
+        .collect();
+
+    Ok(Value::List(matches))
+}
+
+/// Replace all matches of a regex pattern in a string
+fn regex_replace(pattern: &str, text: &str, replacement: &str) -> Result<Value, RuntimeError> {
+    let re = regex::Regex::new(pattern)
+        .map_err(|e| RuntimeError::new("E4016", format!("Invalid regex pattern: {}", e)))?;
+
+    Ok(Value::Text(re.replace_all(text, replacement).to_string()))
+}
+
+/// Split a string by a regex pattern
+fn regex_split(pattern: &str, text: &str) -> Result<Value, RuntimeError> {
+    let re = regex::Regex::new(pattern)
+        .map_err(|e| RuntimeError::new("E4016", format!("Invalid regex pattern: {}", e)))?;
+
+    let parts: Vec<Value> = re.split(text).map(|s| Value::Text(s.to_string())).collect();
+
+    Ok(Value::List(parts))
+}
+
+/// Check if a regex pattern matches a string (returns Bool)
+fn regex_is_match(pattern: &str, text: &str) -> Result<Value, RuntimeError> {
+    let re = regex::Regex::new(pattern)
+        .map_err(|e| RuntimeError::new("E4016", format!("Invalid regex pattern: {}", e)))?;
+
+    Ok(Value::Bool(re.is_match(text)))
+}
+
 impl Default for Interpreter {
     fn default() -> Self {
         Self::new()
@@ -3139,7 +3724,11 @@ fn main() -> Int {
 
     #[test]
     fn test_recursion() {
-        let source = r#"
+        // Run in a thread with a larger stack to avoid overflow in debug builds
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let source = r#"
 module example
 
 fn factorial(n: Int) -> Int {
@@ -3154,8 +3743,11 @@ fn main() -> Int {
   factorial(3)
 }
 "#;
-        let result = parse_and_eval(source).unwrap();
-        assert!(matches!(result, Value::Int(6)));
+                let result = parse_and_eval(source).unwrap();
+                assert!(matches!(result, Value::Int(6)));
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 
     #[test]
@@ -5608,7 +6200,11 @@ fn main() -> Bool {
 
     #[test]
     fn test_recursive_enum_type() {
-        let source = r#"
+        // Run in a thread with a larger stack to avoid overflow in debug builds
+        let handle = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let source = r#"
 module example
 enum IntList =
   | Nil
@@ -5626,12 +6222,15 @@ fn main() -> Int {
   sum_list(list)
 }
 "#;
-        // Note: this tests that recursive types parse and evaluate
-        // Recursive call depth is limited by stack
-        let result = parse_and_eval(source);
-        // This may or may not work depending on stack depth
-        // The important thing is it parses
-        assert!(result.is_ok() || result.is_err());
+                // Note: this tests that recursive types parse and evaluate
+                // Recursive call depth is limited by stack
+                let result = parse_and_eval(source);
+                // This may or may not work depending on stack depth
+                // The important thing is it parses
+                assert!(result.is_ok() || result.is_err());
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 
     // === Map.from with tuple entries ===
@@ -5870,10 +6469,11 @@ fn main() -> Int {
         assert!(matches!(result, Value::Int(3628800)));
     }
 
-    // === B2: Await is a reserved keyword (parse error) ===
+    // === v1.1: async/await support ===
 
     #[test]
     fn test_await_is_reserved_keyword() {
+        // v1.1: await is now supported — it resolves futures
         let source = r#"
 module example
 fn async_value() -> Int { 42 }
@@ -5881,25 +6481,22 @@ fn main() -> Int {
   await async_value()
 }
 "#;
-        // B2: await should produce a parse error E0006
-        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
-        let lexer = Lexer::new(&source_file);
-        let mut parser = Parser::new(lexer, source_file.clone());
-        let result = parser.parse_module();
-        assert!(result.is_err(), "await should produce a parse error");
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
     }
 
     #[test]
     fn test_async_is_reserved_keyword() {
+        // v1.1: async fn is now supported — creates a future when called
         let source = r#"
 module example
 async fn fetch() -> Int { 42 }
+fn main() -> Int {
+  await fetch()
+}
 "#;
-        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
-        let lexer = Lexer::new(&source_file);
-        let mut parser = Parser::new(lexer, source_file.clone());
-        let result = parser.parse_module();
-        assert!(result.is_err(), "async should produce a parse error");
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
     }
 
     // Trait method dispatch tests
@@ -6230,5 +6827,312 @@ fn main() -> Bool {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Bool(true)));
+    }
+
+    // =================================================================
+    // v1.1 Feature Tests
+    // =================================================================
+
+    // --- JSON Parsing ---
+
+    #[test]
+    fn test_json_parse_int() {
+        let source = r#"
+module example
+fn main() -> Int {
+  json_parse("42")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_json_parse_float() {
+        let source = r#"
+module example
+fn main() -> Float {
+  json_parse("1.23")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        if let Value::Float(f) = result {
+            assert!((f - 1.23).abs() < 0.001);
+        } else {
+            panic!("Expected Float, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_json_parse_string() {
+        let source = r#"
+module example
+fn main() -> Text {
+  json_parse("\"hello world\"")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "hello world"));
+    }
+
+    #[test]
+    fn test_json_parse_bool() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  json_parse("true")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_json_parse_null() {
+        let source = r#"
+module example
+fn main() -> Unit {
+  let result = json_parse("null")
+  result
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::None));
+    }
+
+    #[test]
+    fn test_json_parse_array() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let arr = json_parse("[1, 2, 3]")
+  arr.len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_json_parse_object() {
+        let source = r#"
+module example
+fn main() -> Text {
+  let obj = json_parse("{\"name\": \"Astra\", \"version\": 1}")
+  obj.name
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "Astra"));
+    }
+
+    #[test]
+    fn test_json_stringify_record() {
+        let source = r#"
+module example
+fn main() -> Text {
+  let obj = { name = "test", value = 42 }
+  json_stringify(obj)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        if let Value::Text(s) = result {
+            assert!(s.contains("\"name\""));
+            assert!(s.contains("\"test\""));
+            assert!(s.contains("42"));
+        } else {
+            panic!("Expected Text, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_json_stringify_list() {
+        let source = r#"
+module example
+fn main() -> Text {
+  json_stringify([1, 2, 3])
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "[1,2,3]"));
+    }
+
+    #[test]
+    fn test_json_roundtrip() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  let json = "{\"a\":1,\"b\":true,\"c\":\"hello\"}"
+  let parsed = json_parse(json)
+  let stringified = json_stringify(parsed)
+  let reparsed = json_parse(stringified)
+  reparsed.a == 1 and reparsed.b == true and reparsed.c == "hello"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    // --- Regex ---
+
+    #[test]
+    fn test_regex_is_match() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  regex_is_match("\\d+", "hello 42 world")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_regex_is_match_no_match() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  regex_is_match("\\d+", "no numbers here")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_regex_match_with_groups() {
+        let source = r#"
+module example
+fn main() -> Text {
+  let result = regex_match("(\\w+)@(\\w+)", "user@host")
+  match result {
+    Some(m) => m.matched
+    None => "no match"
+  }
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "user@host"));
+    }
+
+    #[test]
+    fn test_regex_find_all() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let matches = regex_find_all("\\d+", "a1 b22 c333")
+  matches.len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_regex_replace() {
+        let source = r#"
+module example
+fn main() -> Text {
+  regex_replace("\\d+", "hello 42 world 7", "NUM")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "hello NUM world NUM"));
+    }
+
+    #[test]
+    fn test_regex_split() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let parts = regex_split("\\s+", "hello   world   foo")
+  parts.len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    #[test]
+    fn test_text_matches_method() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  "hello123".matches("[a-z]+\\d+")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_text_replace_pattern_method() {
+        let source = r#"
+module example
+fn main() -> Text {
+  "a1b2c3".replace_pattern("\\d", "X")
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Text(ref s) if s == "aXbXcX"));
+    }
+
+    #[test]
+    fn test_text_split_pattern_method() {
+        let source = r#"
+module example
+fn main() -> Int {
+  "one,two,,three".split_pattern(",+").len()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(3)));
+    }
+
+    // --- Async/Await ---
+
+    #[test]
+    fn test_async_fn_returns_future() {
+        let source = r#"
+module example
+async fn compute() -> Int {
+  42
+}
+fn main() -> Int {
+  let future = compute()
+  await future
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_async_fn_with_params() {
+        let source = r#"
+module example
+async fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+fn main() -> Int {
+  await add(10, 20)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(30)));
+    }
+
+    #[test]
+    fn test_await_non_future_passthrough() {
+        // Await on a non-future value should just return the value
+        let source = r#"
+module example
+fn sync_value() -> Int { 42 }
+fn main() -> Int {
+  await sync_value()
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(42)));
     }
 }

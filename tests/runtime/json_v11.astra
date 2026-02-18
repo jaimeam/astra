@@ -1,0 +1,67 @@
+module tests.runtime.json_v11
+
+## v1.1: Full JSON parsing tests
+
+test "parse JSON integer" {
+  let val = json_parse("42")
+  assert_eq(val, 42)
+}
+
+test "parse JSON float" {
+  let val = json_parse("3.14")
+  assert_eq(to_text(val), "3.14")
+}
+
+test "parse JSON string" {
+  let val = json_parse("\"hello\"")
+  assert_eq(val, "hello")
+}
+
+test "parse JSON boolean true" {
+  let val = json_parse("true")
+  assert_eq(val, true)
+}
+
+test "parse JSON boolean false" {
+  let val = json_parse("false")
+  assert_eq(val, false)
+}
+
+test "parse JSON null" {
+  let val = json_parse("null")
+  assert(val == None)
+}
+
+test "parse JSON array" {
+  let arr = json_parse("[1, 2, 3]")
+  assert_eq(arr.len(), 3)
+}
+
+test "parse JSON object" {
+  let obj = json_parse("{\"name\": \"Astra\"}")
+  assert_eq(obj.name, "Astra")
+}
+
+test "stringify integer" {
+  let s = json_stringify(42)
+  assert_eq(s, "42")
+}
+
+test "stringify list" {
+  let s = json_stringify([1, 2, 3])
+  assert_eq(s, "[1,2,3]")
+}
+
+test "stringify record" {
+  let obj = { x = 1 }
+  let s = json_stringify(obj)
+  assert(s.contains("\"x\""))
+  assert(s.contains("1"))
+}
+
+test "JSON roundtrip" {
+  let json = "[1,true,\"hi\"]"
+  let parsed = json_parse(json)
+  let stringified = json_stringify(parsed)
+  assert_eq(stringified, json)
+}

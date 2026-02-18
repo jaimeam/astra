@@ -1,0 +1,45 @@
+module std.regex
+
+## v1.1: Regular expression support for Astra.
+##
+## Provides pattern matching, searching, replacing, and splitting
+## using regular expressions.
+
+## Tests whether a regex pattern matches anywhere in the text.
+## Returns true if the pattern matches, false otherwise.
+public fn is_match(pattern: Text, text: Text) -> Bool
+{
+  regex_is_match(pattern, text)
+}
+
+## Finds the first match of a regex pattern in the text.
+## Returns Some({ matched, start, end, groups }) on match, None otherwise.
+## - matched: the full matched substring
+## - start: the start index of the match
+## - end: the end index of the match
+## - groups: a list of captured groups (Option[Text] for each group)
+public fn find(pattern: Text, text: Text) -> Option[Any]
+{
+  regex_match(pattern, text)
+}
+
+## Finds all non-overlapping matches of a regex pattern in the text.
+## Returns a list of { matched, start, end } records.
+public fn find_all(pattern: Text, text: Text) -> List[Any]
+{
+  regex_find_all(pattern, text)
+}
+
+## Replaces all matches of a regex pattern with the replacement string.
+## Supports backreferences: $1, $2, etc. refer to capture groups.
+public fn replace(pattern: Text, text: Text, replacement: Text) -> Text
+{
+  regex_replace(pattern, text, replacement)
+}
+
+## Splits a string by a regex pattern.
+## Returns a list of substrings between matches.
+public fn split(pattern: Text, text: Text) -> List[Text]
+{
+  regex_split(pattern, text)
+}
