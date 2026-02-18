@@ -6,30 +6,29 @@
 
 ## The Problem
 
-When LLMs generate code in existing languages, they face fundamental challenges:
+When LLMs generate code, they enter a feedback loop: generate, check for errors, interpret diagnostics, fix, repeat. Existing languages work for this — agents write Rust, TypeScript, Go, and Python every day — but none were designed with this loop as the primary use case.
 
-| Language | Problems for LLMs |
-|----------|-------------------|
-| **Python/JS** | Runtime-only errors, non-deterministic tests, hidden side effects |
-| **TypeScript** | Opt-in null safety, no effect tracking, non-deterministic tests |
-| **Go** | No sum types, no pattern matching, verbose error handling, nil panics |
-| **Rust** | Ownership complexity, human-oriented error messages |
+Three sources of friction slow every mainstream language:
 
-**The result**: LLM generates code -> it fails -> error is ambiguous -> LLM guesses at fix -> cycle repeats.
+1. **Side effects are invisible.** No mainstream language tracks I/O, network, or clock access in function signatures. Agents must read implementations to know what a function actually does.
+2. **Diagnostics are human-first.** Even languages with structured error output (Rust's `--message-format=json`, TypeScript's stable codes) don't consistently bundle machine-actionable fix suggestions with exact edit locations.
+3. **Test determinism is opt-in.** Flaky tests from time, randomness, or I/O are a discipline problem everywhere. The language doesn't prevent them.
 
 ## Astra's Solution
 
-Astra provides **fast, deterministic feedback loops** designed for machine consumption:
+Astra is designed around three capabilities that no single mainstream language provides together:
 
-- **Machine-readable diagnostics** with stable error codes and suggested fixes
-- **Explicit effects** - function signatures declare all capabilities (Net, Fs, Clock, etc.)
-- **Deterministic testing** - seeded randomness, mockable time, no flaky tests
-- **One canonical format** - no style choices, the formatter decides everything
-- **No null** - use `Option[T]` and exhaustive matching; compiler catches missing cases
-- **Full JSON support** - parse and stringify JSON natively via `std.json`
-- **Regular expressions** - pattern matching, replacement, and splitting via `std.regex`
-- **Async/await** - declare `async` functions and `await` their results
-- **Package management** - manage dependencies with `astra pkg`
+- **Mandatory effect tracking** - function signatures declare all capabilities (`Net`, `Fs`, `Clock`); the compiler rejects undeclared effects
+- **Agent-oriented diagnostics** - every error includes structured JSON with stable codes and suggested fixes with exact edit locations
+- **Enforced test determinism** - effects must be mocked in tests; seeded randomness and fixed clocks are the default, not opt-in
+
+Plus the building blocks you'd expect:
+
+- **No null** - `Option[T]` with exhaustive matching; compiler catches missing cases
+- **Typed error handling** - `Result[T, E]` with `?` and `?else` for concise propagation
+- **Canonical formatting** - mandatory built-in formatter, no configuration
+- **JSON / regex / async** - built into the standard library
+- **Package management** - `astra pkg` for dependency management
 
 ```
 LLM generates code -> astra check -> JSON errors with fix suggestions -> LLM applies fixes -> repeat until passing
