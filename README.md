@@ -15,7 +15,7 @@ When LLMs generate code in existing languages, they face fundamental challenges:
 | **Go** | No sum types, no pattern matching, verbose error handling, nil panics |
 | **Rust** | Ownership complexity, human-oriented error messages |
 
-**The result**: LLM generates code → it fails → error is ambiguous → LLM guesses at fix → cycle repeats.
+**The result**: LLM generates code -> it fails -> error is ambiguous -> LLM guesses at fix -> cycle repeats.
 
 ## Astra's Solution
 
@@ -26,14 +26,14 @@ Astra provides **fast, deterministic feedback loops** designed for machine consu
 - **Deterministic testing** - seeded randomness, mockable time, no flaky tests
 - **One canonical format** - no style choices, the formatter decides everything
 - **No null** - use `Option[T]` and exhaustive matching; compiler catches missing cases
+- **Full JSON support** - parse and stringify JSON natively via `std.json`
+- **Regular expressions** - pattern matching, replacement, and splitting via `std.regex`
+- **Async/await** - declare `async` functions and `await` their results
+- **Package management** - manage dependencies with `astra pkg`
 
 ```
-LLM generates code → astra check → JSON errors with fix suggestions → LLM applies fixes → repeat until passing
+LLM generates code -> astra check -> JSON errors with fix suggestions -> LLM applies fixes -> repeat until passing
 ```
-
-## Status
-
-**v1.1** - Astra now includes full JSON parsing, regular expressions, Hindley-Milner type inference, async/await, and package management. The language, toolchain, and standard library support real multi-file projects with type checking, effect tracking, testing, and formatting.
 
 ## Quick Start
 
@@ -105,6 +105,59 @@ test "rejects zero amount" {
 4. **Safe Execution by Default** - Capability-based I/O; sandbox-friendly
 5. **Fast Incremental Iteration** - Check and test are fast, deterministic, and stable
 
+## Key Features
+
+### JSON Support
+
+The `std.json` module provides complete JSON parsing and stringification. Use `json_parse(text)` to parse any JSON string into Astra values (objects become Records, arrays become Lists), and `json_stringify(value)` to convert any Astra value to JSON.
+
+```astra
+let data = json_parse("{\"name\": \"Astra\", \"version\": 1}")
+assert_eq(data.name, "Astra")
+
+let json = json_stringify({ items = [1, 2, 3], ok = true })
+```
+
+### Regular Expressions
+
+The `std.regex` module and text methods support pattern matching. Use `regex_match`, `regex_find_all`, `regex_replace`, `regex_split`, and `regex_is_match` as builtins, or use text methods like `.matches()`, `.replace_pattern()`, `.split_pattern()`, and `.find_pattern()`.
+
+```astra
+import std.regex { is_match, find_all, replace }
+
+let valid = is_match("^\\d{3}-\\d{4}$", "555-1234")
+let cleaned = replace("\\s+", "  too   many   spaces  ", " ")
+let words = "hello world".split_pattern("\\s+")
+```
+
+### Async/Await
+
+Functions can be declared `async` and their results can be `await`ed. Calling an async function returns a `Future` value; `await` resolves it.
+
+```astra
+async fn fetch_data(url: Text) -> Text {
+  Net.get(url)
+}
+
+fn main() effects(Net) {
+  let data = await fetch_data("https://api.example.com/data")
+  println(data)
+}
+```
+
+### Package Management
+
+The `astra pkg` commands manage dependencies declared in `astra.toml`. Supports path, git, and registry dependencies with lockfile generation.
+
+```bash
+astra pkg add mylib --version "1.0"
+astra pkg add local-lib --path "../lib"
+astra pkg add remote-lib --git "https://github.com/example/lib"
+astra pkg install
+astra pkg list
+astra pkg remove mylib
+```
+
 ## CLI Commands
 
 | Command | Description |
@@ -153,73 +206,13 @@ astra/
 └── examples/            # Example programs
 ```
 
-## What's New in v1.1
-
-### Full JSON Object Parsing
-The `std.json` module now provides complete JSON parsing and stringification. Use `json_parse(text)` to parse any JSON string into Astra values (objects become Records, arrays become Lists), and `json_stringify(value)` to convert any Astra value to JSON.
-
-```astra
-let data = json_parse("{\"name\": \"Astra\", \"version\": 1}")
-assert_eq(data.name, "Astra")
-
-let json = json_stringify({ items = [1, 2, 3], ok = true })
-```
-
-### Regular Expression Support
-New `std.regex` module and text methods for pattern matching. Use `regex_match`, `regex_find_all`, `regex_replace`, `regex_split`, and `regex_is_match` as builtins, or use text methods like `.matches()`, `.replace_pattern()`, `.split_pattern()`, and `.find_pattern()`.
-
-```astra
-import std.regex { is_match, find_all, replace }
-
-let valid = is_match("^\\d{3}-\\d{4}$", "555-1234")
-let cleaned = replace("\\s+", "  too   many   spaces  ", " ")
-let words = "hello world".split_pattern("\\s+")
-```
-
-### Hindley-Milner Type Inference
-The type checker now uses constraint-based unification for generic type inference. Type variables are created for unknown types and unified through the substitution system, enabling more accurate type inference in complex generic scenarios.
-
-### Async/Await
-Functions can be declared `async` and their results can be `await`ed. Calling an async function returns a `Future` value; `await` resolves it.
-
-```astra
-async fn fetch_data(url: Text) -> Text {
-  Net.get(url)
-}
-
-fn main() effects(Net) {
-  let data = await fetch_data("https://api.example.com/data")
-  println(data)
-}
-```
-
-### Package Management
-New `astra pkg` CLI commands for managing dependencies declared in `astra.toml`. Supports path, git, and registry dependencies with lockfile generation.
-
-```bash
-astra pkg add mylib --version "1.0"
-astra pkg add local-lib --path "../lib"
-astra pkg add remote-lib --git "https://github.com/example/lib"
-astra pkg install
-astra pkg list
-astra pkg remove mylib
-```
-
 ## Known Limitations
 
-**KL2. Traits Are Runtime-Dispatched** - Trait method calls are resolved at runtime, not compile time. The type checker validates trait impl blocks but does not resolve trait methods on arbitrary expressions. Incorrect trait usage is caught at runtime.
+- **Traits are runtime-dispatched** - Trait method calls are resolved at runtime, not compile time. The type checker validates trait impl blocks but does not resolve trait methods on arbitrary expressions. Incorrect trait usage is caught at runtime.
 
-**KL4. Interpreted Only** - All execution is via a tree-walking interpreter. Performance is adequate for small and medium programs but not suitable for compute-heavy workloads. For performance-critical code, consider calling out to external tools via effects.
+- **Interpreted only** - All execution is via a tree-walking interpreter. Performance is adequate for small and medium programs but not suitable for compute-heavy workloads. For performance-critical code, consider calling out to external tools via effects.
 
-**KL6. No Debugger** - There is no step-through debugger. Use `println` for debugging output, `assert`/`assert_eq` for runtime checks, and `test` blocks for verifying behavior.
-
-### Resolved in v1.1
-
-The following limitations from v1.0 have been addressed:
-
-- ~~**KL1. No Full Hindley-Milner Type Inference**~~ - v1.1 adds constraint-based unification with a proper substitution system.
-- ~~**KL3. No Concurrency**~~ - v1.1 adds `async fn` and `await` for asynchronous programming.
-- ~~**KL5. No Package Manager / Registry**~~ - v1.1 adds `astra pkg` commands for dependency management.
+- **No debugger** - There is no step-through debugger. Use `println` for debugging output, `assert`/`assert_eq` for runtime checks, and `test` blocks for verifying behavior.
 
 ## Contributing
 
