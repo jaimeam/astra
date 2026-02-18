@@ -8,7 +8,7 @@
 ## Building
 
 ```bash
-git clone https://github.com/astra-lang/astra.git
+git clone https://github.com/jaimeam/astra.git
 cd astra
 cargo build
 ```

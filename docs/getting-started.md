@@ -15,7 +15,7 @@ Astra is currently built from source using Rust's Cargo toolchain.
 
 ```bash
 # Clone the repository
-git clone https://github.com/astra-lang/astra.git
+git clone https://github.com/jaimeam/astra.git
 cd astra
 
 # Build the toolchain
@@ -65,13 +65,13 @@ If you want an AI agent (Claude, etc.) to work with Astra in your repo, add this
 ````markdown
 ## Astra
 
-This project uses the [Astra](https://github.com/astra-lang/astra) programming language.
+This project uses the [Astra](https://github.com/jaimeam/astra) programming language.
 
 ### Setup (run once)
 
 ```bash
 # Install Astra (requires Rust 1.70+)
-git clone https://github.com/astra-lang/astra.git /tmp/astra
+git clone https://github.com/jaimeam/astra.git /tmp/astra
 cd /tmp/astra && cargo build --release
 export PATH="$PATH:/tmp/astra/target/release"
 ```
