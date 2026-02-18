@@ -32,6 +32,81 @@ The built binary is at `target/release/astra`. The `export PATH` line above make
 
 > **Development shortcut**: If you're working on the Astra toolchain itself, you can skip the PATH setup and use `cargo run -- <command>` instead of `astra <command>`.
 
+## Setting Up Astra in a New Project
+
+To start a new Astra project:
+
+```bash
+astra init my_project
+cd my_project
+```
+
+This creates:
+```
+my_project/
+├── astra.toml          # Project manifest
+├── src/
+│   └── main.astra      # Entry point with a hello-world and test
+└── .gitignore
+```
+
+Verify it works:
+
+```bash
+astra check src/          # Type-check (expect: no errors)
+astra test                # Run tests (expect: 1 passed)
+astra run src/main.astra  # Run the program (expect: prints hello)
+```
+
+### Telling an Agent to Use Astra
+
+If you want an AI agent (Claude, etc.) to work with Astra in your repo, add this to your project's `CLAUDE.md` or equivalent instructions file:
+
+````markdown
+## Astra
+
+This project uses the [Astra](https://github.com/astra-lang/astra) programming language.
+
+### Setup (run once)
+
+```bash
+# Install Astra (requires Rust 1.70+)
+git clone https://github.com/astra-lang/astra.git /tmp/astra
+cd /tmp/astra && cargo build --release
+export PATH="$PATH:/tmp/astra/target/release"
+```
+
+### Key Commands
+
+```bash
+astra check src/              # Type-check all files (must pass with 0 errors)
+astra check --json src/       # Same, with machine-readable JSON output
+astra test                    # Run all tests (must pass)
+astra fix src/                # Auto-apply suggested fixes
+astra fmt src/                # Format all code canonically
+astra run src/main.astra      # Run the program
+astra explain E1001           # Explain any error code
+```
+
+### Development Workflow
+
+1. Write or edit `.astra` files
+2. Run `astra check src/` — fix any errors
+3. Run `astra test` — fix any failures
+4. Run `astra fmt src/` — format before committing
+
+### Language Quick Reference
+
+- Every file starts with `module <name>`
+- Functions: `fn name(param: Type) -> ReturnType { body }`
+- Side effects must be declared: `fn name() effects(Console, Fs) { ... }`
+- No null — use `Option[T]` with `Some(value)` / `None`
+- Errors use `Result[T, E]` with `Ok(value)` / `Err(error)`
+- Export with `public fn`, import with `import module.{name}`
+- Comments use `#`
+- No semicolons
+````
+
 ## Your First Program
 
 Create a file named `hello.astra`:
