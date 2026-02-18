@@ -69,8 +69,15 @@ impl<'a> Parser<'a> {
         let mut segments = vec![first];
 
         while self.check(TokenKind::Dot) {
-            self.advance();
-            segments.push(self.expect_ident()?);
+            // Look ahead: only consume the dot if followed by an identifier
+            // (not a `{` for destructuring imports like `import foo.{a, b}`)
+            let next = self.peek2();
+            if matches!(next.kind, TokenKind::Ident(_)) {
+                self.advance(); // consume the dot
+                segments.push(self.expect_ident()?);
+            } else {
+                break;
+            }
         }
 
         let end_span = self.current_span();
@@ -784,6 +791,26 @@ impl<'a> Parser<'a> {
                         target: Box::new(e),
                         value: Box::new(value),
                     });
+                }
+                // E1: Compound assignment operators (+=, -=, *=, /=, %=)
+                else if let Some(op) = self.check_compound_assign() {
+                    self.advance();
+                    let rhs = self.parse_expr()?;
+                    let span = e.span().merge(rhs.span());
+                    // Desugar `x += expr` into `x = x + expr`
+                    let desugared = Expr::Binary {
+                        id: NodeId::new(),
+                        span: span.clone(),
+                        op,
+                        left: Box::new(e.clone()),
+                        right: Box::new(rhs),
+                    };
+                    stmts.push(Stmt::Assign {
+                        id: NodeId::new(),
+                        span,
+                        target: Box::new(e),
+                        value: Box::new(desugared),
+                    });
                 } else if self.check(TokenKind::RBrace) {
                     // If we're at the end of the block, this is the final expression
                     expr = Some(Box::new(e));
@@ -967,17 +994,20 @@ impl<'a> Parser<'a> {
                 expr: Box::new(expr),
             });
         }
-        // P6.5: await expression
+        // B2: async/await are reserved keywords — not implemented in v1.0
         if self.check(TokenKind::Await) {
-            let start_span = self.current_span();
-            self.advance();
-            let expr = self.parse_unary_expr()?;
-            let end_span = self.expr_span(&expr);
-            return Ok(Expr::Await {
-                id: NodeId::new(),
-                span: start_span.merge(&end_span),
-                expr: Box::new(expr),
-            });
+            let span = self.current_span();
+            return Err(Diagnostic::error("E0006")
+                .message("`await` is a reserved keyword. Astra v1.0 is single-threaded and does not support async/await. Remove the `await` keyword — the expression will be evaluated synchronously.")
+                .span(span)
+                .build());
+        }
+        if self.check(TokenKind::Async) {
+            let span = self.current_span();
+            return Err(Diagnostic::error("E0006")
+                .message("`async` is a reserved keyword. Astra v1.0 is single-threaded and does not support async/await.")
+                .span(span)
+                .build());
         }
         self.parse_postfix_expr()
     }
@@ -1070,6 +1100,20 @@ impl<'a> Parser<'a> {
                     id: NodeId::new(),
                     span: start_span.merge(&end_span),
                     expr: Box::new(expr),
+                };
+            }
+            // E2: Index access: expr[index]
+            else if self.check(TokenKind::LBracket) {
+                let start_span = self.expr_span(&expr);
+                self.advance();
+                let index = self.parse_expr()?;
+                self.expect(TokenKind::RBracket)?;
+                let end_span = self.current_span();
+                expr = Expr::IndexAccess {
+                    id: NodeId::new(),
+                    span: start_span.merge(&end_span),
+                    expr: Box::new(expr),
+                    index: Box::new(index),
                 };
             } else {
                 break;
@@ -1294,8 +1338,117 @@ impl<'a> Parser<'a> {
             // Peek at the token after the identifier
             let after_ident = &self.peek2().kind;
             if matches!(after_ident, TokenKind::Eq) {
-                // `{ name = ...` → record literal
-                return self.parse_record_fields(start_span);
+                // `{ name = expr` → could be record literal OR block with assignment
+                // Parse first field, then check for comma to disambiguate
+                let ident_token = self.advance();
+                let ident_name = match &ident_token.kind {
+                    TokenKind::Ident(n) => n.clone(),
+                    _ => unreachable!(),
+                };
+                let ident_span = ident_token.span.clone();
+                self.advance(); // consume `=`
+                let value = self.parse_expr()?;
+
+                if self.check(TokenKind::Comma) {
+                    // Comma found → record literal. Parse remaining fields.
+                    let mut fields = vec![(ident_name, Box::new(value))];
+                    while self.check(TokenKind::Comma) {
+                        self.advance();
+                        if self.check(TokenKind::RBrace) {
+                            break; // trailing comma
+                        }
+                        let field_name = self.expect_ident()?;
+                        self.expect(TokenKind::Eq)?;
+                        let field_value = self.parse_expr()?;
+                        fields.push((field_name, Box::new(field_value)));
+                    }
+                    self.expect(TokenKind::RBrace)?;
+                    let end_span = self.current_span();
+                    return Ok(Expr::Record {
+                        id: NodeId::new(),
+                        span: start_span.merge(&end_span),
+                        fields,
+                    });
+                } else {
+                    // No comma → block with assignment statement
+                    let target = Expr::Ident {
+                        id: NodeId::new(),
+                        span: ident_span,
+                        name: ident_name,
+                    };
+                    let assign_span = target.span().merge(value.span());
+                    let assign_stmt = Stmt::Assign {
+                        id: NodeId::new(),
+                        span: assign_span,
+                        target: Box::new(target),
+                        value: Box::new(value),
+                    };
+
+                    // Continue parsing remaining block statements
+                    let mut stmts = vec![assign_stmt];
+                    let mut trailing_expr = None;
+                    while !self.check(TokenKind::RBrace) && !self.is_eof() {
+                        if self.check(TokenKind::Let) || self.check(TokenKind::Return) {
+                            stmts.push(self.parse_stmt()?);
+                        } else if self.check(TokenKind::Fn)
+                            && matches!(self.peek2().kind, TokenKind::Ident(_))
+                        {
+                            stmts.push(self.parse_local_fn_stmt()?);
+                        } else {
+                            let e = self.parse_expr()?;
+                            if self.check(TokenKind::Eq) {
+                                self.advance();
+                                let val = self.parse_expr()?;
+                                let span = e.span().merge(val.span());
+                                stmts.push(Stmt::Assign {
+                                    id: NodeId::new(),
+                                    span,
+                                    target: Box::new(e),
+                                    value: Box::new(val),
+                                });
+                            } else if let Some(op) = self.check_compound_assign() {
+                                self.advance();
+                                let rhs = self.parse_expr()?;
+                                let span = e.span().merge(rhs.span());
+                                let desugared = Expr::Binary {
+                                    id: NodeId::new(),
+                                    span: span.clone(),
+                                    op,
+                                    left: Box::new(e.clone()),
+                                    right: Box::new(rhs),
+                                };
+                                stmts.push(Stmt::Assign {
+                                    id: NodeId::new(),
+                                    span,
+                                    target: Box::new(e),
+                                    value: Box::new(desugared),
+                                });
+                            } else if self.check(TokenKind::RBrace) {
+                                trailing_expr = Some(Box::new(e));
+                                break;
+                            } else {
+                                let span = e.span().clone();
+                                stmts.push(Stmt::Expr {
+                                    id: NodeId::new(),
+                                    span,
+                                    expr: Box::new(e),
+                                });
+                            }
+                        }
+                    }
+                    self.expect(TokenKind::RBrace)?;
+                    let end_span = self.current_span();
+                    return Ok(Expr::Block {
+                        id: NodeId::new(),
+                        span: start_span.merge(&end_span),
+                        block: Box::new(Block {
+                            id: NodeId::new(),
+                            span: start_span.merge(&end_span),
+                            stmts,
+                            expr: trailing_expr,
+                        }),
+                    });
+                }
             }
             // Otherwise it's a block (e.g., `{ x + 1 }` or `{ x }`)
             return self.parse_block_body(start_span);
@@ -1370,36 +1523,6 @@ impl<'a> Parser<'a> {
                 return_type,
                 body,
             }),
-        })
-    }
-
-    /// Parse record literal fields after `{` has been consumed and first ident confirmed.
-    fn parse_record_fields(&mut self, start_span: Span) -> Result<Expr, Diagnostic> {
-        let mut fields = Vec::new();
-
-        let name = self.expect_ident()?;
-        self.expect(TokenKind::Eq)?;
-        let value = self.parse_expr()?;
-        fields.push((name, Box::new(value)));
-
-        while self.check(TokenKind::Comma) {
-            self.advance();
-            if self.check(TokenKind::RBrace) {
-                break;
-            }
-            let name = self.expect_ident()?;
-            self.expect(TokenKind::Eq)?;
-            let value = self.parse_expr()?;
-            fields.push((name, Box::new(value)));
-        }
-
-        self.expect(TokenKind::RBrace)?;
-        let end_span = self.current_span();
-
-        Ok(Expr::Record {
-            id: NodeId::new(),
-            span: start_span.merge(&end_span),
-            fields,
         })
     }
 
@@ -1489,7 +1612,16 @@ impl<'a> Parser<'a> {
     fn parse_for_expr(&mut self) -> Result<Expr, Diagnostic> {
         let start_span = self.current_span();
         self.expect(TokenKind::For)?;
-        let binding = self.expect_ident()?;
+
+        // E8: Support destructuring patterns in for loops
+        // `for x in ...`, `for (a, b) in ...`, `for {x, y} in ...`
+        let (binding, pattern) = if self.check(TokenKind::LParen) || self.check(TokenKind::LBrace) {
+            let pat = self.parse_pattern()?;
+            ("_for_pattern".to_string(), Some(pat))
+        } else {
+            (self.expect_ident()?, None)
+        };
+
         self.expect(TokenKind::In)?;
         let iter = Box::new(self.parse_expr()?);
         let body = Box::new(self.parse_block()?);
@@ -1499,6 +1631,7 @@ impl<'a> Parser<'a> {
             id: NodeId::new(),
             span: start_span.merge(&end_span),
             binding,
+            pattern,
             iter,
             body,
         })
@@ -1508,6 +1641,19 @@ impl<'a> Parser<'a> {
         let start_span = self.current_span();
         self.expect(TokenKind::While)?;
         let cond = Box::new(self.parse_expr()?);
+
+        // P2: Detect `=` in conditions and suggest `==`
+        if self.check(TokenKind::Eq) {
+            let span = self.current_span();
+            return Err(Diagnostic::error("E0001")
+                .message("Found `=` (assignment) in condition — did you mean `==` (equality)?")
+                .span(span)
+                .suggestion(crate::diagnostics::Suggestion::new(
+                    "Use `==` for comparison".to_string(),
+                ))
+                .build());
+        }
+
         let body = Box::new(self.parse_block()?);
         let end_span = self.current_span();
 
@@ -1523,6 +1669,18 @@ impl<'a> Parser<'a> {
         let start_span = self.current_span();
         self.expect(TokenKind::If)?;
         let cond = Box::new(self.parse_expr()?);
+
+        // P2: Detect `=` in conditions and suggest `==`
+        if self.check(TokenKind::Eq) {
+            let span = self.current_span();
+            return Err(Diagnostic::error("E0001")
+                .message("Found `=` (assignment) in condition — did you mean `==` (equality)?")
+                .span(span)
+                .suggestion(crate::diagnostics::Suggestion::new(
+                    "Use `==` for comparison".to_string(),
+                ))
+                .build());
+        }
 
         // Support both `if cond { ... }` and `if cond then expr else expr`
         if self.check(TokenKind::Then) {
@@ -1869,6 +2027,19 @@ impl<'a> Parser<'a> {
         std::mem::discriminant(&self.peek().kind) == std::mem::discriminant(&kind)
     }
 
+    /// E1: Check for compound assignment operators (+=, -=, *=, /=, %=).
+    /// Returns the corresponding binary operator if found.
+    fn check_compound_assign(&mut self) -> Option<BinaryOp> {
+        match self.peek().kind {
+            TokenKind::PlusEq => Some(BinaryOp::Add),
+            TokenKind::MinusEq => Some(BinaryOp::Sub),
+            TokenKind::StarEq => Some(BinaryOp::Mul),
+            TokenKind::SlashEq => Some(BinaryOp::Div),
+            TokenKind::PercentEq => Some(BinaryOp::Mod),
+            _ => None,
+        }
+    }
+
     fn expect(&mut self, kind: TokenKind) -> Result<Token, Diagnostic> {
         let token = self.advance();
         if std::mem::discriminant(&token.kind) == std::mem::discriminant(&kind) {
@@ -2052,6 +2223,7 @@ impl<'a> Parser<'a> {
             | Expr::Continue { span, .. }
             | Expr::StringInterp { span, .. }
             | Expr::Range { span, .. }
+            | Expr::IndexAccess { span, .. }
             | Expr::Await { span, .. }
             | Expr::Hole { span, .. } => span.clone(),
         }

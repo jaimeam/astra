@@ -22,7 +22,7 @@ impl Environment {
         }
     }
 
-    /// Create a child environment
+    /// Create a child environment (clones self as parent)
     pub fn child(&self) -> Self {
         Self {
             bindings: HashMap::new(),
@@ -51,6 +51,42 @@ impl Environment {
             parent.update(name, value)
         } else {
             false
+        }
+    }
+
+    /// Propagate mutations from a child scope back to this (parent) scope.
+    /// After a block executes in a child env, any updates to variables that
+    /// exist in the parent need to be copied back since the child was working
+    /// on a cloned copy of the parent.
+    pub fn propagate_from_child(&mut self, child: &Environment) {
+        if let Some(child_parent) = &child.parent {
+            // The child's parent is a snapshot of `self` from before the block.
+            // Any differences in bindings represent mutations that occurred inside the block.
+            for (name, value) in &child_parent.bindings {
+                if self.bindings.contains_key(name) {
+                    self.bindings.insert(name.clone(), value.clone());
+                }
+            }
+            // Recursively propagate to grandparent
+            if let Some(grandparent) = &child_parent.parent {
+                if let Some(our_parent) = &mut self.parent {
+                    our_parent.propagate_from_child_parent(grandparent);
+                }
+            }
+        }
+    }
+
+    /// Helper: propagate from a parent snapshot (not a child with parent).
+    fn propagate_from_child_parent(&mut self, snapshot: &Environment) {
+        for (name, value) in &snapshot.bindings {
+            if self.bindings.contains_key(name) {
+                self.bindings.insert(name.clone(), value.clone());
+            }
+        }
+        if let Some(snapshot_parent) = &snapshot.parent {
+            if let Some(our_parent) = &mut self.parent {
+                our_parent.propagate_from_child_parent(snapshot_parent);
+            }
         }
     }
 }

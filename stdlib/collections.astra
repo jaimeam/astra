@@ -1,6 +1,8 @@
 module std.collections
 
-fn group_by_even(items: List[Int]) -> (List[Int], List[Int])
+## Splits a list of integers into even and odd numbers.
+## Returns a tuple of (evens, odds).
+public fn group_by_even(items: List[Int]) -> (List[Int], List[Int])
 {
   let evens = items.filter(fn(x) {
     x % 2 == 0
@@ -12,7 +14,9 @@ fn group_by_even(items: List[Int]) -> (List[Int], List[Int])
   result
 }
 
-fn frequencies(items: List[Int]) -> Map[Int, Int]
+## Counts the frequency of each integer in the list.
+## Returns a map from each value to its count.
+public fn frequencies(items: List[Int]) -> Map[Int, Int]
 {
   let result = Map.new()
   for item in items {
@@ -25,7 +29,9 @@ fn frequencies(items: List[Int]) -> Map[Int, Int]
   }
 }
 
-fn chunks(items: List[Int], size: Int) -> List[List[Int]]
+## Splits a list into sublists of the given size.
+## The last chunk may be smaller if the list length is not evenly divisible.
+public fn chunks(items: List[Int], size: Int) -> List[List[Int]]
 {
   let result = []
   let i = 0

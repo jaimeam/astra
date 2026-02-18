@@ -282,8 +282,12 @@ impl LspServer {
         // Store parsed module for other features
         self.modules.insert(uri.to_string(), module.clone());
 
-        // Run type checker
+        // Run type checker with search paths for cross-file resolution
         let mut checker = TypeChecker::new();
+        // Add workspace root as search path
+        if let Ok(cwd) = std::env::current_dir() {
+            checker.add_search_path(cwd);
+        }
         let type_diags = match checker.check_module(&module) {
             Ok(()) => checker.diagnostics().clone(),
             Err(bag) => bag,
@@ -450,6 +454,75 @@ impl LspServer {
             }
         }
 
+        // P7: Cross-file hover for imported symbols
+        let source = match self.documents.get(uri) {
+            Some(s) => s,
+            None => return Value::Null,
+        };
+        let ident = find_ident_at_position(source, line, col);
+        if !ident.is_empty() {
+            for item in &module.items {
+                if let Item::Import(import) = item {
+                    let is_imported = match &import.kind {
+                        ImportKind::Items(names) => names.contains(&ident),
+                        ImportKind::Module | ImportKind::Alias(_) => true,
+                    };
+                    if is_imported {
+                        if let Some(target_path) = resolve_import_path(&import.path, uri) {
+                            if let Ok(target_source) = std::fs::read_to_string(&target_path) {
+                                let sf = SourceFile::new(target_path.clone(), target_source);
+                                let lexer = Lexer::new(&sf);
+                                let mut parser = Parser::new(lexer, sf.clone());
+                                if let Ok(target_module) = parser.parse_module() {
+                                    for target_item in &target_module.items {
+                                        if let Item::FnDef(def) = target_item {
+                                            if def.name == ident {
+                                                let params_str: Vec<String> = def
+                                                    .params
+                                                    .iter()
+                                                    .map(|p| {
+                                                        format!(
+                                                            "{}: {}",
+                                                            p.name,
+                                                            format_type_expr(&p.ty)
+                                                        )
+                                                    })
+                                                    .collect();
+                                                let ret_str = def
+                                                    .return_type
+                                                    .as_ref()
+                                                    .map(|t| format!(" -> {}", format_type_expr(t)))
+                                                    .unwrap_or_default();
+                                                let effects_str = if def.effects.is_empty() {
+                                                    String::new()
+                                                } else {
+                                                    format!(" effects({})", def.effects.join(", "))
+                                                };
+                                                let hover_text = format!(
+                                                    "```astra\nfn {}({}){}{}\n```\n*from {}*",
+                                                    def.name,
+                                                    params_str.join(", "),
+                                                    ret_str,
+                                                    effects_str,
+                                                    import.path.segments.join("."),
+                                                );
+                                                return json!({
+                                                    "contents": {
+                                                        "kind": "markdown",
+                                                        "value": hover_text
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Value::Null
     }
 
@@ -478,7 +551,7 @@ impl LspServer {
             None => return Value::Null,
         };
 
-        // Search for definition
+        // Search for definition in current module
         for item in &module.items {
             match item {
                 Item::FnDef(def) if def.name == ident => {
@@ -506,6 +579,54 @@ impl LspServer {
                     });
                 }
                 _ => {}
+            }
+        }
+
+        // P7: Cross-file go-to-definition for imported symbols
+        for item in &module.items {
+            if let Item::Import(import) = item {
+                let is_imported = match &import.kind {
+                    ImportKind::Items(names) => names.contains(&ident),
+                    ImportKind::Module | ImportKind::Alias(_) => true,
+                };
+                if is_imported {
+                    // Resolve the module file
+                    if let Some(target_path) = resolve_import_path(&import.path, uri) {
+                        if let Ok(target_source) = std::fs::read_to_string(&target_path) {
+                            let sf = SourceFile::new(target_path.clone(), target_source);
+                            let lexer = Lexer::new(&sf);
+                            let mut parser = Parser::new(lexer, sf.clone());
+                            if let Ok(target_module) = parser.parse_module() {
+                                for target_item in &target_module.items {
+                                    match target_item {
+                                        Item::FnDef(def) if def.name == ident => {
+                                            let target_uri = path_to_uri(&target_path);
+                                            return json!({
+                                                "uri": target_uri,
+                                                "range": span_to_range(&def.span)
+                                            });
+                                        }
+                                        Item::TypeDef(def) if def.name == ident => {
+                                            let target_uri = path_to_uri(&target_path);
+                                            return json!({
+                                                "uri": target_uri,
+                                                "range": span_to_range(&def.span)
+                                            });
+                                        }
+                                        Item::EnumDef(def) if def.name == ident => {
+                                            let target_uri = path_to_uri(&target_path);
+                                            return json!({
+                                                "uri": target_uri,
+                                                "range": span_to_range(&def.span)
+                                            });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -897,6 +1018,72 @@ fn format_type_expr(ty: &TypeExpr) -> String {
             format!("({})", elems_str.join(", "))
         }
     }
+}
+
+/// P7: Resolve an import path to an actual file path
+fn resolve_import_path(module_path: &ModulePath, current_uri: &str) -> Option<std::path::PathBuf> {
+    let segments = &module_path.segments;
+    if segments.is_empty() {
+        return None;
+    }
+
+    // Try relative to current file directory
+    let current_file = uri_to_path(current_uri);
+    let current_dir = std::path::Path::new(&current_file).parent()?;
+
+    // Handle std.* modules - search in stdlib directory
+    if segments.first().map(|s| s.as_str()) == Some("std") {
+        // Look for stdlib next to executable
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let stdlib_dir = exe_dir.join("stdlib");
+                if stdlib_dir.exists() {
+                    // std.math -> stdlib/math.astra
+                    if segments.len() >= 2 {
+                        let filename = format!("{}.astra", segments[1]);
+                        let path = stdlib_dir.join(&filename);
+                        if path.exists() {
+                            return Some(path);
+                        }
+                    }
+                }
+            }
+        }
+        // Also check cwd/stdlib
+        if let Ok(cwd) = std::env::current_dir() {
+            let stdlib_dir = cwd.join("stdlib");
+            if segments.len() >= 2 {
+                let filename = format!("{}.astra", segments[1]);
+                let path = stdlib_dir.join(&filename);
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    // Try as relative path: module_name -> module_name.astra
+    let filename = format!("{}.astra", segments.join("/"));
+    let path = current_dir.join(&filename);
+    if path.exists() {
+        return Some(path);
+    }
+
+    // Try single-segment: module_name.astra in same directory
+    if segments.len() == 1 {
+        let filename = format!("{}.astra", segments[0]);
+        let path = current_dir.join(&filename);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+/// P7: Convert a file path to an LSP URI
+fn path_to_uri(path: &std::path::Path) -> String {
+    format!("file://{}", path.display())
 }
 
 #[cfg(test)]

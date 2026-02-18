@@ -381,7 +381,35 @@ impl Interpreter {
             )
         })?;
 
-        self.load_module_with_filter(&imported_module, Some(names))?;
+        // Load ALL module definitions into a temporary child environment so that
+        // internal dependencies between module functions are preserved.
+        let saved_env = self.env.clone();
+        self.env = saved_env.child();
+        self.load_module(&imported_module)?;
+        let module_env = self.env.clone();
+        self.env = saved_env;
+
+        // Import only the requested names, capturing the module env in closures
+        // so they can access module-internal functions at call time.
+        for name in names {
+            if let Some(value) = module_env.lookup(name).cloned() {
+                let imported_value = match value {
+                    Value::Closure {
+                        name: fn_name,
+                        params,
+                        body,
+                        ..
+                    } => Value::Closure {
+                        name: fn_name,
+                        params,
+                        body,
+                        env: module_env.clone(),
+                    },
+                    other => other,
+                };
+                self.env.define(name.clone(), imported_value);
+            }
+        }
         Ok(())
     }
 
@@ -464,7 +492,11 @@ impl Interpreter {
 
             // Binary operations
             Expr::Binary {
-                op, left, right, ..
+                op,
+                left,
+                right,
+                span,
+                ..
             } => {
                 // Pipe operator: x |> f evaluates as f(x)
                 if *op == BinaryOp::Pipe {
@@ -475,6 +507,13 @@ impl Interpreter {
                 let left_val = self.eval_expr(left)?;
                 let right_val = self.eval_expr(right)?;
                 self.eval_binary_op(*op, &left_val, &right_val)
+                    .map_err(|e| {
+                        if e.span.is_none() {
+                            e.with_span(span.clone())
+                        } else {
+                            e
+                        }
+                    })
             }
 
             // Unary operations
@@ -484,13 +523,17 @@ impl Interpreter {
             }
 
             // Function calls
-            Expr::Call { func, args, .. } => {
+            Expr::Call {
+                func, args, span, ..
+            } => {
                 // Check for builtin functions first
                 if let Expr::Ident { name, .. } = func.as_ref() {
+                    let call_span = span.clone();
                     match name.as_str() {
                         "assert" => {
                             if args.is_empty() || args.len() > 2 {
-                                return Err(RuntimeError::arity_mismatch(1, args.len()));
+                                return Err(RuntimeError::arity_mismatch(1, args.len())
+                                    .with_span(call_span));
                             }
                             let cond = self.eval_expr(&args[0])?;
                             let msg = if args.len() == 2 {
@@ -504,9 +547,12 @@ impl Interpreter {
                             };
                             return match cond {
                                 Value::Bool(true) => Ok(Value::Unit),
-                                Value::Bool(false) => Err(RuntimeError::new("E4020", msg)),
+                                Value::Bool(false) => {
+                                    Err(RuntimeError::new("E4020", msg).with_span(call_span))
+                                }
                                 _ => {
-                                    Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond)))
+                                    Err(RuntimeError::type_mismatch("Bool", &format!("{:?}", cond))
+                                        .with_span(call_span))
                                 }
                             };
                         }
@@ -520,7 +566,8 @@ impl Interpreter {
                                 Err(RuntimeError::new(
                                     "E4021",
                                     format!("assertion failed: {:?} != {:?}", left, right),
-                                ))
+                                )
+                                .with_span(call_span))
                             };
                         }
                         // Option/Result constructors
@@ -812,7 +859,13 @@ impl Interpreter {
                 for arg in args {
                     arg_vals.push(self.eval_expr(arg)?);
                 }
-                self.call_function(func_val, arg_vals)
+                self.call_function(func_val, arg_vals).map_err(|e| {
+                    if e.span.is_none() && !e.is_control_flow() {
+                        e.with_span(span.clone())
+                    } else {
+                        e
+                    }
+                })
             }
 
             // Method calls (for effects)
@@ -882,8 +935,10 @@ impl Interpreter {
                             }
                         }
 
-                        let old_env = std::mem::replace(&mut self.env, match_env);
+                        let mut old_env = std::mem::replace(&mut self.env, match_env);
                         let result = self.eval_expr(&arm.body);
+                        // Propagate mutations from match arm scope back to parent
+                        old_env.propagate_from_child(&self.env);
                         self.env = old_env;
                         return result;
                     }
@@ -1009,6 +1064,7 @@ impl Interpreter {
             // For-in loop
             Expr::ForIn {
                 binding,
+                pattern,
                 iter,
                 body,
                 ..
@@ -1017,20 +1073,28 @@ impl Interpreter {
                 match iter_val {
                     Value::List(items) => {
                         'for_loop: for item in &items {
-                            self.env.define(binding.clone(), item.clone());
+                            // E8: If there's a destructuring pattern, match it
+                            if let Some(pat) = pattern {
+                                if let Some(bindings) = match_pattern(pat, item) {
+                                    for (name, val) in &bindings {
+                                        self.env.define(name.clone(), val.clone());
+                                    }
+                                } else {
+                                    return Err(RuntimeError::new(
+                                        "E4015",
+                                        "for loop destructuring pattern did not match value",
+                                    ));
+                                }
+                            } else {
+                                self.env.define(binding.clone(), item.clone());
+                            }
                             for stmt in &body.stmts {
                                 match self.eval_stmt(stmt) {
                                     Ok(()) => {}
                                     Err(e) if e.is_break => break 'for_loop,
                                     Err(e) if e.is_continue => continue 'for_loop,
-                                    Err(e) if e.is_return => {
-                                        self.env.bindings.remove(binding);
-                                        return Err(e);
-                                    }
-                                    Err(e) => {
-                                        self.env.bindings.remove(binding);
-                                        return Err(e);
-                                    }
+                                    Err(e) if e.is_return => return Err(e),
+                                    Err(e) => return Err(e),
                                 }
                             }
                             if let Some(expr) = &body.expr {
@@ -1038,14 +1102,10 @@ impl Interpreter {
                                     Ok(_) => {}
                                     Err(e) if e.is_break => break 'for_loop,
                                     Err(e) if e.is_continue => continue 'for_loop,
-                                    Err(e) => {
-                                        self.env.bindings.remove(binding);
-                                        return Err(e);
-                                    }
+                                    Err(e) => return Err(e),
                                 }
                             }
                         }
-                        self.env.bindings.remove(binding);
                         Ok(Value::Unit)
                     }
                     _ => Err(RuntimeError::type_mismatch(
@@ -1133,7 +1193,78 @@ impl Interpreter {
                 }
             }
 
-            // Hole (incomplete code)
+            // E2: Index access — list[i], map[key], text[i]
+            Expr::IndexAccess { expr, index, .. } => {
+                let collection = self.eval_expr(expr)?;
+                let idx = self.eval_expr(index)?;
+                match (&collection, &idx) {
+                    (Value::List(items), Value::Int(i)) => {
+                        let i = *i;
+                        let len = items.len() as i64;
+                        let actual_idx = if i < 0 { len + i } else { i };
+                        if actual_idx < 0 || actual_idx >= len {
+                            Err(RuntimeError::new(
+                                "E4002",
+                                format!(
+                                    "index out of bounds: index {} but list has {} elements",
+                                    i, len
+                                ),
+                            ))
+                        } else {
+                            Ok(items[actual_idx as usize].clone())
+                        }
+                    }
+                    (Value::Map(entries), key) => {
+                        for (k, v) in entries {
+                            if values_equal(k, key) {
+                                return Ok(v.clone());
+                            }
+                        }
+                        Err(RuntimeError::new(
+                            "E4002",
+                            format!("key not found in map: {}", format_value(key)),
+                        ))
+                    }
+                    (Value::Text(s), Value::Int(i)) => {
+                        let i = *i;
+                        let chars: Vec<char> = s.chars().collect();
+                        let len = chars.len() as i64;
+                        let actual_idx = if i < 0 { len + i } else { i };
+                        if actual_idx < 0 || actual_idx >= len {
+                            Err(RuntimeError::new(
+                                "E4002",
+                                format!(
+                                    "index out of bounds: index {} but string has {} characters",
+                                    i, len
+                                ),
+                            ))
+                        } else {
+                            Ok(Value::Text(chars[actual_idx as usize].to_string()))
+                        }
+                    }
+                    (Value::Tuple(elements), Value::Int(i)) => {
+                        let i = *i;
+                        let len = elements.len() as i64;
+                        let actual_idx = if i < 0 { len + i } else { i };
+                        if actual_idx < 0 || actual_idx >= len {
+                            Err(RuntimeError::new(
+                                "E4002",
+                                format!(
+                                    "index out of bounds: index {} but tuple has {} elements",
+                                    i, len
+                                ),
+                            ))
+                        } else {
+                            Ok(elements[actual_idx as usize].clone())
+                        }
+                    }
+                    _ => Err(RuntimeError::type_mismatch(
+                        "List, Map, Text, or Tuple",
+                        &format!("{:?}", collection),
+                    )),
+                }
+            }
+
             // P6.5: Await evaluates the inner expression (single-threaded execution)
             Expr::Await { expr, .. } => self.eval_expr(expr),
 
@@ -1213,7 +1344,7 @@ impl Interpreter {
     /// Evaluate a block
     pub fn eval_block(&mut self, block: &Block) -> Result<Value, RuntimeError> {
         // Create a new scope for the block
-        let old_env = self.env.clone();
+        let mut old_env = self.env.clone();
         self.env = self.env.child();
 
         // Execute all statements
@@ -1221,6 +1352,8 @@ impl Interpreter {
             match self.eval_stmt(stmt) {
                 Ok(()) => {}
                 Err(e) if e.is_return => {
+                    // Propagate mutations back before returning
+                    old_env.propagate_from_child(&self.env);
                     self.env = old_env;
                     return Err(e);
                 }
@@ -1238,6 +1371,8 @@ impl Interpreter {
             Value::Unit
         };
 
+        // Propagate mutations from child scope back to parent
+        old_env.propagate_from_child(&self.env);
         self.env = old_env;
         Ok(result)
     }
@@ -1310,10 +1445,25 @@ impl Interpreter {
             // String comparison
             (BinaryOp::Eq, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a == b)),
             (BinaryOp::Ne, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a != b)),
+            (BinaryOp::Lt, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a < b)),
+            (BinaryOp::Le, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a <= b)),
+            (BinaryOp::Gt, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a > b)),
+            (BinaryOp::Ge, Value::Text(a), Value::Text(b)) => Ok(Value::Bool(a >= b)),
+
+            // List concatenation
+            (BinaryOp::Add, Value::List(a), Value::List(b)) => {
+                let mut result = a.clone();
+                result.extend(b.clone());
+                Ok(Value::List(result))
+            }
 
             // Logical operations
             (BinaryOp::And, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a && *b)),
             (BinaryOp::Or, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
+
+            // E10: Structural equality for all value types
+            (BinaryOp::Eq, _, _) => Ok(Value::Bool(values_equal(left, right))),
+            (BinaryOp::Ne, _, _) => Ok(Value::Bool(!values_equal(left, right))),
 
             _ => Err(RuntimeError::type_mismatch(
                 &format!("compatible types for {:?}", op),
@@ -2481,7 +2631,7 @@ impl Interpreter {
                     Err(RuntimeError::type_mismatch("Text", "other"))
                 }
             }
-            (Value::Text(s), "substring") => {
+            (Value::Text(s), "slice") | (Value::Text(s), "substring") => {
                 if args.len() == 2 {
                     if let (Some(Value::Int(start)), Some(Value::Int(end))) =
                         (args.first(), args.get(1))
@@ -5720,10 +5870,10 @@ fn main() -> Int {
         assert!(matches!(result, Value::Int(3628800)));
     }
 
-    // === P6.5: Await expression ===
+    // === B2: Await is a reserved keyword (parse error) ===
 
     #[test]
-    fn test_await_expression() {
+    fn test_await_is_reserved_keyword() {
         let source = r#"
 module example
 fn async_value() -> Int { 42 }
@@ -5731,8 +5881,25 @@ fn main() -> Int {
   await async_value()
 }
 "#;
-        let result = parse_and_eval(source).unwrap();
-        assert!(matches!(result, Value::Int(42)));
+        // B2: await should produce a parse error E0006
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = Parser::new(lexer, source_file.clone());
+        let result = parser.parse_module();
+        assert!(result.is_err(), "await should produce a parse error");
+    }
+
+    #[test]
+    fn test_async_is_reserved_keyword() {
+        let source = r#"
+module example
+async fn fetch() -> Int { 42 }
+"#;
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = Parser::new(lexer, source_file.clone());
+        let result = parser.parse_module();
+        assert!(result.is_err(), "async should produce a parse error");
     }
 
     // Trait method dispatch tests
@@ -5917,5 +6084,151 @@ fn main() -> Text {
             Value::Text(s) => assert_eq!(s, "line one\n  indented\nline three"),
             other => panic!("Expected Text, got {:?}", other),
         }
+    }
+
+    // === v1.0: New feature tests ===
+
+    #[test]
+    fn test_compound_assignment_operators() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let x = 10
+  x += 5
+  x -= 3
+  x *= 2
+  x /= 4
+  x %= 5
+  x
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        // 10 + 5 = 15, 15 - 3 = 12, 12 * 2 = 24, 24 / 4 = 6, 6 % 5 = 1
+        assert!(matches!(result, Value::Int(1)));
+    }
+
+    #[test]
+    fn test_index_access_list() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let items = [10, 20, 30, 40]
+  items[0] + items[2]
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(40)));
+    }
+
+    #[test]
+    fn test_index_access_negative() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let items = [10, 20, 30]
+  items[-1]
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(30)));
+    }
+
+    #[test]
+    fn test_index_access_string() {
+        let source = r#"
+module example
+fn main() -> Text {
+  let s = "hello"
+  s[1]
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        match result {
+            Value::Text(s) => assert_eq!(s, "e"),
+            other => panic!("Expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_index_access_out_of_bounds() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let items = [1, 2, 3]
+  items[10]
+}
+"#;
+        let result = parse_and_eval(source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_for_loop_destructuring() {
+        let source = r#"
+module example
+fn main() -> Int {
+  let pairs = [(1, 10), (2, 20), (3, 30)]
+  let total = 0
+  for (key, val) in pairs {
+    total += val
+  }
+  total
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Int(60)));
+    }
+
+    #[test]
+    fn test_structural_equality_records() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  let a = {x = 1, y = 2}
+  let b = {x = 1, y = 2}
+  a == b
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_structural_equality_lists() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  let a = [1, 2, 3]
+  let b = [1, 2, 3]
+  let c = [1, 2, 4]
+  a == b and a != c
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_structural_equality_option() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  Some(42) == Some(42) and None == None and Some(1) != Some(2)
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_comparison_operators() {
+        let source = r#"
+module example
+fn main() -> Bool {
+  "abc" < "abd" and "z" > "a" and "hello" == "hello"
+}
+"#;
+        let result = parse_and_eval(source).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
     }
 }

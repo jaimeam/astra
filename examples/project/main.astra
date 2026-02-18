@@ -1,0 +1,61 @@
+module main
+
+import tracker.{make_task, format_task, mark_done, pending_tasks, format_report}
+
+fn main()
+  effects(Console)
+{
+  Console.println("=== Astra Task Tracker ===\n")
+
+  # Build a task list
+  let mut tasks = []
+
+  let r1 = make_task(1, "Set up project structure", "high")
+  match r1 {
+    Ok(t) => { tasks = tasks + [t] }
+    Err(e) => Console.println("Error: ${e}")
+  }
+
+  let r2 = make_task(2, "Write unit tests", "medium")
+  match r2 {
+    Ok(t) => { tasks = tasks + [t] }
+    Err(e) => Console.println("Error: ${e}")
+  }
+
+  let r3 = make_task(3, "Deploy to production", "critical")
+  match r3 {
+    Ok(t) => { tasks = tasks + [t] }
+    Err(e) => Console.println("Error: ${e}")
+  }
+
+  let r4 = make_task(4, "Update documentation", "low")
+  match r4 {
+    Ok(t) => { tasks = tasks + [t] }
+    Err(e) => Console.println("Error: ${e}")
+  }
+
+  Console.println("Added ${tasks.len()} tasks\n")
+
+  # Complete some tasks
+  let m1 = mark_done(tasks, 1)
+  match m1 {
+    Ok(t) => { tasks = t }
+    Err(_) => {}
+  }
+
+  let m2 = mark_done(tasks, 2)
+  match m2 {
+    Ok(t) => { tasks = t }
+    Err(_) => {}
+  }
+
+  # Print the report
+  Console.println(format_report(tasks))
+
+  # Show pending tasks
+  let pending = pending_tasks(tasks)
+  Console.println("Pending tasks: ${pending.len()}")
+  for t in pending {
+    Console.println("  - ${format_task(t)}")
+  }
+}

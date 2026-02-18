@@ -1,6 +1,7 @@
 module std.result
 
-fn is_ok[T, E](res: Result[T, E]) -> Bool
+## Returns true if the result is Ok.
+public fn is_ok[T, E](res: Result[T, E]) -> Bool
 {
   match res {
     Ok(_) => true
@@ -8,7 +9,8 @@ fn is_ok[T, E](res: Result[T, E]) -> Bool
   }
 }
 
-fn is_err[T, E](res: Result[T, E]) -> Bool
+## Returns true if the result is Err.
+public fn is_err[T, E](res: Result[T, E]) -> Bool
 {
   match res {
     Ok(_) => false
@@ -16,7 +18,8 @@ fn is_err[T, E](res: Result[T, E]) -> Bool
   }
 }
 
-fn unwrap_or[T, E](res: Result[T, E], default: T) -> T
+## Returns the Ok value or the given default.
+public fn unwrap_or[T, E](res: Result[T, E], default: T) -> T
 {
   match res {
     Ok(v) => v
@@ -24,7 +27,8 @@ fn unwrap_or[T, E](res: Result[T, E], default: T) -> T
   }
 }
 
-fn map[T, U, E](res: Result[T, E], f: (T) -> U) -> Result[U, E]
+## Applies a function to the Ok value, leaving Err unchanged.
+public fn map[T, U, E](res: Result[T, E], f: (T) -> U) -> Result[U, E]
 {
   match res {
     Ok(v) => Ok(f(v))
@@ -32,7 +36,8 @@ fn map[T, U, E](res: Result[T, E], f: (T) -> U) -> Result[U, E]
   }
 }
 
-fn map_err[T, E, F](res: Result[T, E], f: (E) -> F) -> Result[T, F]
+## Applies a function to the Err value, leaving Ok unchanged.
+public fn map_err[T, E, F](res: Result[T, E], f: (E) -> F) -> Result[T, F]
 {
   match res {
     Ok(v) => Ok(v)

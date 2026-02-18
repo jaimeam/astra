@@ -217,9 +217,10 @@ impl Cli {
     }
 }
 
-fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_fmt(paths: &[PathBuf], check: bool, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut files_formatted = 0;
     let mut files_changed = 0;
+    let mut changed_files: Vec<String> = Vec::new();
 
     for path in paths {
         if path.is_file() && path.extension().is_some_and(|ext| ext == "astra") {
@@ -228,6 +229,7 @@ fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn st
                 FmtResult::Changed => {
                     files_formatted += 1;
                     files_changed += 1;
+                    changed_files.push(path.display().to_string());
                 }
                 FmtResult::Error => {}
             }
@@ -239,6 +241,7 @@ fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn st
                         FmtResult::Changed => {
                             files_formatted += 1;
                             files_changed += 1;
+                            changed_files.push(entry.display().to_string());
                         }
                         FmtResult::Error => {}
                     }
@@ -247,7 +250,15 @@ fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn st
         }
     }
 
-    if check {
+    if json {
+        let files_json: Vec<String> = changed_files.iter().map(|f| json_escape(f)).collect();
+        println!(
+            "{{\"checked\":{},\"changed\":{},\"files\":[{}]}}",
+            files_formatted,
+            files_changed,
+            files_json.join(",")
+        );
+    } else if check {
         if files_changed > 0 {
             println!(
                 "{} file(s) would be reformatted ({} checked)",
@@ -262,6 +273,10 @@ fn run_fmt(paths: &[PathBuf], check: bool, _json: bool) -> Result<(), Box<dyn st
             "Formatted {} file(s) ({} changed)",
             files_formatted, files_changed
         );
+    }
+
+    if check && files_changed > 0 && json {
+        std::process::exit(1);
     }
 
     Ok(())
@@ -470,6 +485,7 @@ fn check_file(path: &PathBuf, json: bool) -> Result<CheckCounts, Box<dyn std::er
         Ok(module) => {
             // Run type checking (includes exhaustiveness + effect + lint enforcement)
             let mut checker = crate::typechecker::TypeChecker::new();
+            configure_checker_search_paths(&mut checker, path.parent());
             let _type_result = checker.check_module(&module);
 
             // Always retrieve all diagnostics (errors + warnings)
@@ -643,7 +659,7 @@ fn walkdir(path: &PathBuf) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 fn run_test(
     filter: Option<&str>,
     seed: Option<u64>,
-    _json: bool,
+    json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::parser::ast::Item;
 
@@ -659,6 +675,9 @@ fn run_test(
     let mut passed = 0;
     let mut failed = 0;
 
+    // P4/P6: Collect results for JSON output
+    let mut json_results: Vec<String> = Vec::new();
+
     for path in astra_files {
         let source = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
@@ -670,7 +689,9 @@ fn run_test(
         let module = match parser.parse_module() {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Parse error in {:?}:\n{}", path, e.format_text(&source));
+                if !json {
+                    eprintln!("Parse error in {:?}:\n{}", path, e.format_text(&source));
+                }
                 continue;
             }
         };
@@ -694,7 +715,16 @@ fn run_test(
                 configure_search_paths(&mut interpreter, path.parent());
                 // Load the module functions first
                 if let Err(e) = interpreter.load_module(&module) {
-                    eprintln!("  FAIL: {} - {}", test.name, e);
+                    if json {
+                        json_results.push(format!(
+                            "{{\"name\":{},\"file\":{},\"status\":\"fail\",\"error\":{}}}",
+                            json_escape(&test.name),
+                            json_escape(&path.display().to_string()),
+                            json_escape(&e.to_string())
+                        ));
+                    } else {
+                        eprintln!("  FAIL: {} - {}", test.name, e);
+                    }
                     failed += 1;
                     continue;
                 }
@@ -702,11 +732,28 @@ fn run_test(
                 // Run the test block
                 match interpreter.eval_block(&test.body) {
                     Ok(_) => {
-                        println!("  PASS: {}", test.name);
+                        if json {
+                            json_results.push(format!(
+                                "{{\"name\":{},\"file\":{},\"status\":\"pass\"}}",
+                                json_escape(&test.name),
+                                json_escape(&path.display().to_string())
+                            ));
+                        } else {
+                            println!("  PASS: {}", test.name);
+                        }
                         passed += 1;
                     }
                     Err(e) => {
-                        eprintln!("  FAIL: {} - {}", test.name, e);
+                        if json {
+                            json_results.push(format!(
+                                "{{\"name\":{},\"file\":{},\"status\":\"fail\",\"error\":{}}}",
+                                json_escape(&test.name),
+                                json_escape(&path.display().to_string()),
+                                json_escape(&e.to_string())
+                            ));
+                        } else {
+                            eprintln!("  FAIL: {} - {}", test.name, e);
+                        }
                         failed += 1;
                     }
                 }
@@ -724,6 +771,7 @@ fn run_test(
                 let num_iterations = 100;
                 let seed = seed.unwrap_or(42);
                 let mut all_passed = true;
+                let mut fail_msg = String::new();
 
                 for i in 0..num_iterations {
                     let iter_seed = seed.wrapping_add(i);
@@ -733,35 +781,68 @@ fn run_test(
                     let mut interpreter = Interpreter::with_capabilities(capabilities);
                     configure_search_paths(&mut interpreter, path.parent());
                     if let Err(e) = interpreter.load_module(&module) {
-                        eprintln!("  FAIL: {} (iteration {}) - {}", prop.name, i, e);
+                        fail_msg = format!("iteration {}: {}", i, e);
+                        if !json {
+                            eprintln!("  FAIL: {} (iteration {}) - {}", prop.name, i, e);
+                        }
                         all_passed = false;
                         break;
                     }
 
                     if let Err(e) = interpreter.eval_block(&prop.body) {
-                        eprintln!(
-                            "  FAIL: {} (iteration {}, seed {}) - {}",
-                            prop.name, i, iter_seed, e
-                        );
+                        fail_msg = format!("iteration {}, seed {}: {}", i, iter_seed, e);
+                        if !json {
+                            eprintln!(
+                                "  FAIL: {} (iteration {}, seed {}) - {}",
+                                prop.name, i, iter_seed, e
+                            );
+                        }
                         all_passed = false;
                         break;
                     }
                 }
 
                 if all_passed {
-                    println!("  PASS: {} ({} iterations)", prop.name, num_iterations);
+                    if json {
+                        json_results.push(format!(
+                            "{{\"name\":{},\"file\":{},\"status\":\"pass\",\"iterations\":{}}}",
+                            json_escape(&prop.name),
+                            json_escape(&path.display().to_string()),
+                            num_iterations
+                        ));
+                    } else {
+                        println!("  PASS: {} ({} iterations)", prop.name, num_iterations);
+                    }
                     passed += 1;
                 } else {
+                    if json {
+                        json_results.push(format!(
+                            "{{\"name\":{},\"file\":{},\"status\":\"fail\",\"error\":{}}}",
+                            json_escape(&prop.name),
+                            json_escape(&path.display().to_string()),
+                            json_escape(&fail_msg)
+                        ));
+                    }
                     failed += 1;
                 }
             }
         }
     }
 
-    println!(
-        "\n{} tests: {} passed, {} failed",
-        total_tests, passed, failed
-    );
+    if json {
+        println!(
+            "{{\"total\":{},\"passed\":{},\"failed\":{},\"results\":[{}]}}",
+            total_tests,
+            passed,
+            failed,
+            json_results.join(",")
+        );
+    } else {
+        println!(
+            "\n{} tests: {} passed, {} failed",
+            total_tests, passed, failed
+        );
+    }
 
     if failed > 0 {
         std::process::exit(1);
@@ -770,12 +851,53 @@ fn run_test(
     Ok(())
 }
 
+/// Helper to escape a string for JSON output
+fn json_escape(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    format!("\"{}\"", escaped)
+}
+
 /// Configure standard search paths for module resolution.
 ///
 /// Adds the following search paths in order:
 /// 1. The given base directory (usually the source file's parent)
 /// 2. The current working directory
 /// 3. The executable's directory (for finding stdlib relative to the binary)
+///
+/// B1: Configure search paths for the type checker
+fn configure_checker_search_paths(
+    checker: &mut crate::typechecker::TypeChecker,
+    base_dir: Option<&std::path::Path>,
+) {
+    if let Some(base) = base_dir {
+        checker.add_search_path(base.to_path_buf());
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        checker.add_search_path(cwd.clone());
+        let mut dir = cwd.as_path();
+        loop {
+            if dir.join("astra.toml").exists() {
+                checker.add_search_path(dir.to_path_buf());
+                break;
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break,
+            }
+        }
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            checker.add_search_path(exe_dir.to_path_buf());
+        }
+    }
+}
+
 fn configure_search_paths(interpreter: &mut Interpreter, base_dir: Option<&std::path::Path>) {
     // Add the base directory first (usually the source file's parent)
     if let Some(base) = base_dir {
@@ -970,7 +1092,14 @@ fn run_program(file: &PathBuf, args: &[String]) -> Result<(), Box<dyn std::error
     configure_search_paths(&mut interpreter, file.parent());
     match interpreter.eval_module(&module) {
         Ok(_) => Ok(()),
-        Err(e) => Err(format!("Runtime error: {}", e).into()),
+        Err(e) => {
+            let trace = interpreter.format_stack_trace();
+            let mut msg = format!("Runtime error: {}", e);
+            if !trace.is_empty() {
+                msg.push_str(&format!("\n{}", trace));
+            }
+            Err(msg.into())
+        }
     }
 }
 
@@ -1165,6 +1294,7 @@ fn run_fix(
         };
 
         let mut checker = crate::typechecker::TypeChecker::new();
+        configure_checker_search_paths(&mut checker, file_path.parent());
         let _type_result = checker.check_module(&module);
         let all_diags = checker.diagnostics();
 
@@ -2370,15 +2500,16 @@ test "hello works" {{
 
 fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
     use crate::interpreter::format_value;
+    use crate::interpreter::Value;
     use std::io::{self, Write};
 
-    println!("Astra REPL v0.1.0");
+    println!("Astra REPL v1.0.0");
     println!("Type expressions to evaluate. Use :quit to exit, :help for help.");
     println!();
 
     // Keep track of definitions (accumulated source)
     let mut definitions = String::from("module repl\n");
-    let mut line_num = 0u32;
+    let mut def_count = 0u32;
 
     let make_interpreter = || {
         let mut interp = Interpreter::with_capabilities(Capabilities {
@@ -2388,6 +2519,26 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
         configure_search_paths(&mut interp, None);
         interp
     };
+
+    // P3: Helper to describe value type for REPL display
+    fn value_type_name(v: &Value) -> &'static str {
+        match v {
+            Value::Int(_) => "Int",
+            Value::Float(_) => "Float",
+            Value::Bool(_) => "Bool",
+            Value::Text(_) => "Text",
+            Value::List(_) => "List",
+            Value::Tuple(_) => "Tuple",
+            Value::Record(_) => "Record",
+            Value::Map(_) => "Map",
+            Value::Closure { .. } => "Function",
+            Value::Unit => "Unit",
+            Value::Some(_) | Value::None => "Option",
+            Value::Ok(_) | Value::Err(_) => "Result",
+            Value::Variant { .. } => "Enum",
+            _ => "Value",
+        }
+    }
 
     loop {
         print!("astra> ");
@@ -2417,18 +2568,37 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  :help, :h    Show this help");
                 println!("  :clear       Clear all definitions");
                 println!();
-                println!("Enter expressions, let bindings, or function definitions.");
+                println!("Enter expressions, let bindings, fn/type/enum definitions, or import statements.");
                 continue;
             }
             ":clear" => {
                 definitions = String::from("module repl\n");
+                def_count = 0;
                 println!("Cleared.");
                 continue;
             }
             _ => {}
         }
 
-        line_num += 1;
+        // P3: Handle import statements directly as definitions
+        if input.starts_with("import ") {
+            let def_source = format!("{}\n{}", definitions, input);
+            let source_file = SourceFile::new(PathBuf::from("repl.astra"), def_source.clone());
+            let lexer = Lexer::new(&source_file);
+            let mut parser = AstraParser::new(lexer, source_file.clone());
+
+            match parser.parse_module() {
+                Ok(_) => {
+                    definitions = def_source;
+                    def_count += 1;
+                    println!("Imported.");
+                }
+                Err(e) => {
+                    eprintln!("{}", e.format_text(&def_source));
+                }
+            }
+            continue;
+        }
 
         // Try to evaluate as expression first: wrap in a temp main function
         let expr_source = format!("{}\nfn __repl__() -> Unit {{ {} }}", definitions, input);
@@ -2447,13 +2617,14 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(func) = interp.env.lookup("__repl__").cloned() {
                     match interp.call_function(func, vec![]) {
                         Ok(value) => {
-                            if !matches!(value, crate::interpreter::Value::Unit) {
-                                println!("{}", format_value(&value));
+                            if !matches!(value, Value::Unit) {
+                                // P3: Show type alongside value
+                                println!("{} : {}", format_value(&value), value_type_name(&value));
                             }
                         }
                         Err(e) if e.is_return => {
                             if let Some(val) = e.early_return {
-                                println!("{}", format_value(&val));
+                                println!("{} : {}", format_value(&val), value_type_name(&val));
                             }
                         }
                         Err(e) => {
@@ -2463,7 +2634,7 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Err(_) => {
-                // Try as a top-level definition (fn, type, enum)
+                // Try as a top-level definition (fn, type, enum, let)
                 let def_source = format!("{}\n{}", definitions, input);
                 let source_file2 = SourceFile::new(PathBuf::from("repl.astra"), def_source.clone());
                 let lexer2 = Lexer::new(&source_file2);
@@ -2472,7 +2643,8 @@ fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
                 match parser2.parse_module() {
                     Ok(_) => {
                         definitions = def_source;
-                        println!("Defined. ({} definitions)", line_num);
+                        def_count += 1;
+                        println!("Defined. ({} definitions)", def_count);
                     }
                     Err(e) => {
                         eprintln!("{}", e.format_text(&def_source));
@@ -2520,6 +2692,7 @@ fn run_package(output: &PathBuf, target: &str) -> Result<(), Box<dyn std::error:
         match parser.parse_module() {
             Ok(module) => {
                 let mut checker = crate::typechecker::TypeChecker::new();
+                configure_checker_search_paths(&mut checker, file.parent());
                 if checker.check_module(&module).is_err() {
                     eprintln!("  Type error in {:?}", file);
                     errors += 1;

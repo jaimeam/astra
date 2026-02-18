@@ -119,6 +119,18 @@ pub enum TokenKind {
     #[token("%")]
     Percent,
 
+    // E1: Compound assignment operators
+    #[token("+=")]
+    PlusEq,
+    #[token("-=")]
+    MinusEq,
+    #[token("*=")]
+    StarEq,
+    #[token("/=")]
+    SlashEq,
+    #[token("%=")]
+    PercentEq,
+
     #[token("==")]
     EqEq,
     #[token("!=")]

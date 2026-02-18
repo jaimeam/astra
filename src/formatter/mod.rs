@@ -706,12 +706,17 @@ impl Formatter {
             }
             Expr::ForIn {
                 binding,
+                pattern,
                 iter,
                 body,
                 ..
             } => {
                 self.write("for ");
-                self.write(binding);
+                if let Some(pat) = pattern {
+                    self.format_pattern(pat);
+                } else {
+                    self.write(binding);
+                }
                 self.write(" in ");
                 self.format_expr(iter);
                 self.write(" ");
@@ -780,6 +785,12 @@ impl Formatter {
                     self.write("..");
                 }
                 self.format_expr(end);
+            }
+            Expr::IndexAccess { expr, index, .. } => {
+                self.format_expr(expr);
+                self.write("[");
+                self.format_expr(index);
+                self.write("]");
             }
             Expr::Await { expr, .. } => {
                 self.write("await ");

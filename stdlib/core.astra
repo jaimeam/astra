@@ -2,12 +2,14 @@ module std.core
 
 type Unit = Unit
 
-fn identity[T](x: T) -> T
+## Returns the value unchanged. Useful for higher-order functions.
+public fn identity[T](x: T) -> T
 {
   x
 }
 
-fn constant[T, U](x: T, _unused: U) -> T
+## Always returns the first argument, ignoring the second.
+public fn constant[T, U](x: T, _unused: U) -> T
 {
   x
 }
