@@ -2522,6 +2522,12 @@ test "hello works" {{
     let gitignore = "# Astra build artifacts\n/build/\n/.astra-cache/\n";
     std::fs::write(project_dir.join(".gitignore"), gitignore)?;
 
+    // Write .claude/CLAUDE.md for AI agent onboarding
+    let claude_dir = project_dir.join(".claude");
+    std::fs::create_dir_all(&claude_dir)?;
+    let claude_md = generate_claude_md(&project_name, lib);
+    std::fs::write(claude_dir.join("CLAUDE.md"), claude_md)?;
+
     if name.is_some() {
         println!("Created new Astra project '{}'", project_name);
         println!("  cd {}", project_name);
@@ -2539,6 +2545,18 @@ test "hello works" {{
     }
 
     Ok(())
+}
+
+fn generate_claude_md(project_name: &str, is_lib: bool) -> String {
+    let run_hint = if is_lib {
+        ""
+    } else {
+        "astra run src/main.astra      # Run the program\n"
+    };
+
+    include_str!("claude_md_template.md")
+        .replace("{{PROJECT_NAME}}", project_name)
+        .replace("{{RUN_HINT}}", run_hint)
 }
 
 fn run_repl() -> Result<(), Box<dyn std::error::Error>> {
@@ -3070,5 +3088,51 @@ mod tests {
         assert!(result.is_some());
         let text = result.unwrap();
         assert!(text.contains("Unused variable"));
+    }
+
+    #[test]
+    fn test_generate_claude_md_app() {
+        let md = generate_claude_md("my_app", false);
+        assert!(md.contains("# my_app"));
+        assert!(md.contains("astra check src/"));
+        assert!(md.contains("astra test"));
+        assert!(md.contains("astra fmt src/"));
+        assert!(md.contains("astra fix src/"));
+        assert!(md.contains("astra run src/main.astra"));
+        assert!(md.contains("astra explain"));
+        assert!(md.contains("effects"));
+        assert!(md.contains("E0xxx"));
+        assert!(md.contains("Option[T]"));
+    }
+
+    #[test]
+    fn test_generate_claude_md_lib() {
+        let md = generate_claude_md("my_lib", true);
+        assert!(md.contains("# my_lib"));
+        assert!(md.contains("astra check src/"));
+        assert!(md.contains("astra test"));
+        // Lib projects should not include a run command
+        assert!(!md.contains("astra run src/main.astra"));
+    }
+
+    #[test]
+    fn test_init_creates_claude_md() {
+        let tmp = std::env::temp_dir().join("astra_test_init_claude_md");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Simulate what run_init does for the .claude directory
+        let claude_dir = tmp.join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let md = generate_claude_md("test_project", false);
+        std::fs::write(claude_dir.join("CLAUDE.md"), &md).unwrap();
+
+        let path = tmp.join(".claude").join("CLAUDE.md");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("# test_project"));
+        assert!(content.contains("astra check"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

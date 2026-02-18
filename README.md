@@ -43,20 +43,18 @@ cargo build --release
 # Add to PATH (or use 'cargo run --' instead of 'astra')
 export PATH="$PATH:$(pwd)/target/release"
 
-# Run a program
-astra run examples/hello.astra
+# Create a new project
+astra init my_project && cd my_project
 
-# Check for errors
-astra check examples/
-
-# Run tests
+# Run, check, and test
+astra run src/main.astra
+astra check src/
 astra test
-
-# Format code
-astra fmt examples/
 ```
 
-See [Getting Started](docs/getting-started.md) for the full tutorial.
+`astra init` scaffolds everything you need including a `.claude/CLAUDE.md` that
+makes the project immediately usable with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+and other AI agents. See [Getting Started](docs/getting-started.md) for the full tutorial.
 
 ## Language Example
 
