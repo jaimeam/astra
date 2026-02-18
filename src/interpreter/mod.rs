@@ -2631,7 +2631,7 @@ impl Interpreter {
                     Err(RuntimeError::type_mismatch("Text", "other"))
                 }
             }
-            (Value::Text(s), "substring") => {
+            (Value::Text(s), "slice") | (Value::Text(s), "substring") => {
                 if args.len() == 2 {
                     if let (Some(Value::Int(start)), Some(Value::Int(end))) =
                         (args.first(), args.get(1))

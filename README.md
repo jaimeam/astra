@@ -155,6 +155,16 @@ These are intentional limitations of the v1.0 release. They are documented here 
 
 **KL6. No Debugger** - There is no step-through debugger. Use `println` for debugging output, `assert`/`assert_eq` for runtime checks, and `test` blocks for verifying behavior.
 
+### Deferred to v1.1
+
+The following features are explicitly out of scope for v1.0 and planned for future versions:
+
+- **Full JSON object parsing** - The `std.json` module provides `stringify`, `parse_int`, `parse_bool`, and `escape`. Full JSON-to-value parsing (objects, arrays) is deferred to v1.1.
+- **Regular expression support** - String operations include `contains`, `starts_with`, `split`, `index_of`, and `replace`. Pattern matching via regex is deferred to v1.1.
+- **Full Hindley-Milner type inference** - Constraint-based type solving for complex generic scenarios.
+- **True async/await** - Event loop, futures, and concurrent effects.
+- **Package registry** - Publishing and installing third-party packages.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
