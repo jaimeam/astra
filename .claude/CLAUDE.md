@@ -79,20 +79,6 @@ astra/
 4. **Safe by Default**: Capability-based I/O, sandboxable
 5. **Fast Feedback**: Quick incremental checking and testing
 
-## Agent Roles
-
-See `.claude/roles/` for detailed role descriptions:
-- **Language Architect**: Semantics + specification
-- **Parser Engineer**: Grammar + AST + error recovery
-- **Formatter Engineer**: Canonical formatting
-- **Type System Engineer**: Type checker + inference
-- **Effects Engineer**: Capability system
-- **Runtime Engineer**: Interpreter/VM
-- **CLI Engineer**: Toolchain commands
-- **Stdlib Engineer**: Standard library
-- **Testing Engineer**: Test framework + property testing
-- **Docs Engineer**: Documentation + examples
-
 ## Contracts & Interfaces
 
 See `.claude/contracts/` for interface definitions that must remain stable:
