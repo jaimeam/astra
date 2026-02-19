@@ -7363,4 +7363,172 @@ fn main() -> Text {
             value
         );
     }
+
+    #[test]
+    fn test_net_serve() {
+        use std::sync::mpsc;
+
+        struct StubNet;
+        impl NetCapability for StubNet {
+            fn get(&self, _url: &str) -> Result<Value, String> {
+                Ok(Value::Text(String::new()))
+            }
+            fn post(&self, _url: &str, _body: &str) -> Result<Value, String> {
+                Ok(Value::Text(String::new()))
+            }
+        }
+
+        // Use port 0 so the OS picks an available port — but tiny_http doesn't
+        // expose the actual port when using "0.0.0.0:0", so pick a random high port.
+        let port: u16 = 19284;
+
+        let source = format!(
+            "module example\n\
+             \n\
+             fn handler(req: {{method: Text, path: Text, body: Text}}) -> {{status: Int, body: Text, headers: Map[Text, Text]}} {{\n\
+             \x20 let response_body = req.method + \" \" + req.path\n\
+             \x20 {{status = 200, body = response_body, headers = Map.new()}}\n\
+             }}\n\
+             \n\
+             fn main() effects(Net) {{\n\
+             \x20 Net.serve({port}, handler)\n\
+             }}\n",
+        );
+
+        let (tx, rx) = mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+            let lexer = Lexer::new(&source_file);
+            let mut parser = Parser::new(lexer, source_file.clone());
+            let module = parser.parse_module().expect("parse failed");
+
+            let capabilities = Capabilities {
+                console: Some(Box::new(MockConsole::new())),
+                net: Some(Box::new(StubNet)),
+                ..Default::default()
+            };
+            let mut interpreter = Interpreter::with_capabilities(capabilities);
+            if let Ok(cwd) = std::env::current_dir() {
+                interpreter.add_search_path(cwd);
+            }
+
+            // Signal that we're about to start serving
+            tx.send(()).unwrap();
+
+            // This blocks forever (until the thread is abandoned)
+            let _ = interpreter.eval_module(&module);
+        });
+
+        // Wait for the server thread to start
+        rx.recv().unwrap();
+        // Give tiny_http a moment to actually bind
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Make a request
+        let url = format!("http://127.0.0.1:{}/api/test", port);
+        let resp = ureq::get(&url).call().expect("HTTP request failed");
+        assert_eq!(resp.status(), 200);
+        let body = resp.into_string().unwrap();
+        assert_eq!(body, "GET /api/test");
+
+        // Test query string parsing
+        let url_qs = format!("http://127.0.0.1:{}/search?q=hello&page=2", port);
+        let resp_qs = ureq::get(&url_qs)
+            .call()
+            .expect("HTTP request with query failed");
+        assert_eq!(resp_qs.status(), 200);
+        let body_qs = resp_qs.into_string().unwrap();
+        assert_eq!(body_qs, "GET /search");
+
+        // Test POST with body
+        let url_post = format!("http://127.0.0.1:{}/api/data", port);
+        let resp_post = ureq::post(&url_post)
+            .send_string("payload")
+            .expect("HTTP POST failed");
+        assert_eq!(resp_post.status(), 200);
+        let body_post = resp_post.into_string().unwrap();
+        assert_eq!(body_post, "POST /api/data");
+
+        // Server thread blocks forever; just drop it
+        drop(handle);
+    }
+
+    #[test]
+    fn test_net_serve_query_params() {
+        use std::sync::mpsc;
+
+        struct StubNet;
+        impl NetCapability for StubNet {
+            fn get(&self, _url: &str) -> Result<Value, String> {
+                Ok(Value::Text(String::new()))
+            }
+            fn post(&self, _url: &str, _body: &str) -> Result<Value, String> {
+                Ok(Value::Text(String::new()))
+            }
+        }
+
+        let port: u16 = 19285;
+
+        let source = format!(
+            "module example\n\
+             \n\
+             fn handler(req: {{method: Text, path: Text, body: Text, query: Map[Text, Text]}}) -> {{status: Int, body: Text, headers: Map[Text, Text]}} {{\n\
+             \x20 let q = req.query.get(\"user\")\n\
+             \x20 match q {{\n\
+             \x20   Some(val) => {{status = 200, body = val, headers = Map.new()}}\n\
+             \x20   None => {{status = 404, body = \"not found\", headers = Map.new()}}\n\
+             \x20 }}\n\
+             }}\n\
+             \n\
+             fn main() effects(Net) {{\n\
+             \x20 Net.serve({port}, handler)\n\
+             }}\n",
+        );
+
+        let (tx, rx) = mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+            let lexer = Lexer::new(&source_file);
+            let mut parser = Parser::new(lexer, source_file.clone());
+            let module = parser.parse_module().expect("parse failed");
+
+            let capabilities = Capabilities {
+                console: Some(Box::new(MockConsole::new())),
+                net: Some(Box::new(StubNet)),
+                ..Default::default()
+            };
+            let mut interpreter = Interpreter::with_capabilities(capabilities);
+            if let Ok(cwd) = std::env::current_dir() {
+                interpreter.add_search_path(cwd);
+            }
+
+            tx.send(()).unwrap();
+            let _ = interpreter.eval_module(&module);
+        });
+
+        rx.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Query param is extracted and returned as body
+        let url = format!("http://127.0.0.1:{}/test?user=alice", port);
+        let resp = ureq::get(&url).call().expect("HTTP request failed");
+        assert_eq!(resp.status(), 200);
+        let body = resp.into_string().unwrap();
+        assert_eq!(body, "alice");
+
+        // Missing query param returns 404
+        let url_no_param = format!("http://127.0.0.1:{}/test", port);
+        let resp_no = ureq::get(&url_no_param).call();
+        match resp_no {
+            Err(ureq::Error::Status(code, resp)) => {
+                assert_eq!(code, 404);
+                assert_eq!(resp.into_string().unwrap(), "not found");
+            }
+            other => panic!("expected 404, got {:?}", other.map(|r| r.status())),
+        }
+
+        drop(handle);
+    }
 }
