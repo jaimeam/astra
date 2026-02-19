@@ -1085,6 +1085,14 @@ impl Interpreter {
                         .get(field)
                         .cloned()
                         .ok_or_else(|| RuntimeError::invalid_field_access(field)),
+                    Value::Map(ref entries) => {
+                        let key = Value::Text(field.clone());
+                        entries
+                            .iter()
+                            .find(|(k, _)| values_equal(k, &key))
+                            .map(|(_, v)| v.clone())
+                            .ok_or_else(|| RuntimeError::invalid_field_access(field))
+                    }
                     Value::Tuple(elements) => {
                         // Allow tuple.0, tuple.1 etc.
                         if let Ok(idx) = field.parse::<usize>() {
@@ -1103,7 +1111,7 @@ impl Interpreter {
                         }
                     }
                     _ => Err(RuntimeError::type_mismatch(
-                        "Record or Tuple",
+                        "Record, Map, or Tuple",
                         &format!("{:?}", val),
                     )),
                 }
@@ -3277,10 +3285,10 @@ fn json_parse_string(input: &str) -> Result<(Value, &str), RuntimeError> {
 fn json_parse_object(input: &str) -> Result<(Value, &str), RuntimeError> {
     debug_assert!(input.starts_with('{'));
     let mut rest = input[1..].trim_start();
-    let mut fields = HashMap::new();
+    let mut entries: Vec<(Value, Value)> = Vec::new();
 
     if let Some(stripped) = rest.strip_prefix('}') {
-        return Ok((Value::Record(fields), stripped));
+        return Ok((Value::Map(entries), stripped));
     }
 
     loop {
@@ -3292,10 +3300,6 @@ fn json_parse_object(input: &str) -> Result<(Value, &str), RuntimeError> {
             ));
         }
         let (key_val, after_key) = json_parse_string(rest)?;
-        let key = match key_val {
-            Value::Text(s) => s,
-            _ => unreachable!(),
-        };
         rest = after_key.trim_start();
 
         // Expect colon
@@ -3309,7 +3313,7 @@ fn json_parse_object(input: &str) -> Result<(Value, &str), RuntimeError> {
 
         // Parse value
         let (val, after_val) = json_parse_inner(rest)?;
-        fields.insert(key, val);
+        entries.push((key_val, val));
         rest = after_val.trim_start();
 
         if rest.starts_with(',') {
@@ -3325,7 +3329,7 @@ fn json_parse_object(input: &str) -> Result<(Value, &str), RuntimeError> {
         }
     }
 
-    Ok((Value::Record(fields), rest))
+    Ok((Value::Map(entries), rest))
 }
 
 fn json_parse_array(input: &str) -> Result<(Value, &str), RuntimeError> {
