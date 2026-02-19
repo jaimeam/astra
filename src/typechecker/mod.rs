@@ -15,6 +15,7 @@ fn format_type(ty: &Type) -> String {
         Type::Float => "Float".to_string(),
         Type::Bool => "Bool".to_string(),
         Type::Text => "Text".to_string(),
+        Type::Json => "Json".to_string(),
         Type::Option(inner) => format!("Option[{}]", format_type(inner)),
         Type::Result(ok, err) => format!("Result[{}, {}]", format_type(ok), format_type(err)),
         Type::List(inner) => format!("List[{}]", format_type(inner)),
@@ -182,6 +183,8 @@ pub enum Type {
     List(Box<Type>),
     /// Tuple type
     Tuple(Vec<Type>),
+    /// JSON dynamic type (represents any JSON-compatible value)
+    Json,
     /// Unknown type (for error recovery)
     Unknown,
 }
@@ -284,6 +287,11 @@ impl Substitution {
 
         // TypeParam matches anything (generic parameter)
         if matches!(&a, Type::TypeParam(_)) || matches!(&b, Type::TypeParam(_)) {
+            return true;
+        }
+
+        // Json is compatible with any JSON-representable type
+        if a == Type::Json || b == Type::Json {
             return true;
         }
 
@@ -1468,6 +1476,16 @@ impl TypeChecker {
                     "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" | "range"
                     | "abs" | "min" | "max" | "pow" | "to_int" | "to_float" | "sqrt" | "floor"
                     | "ceil" | "round" => Type::Unknown,
+                    "json_parse" => Type::Function {
+                        params: vec![Type::Text],
+                        ret: Box::new(Type::Json),
+                        effects: vec![],
+                    },
+                    "json_stringify" => Type::Function {
+                        params: vec![Type::Json],
+                        ret: Box::new(Type::Text),
+                        effects: vec![],
+                    },
                     _ => {
                         // Mark variable as used for W0001 lint
                         self.lint_use_var(name);
@@ -1763,6 +1781,9 @@ impl TypeChecker {
                         .find(|(n, _)| n == field)
                         .map(|(_, t)| t.clone())
                         .unwrap_or(Type::Unknown)
+                } else if expr_ty == Type::Json {
+                    // Field access on Json returns Json (dynamic access)
+                    Type::Json
                 } else {
                     Type::Unknown
                 }
@@ -1911,6 +1932,7 @@ impl TypeChecker {
                 match collection_type {
                     Type::List(inner) => *inner,
                     Type::Text => Type::Text,
+                    Type::Json => Type::Json,
                     Type::Tuple(elements) => {
                         // If the index is a literal int, we can be precise
                         if let Expr::IntLit { value, .. } = index.as_ref() {
@@ -2179,6 +2201,7 @@ impl TypeChecker {
                 "Bool" => Type::Bool,
                 "Text" => Type::Text,
                 "Unit" => Type::Unit,
+                "Json" => Type::Json,
                 "Option" if args.len() == 1 => {
                     Type::Option(Box::new(self.resolve_type_expr(&args[0])))
                 }
@@ -2249,6 +2272,10 @@ impl TypeChecker {
         }
         // Type variables are compatible (will be resolved during unification)
         if matches!(&actual, Type::Var(_)) || matches!(&expected, Type::Var(_)) {
+            return true;
+        }
+        // Json is compatible with any JSON-representable type
+        if actual == Type::Json || expected == Type::Json {
             return true;
         }
         // List[T] compatible with List[U] if T compatible with U
@@ -3746,5 +3773,119 @@ fn main() -> Int {
             warnings.is_empty(),
             "should not warn about _-prefixed functions"
         );
+    }
+
+    // =========================================================================
+    // Json type and json_parse/json_stringify tests
+    // =========================================================================
+
+    #[test]
+    fn test_json_type_annotation() {
+        let source = r#"
+module example
+
+fn process(data: Json) -> Json {
+  data
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_json_parse_returns_json() {
+        let source = r#"
+module example
+
+fn parse_data() -> Json {
+  json_parse("{}")
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_json_stringify_returns_text() {
+        let source = r#"
+module example
+
+fn to_string(data: Json) -> Text {
+  json_stringify(data)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_json_compatible_with_int() {
+        let source = r#"
+module example
+
+fn use_json(data: Json) -> Int {
+  data
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_json_compatible_with_text() {
+        let source = r#"
+module example
+
+fn use_json(data: Json) -> Text {
+  data
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_json_stringify_accepts_any_type() {
+        let source = r#"
+module example
+
+fn stringify_int() -> Text {
+  json_stringify(42)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_json_parse_requires_text() {
+        let source = r#"
+module example
+
+fn bad_parse() -> Json {
+  json_parse(42)
+}
+"#;
+        assert!(check_module(source).is_err());
+    }
+
+    #[test]
+    fn test_json_field_access() {
+        let source = r#"
+module example
+
+fn get_field() -> Json {
+  let obj = json_parse("{\"name\": \"Astra\"}")
+  obj.name
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_json_index_access() {
+        let source = r#"
+module example
+
+fn get_element() -> Json {
+  let arr = json_parse("[1, 2, 3]")
+  arr[0]
+}
+"#;
+        assert!(check_module(source).is_ok());
     }
 }
