@@ -27,23 +27,24 @@ created a class of bugs where:
 
 ### Scope of the Gap (at time of discovery)
 
-**13 interpreter builtins** had no type checker entry:
+**13 interpreter builtins** had no type checker entry. All have since been
+fixed with proper `Type::Function` signatures:
 
-| Function | Expected Signature | Required Effects |
-|----------|-------------------|-----------------|
-| `read_file` | `(Text) -> Text` | Fs |
-| `write_file` | `(Text, Text) -> Unit` | Fs |
-| `http_get` | `(Text) -> Text` | Net |
-| `http_post` | `(Text, Text) -> Text` | Net |
-| `random_int` | `(Int, Int) -> Int` | Rand |
-| `random_bool` | `() -> Bool` | Rand |
-| `current_time_millis` | `() -> Int` | Clock |
-| `get_env` | `(Text) -> Option[Text]` | Env |
-| `regex_match` | `(Text, Text) -> List[Text]` | (pure) |
-| `regex_find_all` | `(Text, Text) -> List[Text]` | (pure) |
-| `regex_replace` | `(Text, Text, Text) -> Text` | (pure) |
-| `regex_split` | `(Text, Text) -> List[Text]` | (pure) |
-| `regex_is_match` | `(Text, Text) -> Bool` | (pure) |
+| Function | Signature | Effects | Status |
+|----------|-----------|---------|--------|
+| `read_file` | `(Text) -> Text` | Fs | Fixed |
+| `write_file` | `(Text, Text) -> Unit` | Fs | Fixed |
+| `http_get` | `(Text) -> Text` | Net | Fixed |
+| `http_post` | `(Text, Text) -> Text` | Net | Fixed |
+| `random_int` | `(Int, Int) -> Int` | Rand | Fixed |
+| `random_bool` | `() -> Bool` | Rand | Fixed |
+| `current_time_millis` | `() -> Int` | Clock | Fixed |
+| `get_env` | `(Text) -> Option[Text]` | Env | Fixed |
+| `regex_match` | `(Text, Text) -> Option[Json]` | (pure) | Fixed |
+| `regex_find_all` | `(Text, Text) -> List[Json]` | (pure) | Fixed |
+| `regex_replace` | `(Text, Text, Text) -> Text` | (pure) | Fixed |
+| `regex_split` | `(Text, Text) -> List[Text]` | (pure) | Fixed |
+| `regex_is_match` | `(Text, Text) -> Bool` | (pure) | Fixed |
 
 ## Decision
 
@@ -66,8 +67,9 @@ in only one layer.
    variant. Using `Type::Named(name, [])` for a built-in type is a code
    smell — it won't match concrete types in compatibility checks.
 
-4. **A compile-time or test-time check should verify sync.** (See
-   consequences below.)
+4. **A test-time check verifies sync.** The
+   `test_interpreter_typechecker_builtin_sync` test parses both source
+   files and asserts every interpreter builtin has a type checker entry.
 
 ## Rationale
 
@@ -103,10 +105,18 @@ an `Int` variable and only discover the problem at runtime.
 - Risk of over-typing effect-based builtins (their real signatures depend
   on capability injection)
 
+### Implemented Safeguards
+
+- `test_interpreter_typechecker_builtin_sync` in `src/typechecker/mod.rs`
+  parses both source files with `include_str!`, extracts builtin names from
+  the interpreter's Call dispatch and the type checker's Ident match, and
+  fails the build if any interpreter builtin is missing from the type
+  checker.
+- All 13 builtins from the original gap have been typed with proper
+  `Type::Function` signatures (including effect declarations).
+- `Type::Json` was added as a first-class type variant for JSON values.
+
 ### Future Work
 
-- Add a `#[test]` that extracts both builtin name lists and asserts they
-  match
 - Consider a declarative builtin registry (single source of truth for name,
-  type signature, and runtime dispatch)
-- Type the remaining 13 builtins identified in this ADR
+  type signature, and runtime dispatch) to replace the two match blocks
