@@ -127,6 +127,25 @@ All diagnostics must have stable error codes. Format: `E####`
 
 See `docs/errors.md` for the complete registry.
 
+## Critical Invariant: Interpreter-TypeChecker Sync
+
+**Every built-in function in the interpreter MUST have a type signature in the type checker.**
+
+The interpreter dispatches built-in functions in `src/interpreter/mod.rs` (the big
+`match name.as_str()` block). The type checker recognizes built-in names in
+`src/typechecker/mod.rs` (the `Expr::Ident` match). These two lists MUST stay in sync.
+
+When adding a new built-in:
+1. Add the runtime implementation in `src/interpreter/mod.rs`
+2. Add the type signature in `src/typechecker/mod.rs` — use `Type::Function { params, ret, effects }`
+   with concrete types, NOT `Type::Unknown`
+3. If the built-in introduces a new type concept (like `Json`), add a `Type` enum variant —
+   do NOT use `Type::Named("Foo", [])` for built-in types (it won't match concrete types)
+4. Add tests covering both the runtime behavior AND the type checking
+
+See `docs/adr/ADR-005-builtin-type-sync.md` for the full rationale (born from a bug where
+`json_parse`/`json_stringify` had runtime implementations but no type checker entries).
+
 ## Testing Requirements
 
 - All new features need tests
