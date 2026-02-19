@@ -2200,7 +2200,7 @@ impl Interpreter {
                                 _ => String::new(),
                             };
 
-                            let mut response = tiny_http::Response::from_string(&body)
+                            let mut response = tiny_http::Response::from_string(body)
                                 .with_status_code(tiny_http::StatusCode(status_code));
 
                             if let Some(Value::Map(headers)) = fields.get("headers") {
@@ -2216,14 +2216,19 @@ impl Interpreter {
                                 }
                             }
 
-                            let _ = request.respond(response);
+                            if let Err(e) = request.respond(response) {
+                                eprintln!("Failed to send response: {}", e);
+                            }
                         }
-                        Ok(_) => {
+                        Ok(other) => {
+                            eprintln!("Handler returned non-record value: {:?}", other);
                             let response = tiny_http::Response::from_string(
                                 "Internal Server Error: handler did not return a Response record",
                             )
                             .with_status_code(tiny_http::StatusCode(500));
-                            let _ = request.respond(response);
+                            if let Err(e) = request.respond(response) {
+                                eprintln!("Failed to send error response: {}", e);
+                            }
                         }
                         Err(e) => {
                             eprintln!("Handler error: {}", e);
@@ -2232,7 +2237,9 @@ impl Interpreter {
                                 e
                             ))
                             .with_status_code(tiny_http::StatusCode(500));
-                            let _ = request.respond(response);
+                            if let Err(e) = request.respond(response) {
+                                eprintln!("Failed to send error response: {}", e);
+                            }
                         }
                     }
                 }
