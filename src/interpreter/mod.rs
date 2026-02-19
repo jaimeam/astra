@@ -17,6 +17,27 @@ pub use environment::Environment;
 pub use error::{check_arity, RuntimeError};
 pub use value::*;
 
+/// Decode a percent-encoded URL component (e.g. `hello%20world` → `hello world`).
+fn url_decode(s: &str) -> String {
+    let mut result = Vec::with_capacity(s.len());
+    let mut bytes = s.as_bytes().iter();
+    while let Some(&b) = bytes.next() {
+        if b == b'%' {
+            let hi = bytes.next().copied().unwrap_or(b'0');
+            let lo = bytes.next().copied().unwrap_or(b'0');
+            let hex = [hi, lo];
+            if let Ok(decoded) = u8::from_str_radix(std::str::from_utf8(&hex).unwrap_or("00"), 16) {
+                result.push(decoded);
+            }
+        } else if b == b'+' {
+            result.push(b' ');
+        } else {
+            result.push(b);
+        }
+    }
+    String::from_utf8_lossy(&result).into_owned()
+}
+
 /// Result of evaluating an expression with TCO awareness (P6.4)
 #[allow(clippy::large_enum_variant)]
 enum TcoResult {
@@ -2079,7 +2100,7 @@ impl Interpreter {
     }
 
     /// Call a Net effect method
-    fn call_net_method(&self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    fn call_net_method(&mut self, method: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
         let net = self
             .capabilities
             .net
@@ -2112,6 +2133,111 @@ impl Interpreter {
                 } else {
                     Err(RuntimeError::arity_mismatch(2, args.len()))
                 }
+            }
+            "serve" => {
+                if args.len() != 2 {
+                    return Err(RuntimeError::arity_mismatch(2, args.len()));
+                }
+                let port = match &args[0] {
+                    Value::Int(p) => *p as u16,
+                    _ => return Err(RuntimeError::type_mismatch("Int", "other")),
+                };
+                let handler = args[1].clone();
+
+                let addr = format!("0.0.0.0:{}", port);
+                let server = tiny_http::Server::http(&addr).map_err(|e| {
+                    RuntimeError::new("E4020", format!("Failed to bind to {}: {}", addr, e))
+                })?;
+
+                eprintln!("Astra server listening on http://0.0.0.0:{}", port);
+
+                for mut request in server.incoming_requests() {
+                    let method_str = Value::Text(request.method().to_string().to_uppercase());
+                    let full_url = request.url().to_string();
+
+                    // Split path and query string
+                    let (path_str, query_map) = if let Some(qmark) = full_url.find('?') {
+                        let path = &full_url[..qmark];
+                        let qs = &full_url[qmark + 1..];
+                        let pairs: Vec<(Value, Value)> = qs
+                            .split('&')
+                            .filter(|s: &&str| !s.is_empty())
+                            .map(|pair: &str| {
+                                let mut parts = pair.splitn(2, '=');
+                                let key = url_decode(parts.next().unwrap_or(""));
+                                let val = url_decode(parts.next().unwrap_or(""));
+                                (Value::Text(key), Value::Text(val))
+                            })
+                            .collect();
+                        (path.to_string(), Value::Map(pairs))
+                    } else {
+                        (full_url.clone(), Value::Map(Vec::new()))
+                    };
+
+                    // Read body
+                    let mut body_buf = String::new();
+                    let _ = request.as_reader().read_to_string(&mut body_buf);
+
+                    let req_record = Value::Record({
+                        let mut m = std::collections::HashMap::new();
+                        m.insert("method".to_string(), method_str);
+                        m.insert("path".to_string(), Value::Text(path_str));
+                        m.insert("body".to_string(), Value::Text(body_buf));
+                        m.insert("query".to_string(), query_map);
+                        m
+                    });
+
+                    let response_val = self.call_function(handler.clone(), vec![req_record]);
+
+                    match response_val {
+                        Ok(Value::Record(fields)) => {
+                            let status_code = match fields.get("status") {
+                                Some(Value::Int(s)) => *s as u16,
+                                _ => 200u16,
+                            };
+                            let body = match fields.get("body") {
+                                Some(Value::Text(b)) => b.clone(),
+                                _ => String::new(),
+                            };
+
+                            let mut response = tiny_http::Response::from_string(&body)
+                                .with_status_code(tiny_http::StatusCode(status_code));
+
+                            if let Some(Value::Map(headers)) = fields.get("headers") {
+                                for (k, v) in headers {
+                                    if let (Value::Text(hk), Value::Text(hv)) = (k, v) {
+                                        if let Ok(header) = tiny_http::Header::from_bytes(
+                                            hk.as_bytes(),
+                                            hv.as_bytes(),
+                                        ) {
+                                            response.add_header(header);
+                                        }
+                                    }
+                                }
+                            }
+
+                            let _ = request.respond(response);
+                        }
+                        Ok(_) => {
+                            let response = tiny_http::Response::from_string(
+                                "Internal Server Error: handler did not return a Response record",
+                            )
+                            .with_status_code(tiny_http::StatusCode(500));
+                            let _ = request.respond(response);
+                        }
+                        Err(e) => {
+                            eprintln!("Handler error: {}", e);
+                            let response = tiny_http::Response::from_string(format!(
+                                "Internal Server Error: {}",
+                                e
+                            ))
+                            .with_status_code(tiny_http::StatusCode(500));
+                            let _ = request.respond(response);
+                        }
+                    }
+                }
+
+                Ok(Value::Unit)
             }
             _ => Err(RuntimeError::unknown_method("Net", method)),
         }

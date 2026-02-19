@@ -29,6 +29,9 @@ logos = "0.14"
 # HTTP client (for Net capability)
 ureq = "2"
 
+# HTTP server (for Net.serve)
+tiny_http = "0.12"
+
 # Regular expression support (v1.1)
 regex = "1"
 
