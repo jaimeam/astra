@@ -1476,6 +1476,7 @@ impl TypeChecker {
                     "assert" | "assert_eq" | "print" | "println" | "len" | "to_text" | "range"
                     | "abs" | "min" | "max" | "pow" | "to_int" | "to_float" | "sqrt" | "floor"
                     | "ceil" | "round" => Type::Unknown,
+                    // v1.1: JSON builtins
                     "json_parse" => Type::Function {
                         params: vec![Type::Text],
                         ret: Box::new(Type::Json),
@@ -1485,6 +1486,73 @@ impl TypeChecker {
                         params: vec![Type::Json],
                         ret: Box::new(Type::Text),
                         effects: vec![],
+                    },
+                    // v1.1: Regex builtins
+                    "regex_match" => Type::Function {
+                        params: vec![Type::Text, Type::Text],
+                        ret: Box::new(Type::Option(Box::new(Type::Json))),
+                        effects: vec![],
+                    },
+                    "regex_find_all" => Type::Function {
+                        params: vec![Type::Text, Type::Text],
+                        ret: Box::new(Type::List(Box::new(Type::Json))),
+                        effects: vec![],
+                    },
+                    "regex_replace" => Type::Function {
+                        params: vec![Type::Text, Type::Text, Type::Text],
+                        ret: Box::new(Type::Text),
+                        effects: vec![],
+                    },
+                    "regex_split" => Type::Function {
+                        params: vec![Type::Text, Type::Text],
+                        ret: Box::new(Type::List(Box::new(Type::Text))),
+                        effects: vec![],
+                    },
+                    "regex_is_match" => Type::Function {
+                        params: vec![Type::Text, Type::Text],
+                        ret: Box::new(Type::Bool),
+                        effects: vec![],
+                    },
+                    // v1.1: Effect convenience builtins
+                    "read_file" => Type::Function {
+                        params: vec![Type::Text],
+                        ret: Box::new(Type::Text),
+                        effects: vec!["Fs".to_string()],
+                    },
+                    "write_file" => Type::Function {
+                        params: vec![Type::Text, Type::Text],
+                        ret: Box::new(Type::Unit),
+                        effects: vec!["Fs".to_string()],
+                    },
+                    "http_get" => Type::Function {
+                        params: vec![Type::Text],
+                        ret: Box::new(Type::Text),
+                        effects: vec!["Net".to_string()],
+                    },
+                    "http_post" => Type::Function {
+                        params: vec![Type::Text, Type::Text],
+                        ret: Box::new(Type::Text),
+                        effects: vec!["Net".to_string()],
+                    },
+                    "random_int" => Type::Function {
+                        params: vec![Type::Int, Type::Int],
+                        ret: Box::new(Type::Int),
+                        effects: vec!["Rand".to_string()],
+                    },
+                    "random_bool" => Type::Function {
+                        params: vec![],
+                        ret: Box::new(Type::Bool),
+                        effects: vec!["Rand".to_string()],
+                    },
+                    "current_time_millis" => Type::Function {
+                        params: vec![],
+                        ret: Box::new(Type::Int),
+                        effects: vec!["Clock".to_string()],
+                    },
+                    "get_env" => Type::Function {
+                        params: vec![Type::Text],
+                        ret: Box::new(Type::Option(Box::new(Type::Text))),
+                        effects: vec!["Env".to_string()],
                     },
                     _ => {
                         // Mark variable as used for W0001 lint
@@ -3887,5 +3955,298 @@ fn get_element() -> Json {
 }
 "#;
         assert!(check_module(source).is_ok());
+    }
+
+    // =========================================================================
+    // Regex builtin type signature tests
+    // =========================================================================
+
+    #[test]
+    fn test_regex_is_match_returns_bool() {
+        let source = r#"
+module example
+
+fn check(pattern: Text, text: Text) -> Bool {
+  regex_is_match(pattern, text)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_regex_replace_returns_text() {
+        let source = r#"
+module example
+
+fn clean(text: Text) -> Text {
+  regex_replace("\\s+", text, " ")
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_regex_split_returns_list_text() {
+        let source = r#"
+module example
+
+fn split_words(text: Text) -> List[Text] {
+  regex_split("\\s+", text)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_regex_find_all_returns_list() {
+        let source = r#"
+module example
+
+fn find_all(text: Text) -> List[Json] {
+  regex_find_all("[0-9]+", text)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_regex_match_returns_option() {
+        let source = r#"
+module example
+
+fn try_match(text: Text) -> Option[Json] {
+  regex_match("[0-9]+", text)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_regex_requires_text_args() {
+        let source = r#"
+module example
+
+fn bad_regex() -> Bool {
+  regex_is_match(42, true)
+}
+"#;
+        assert!(check_module(source).is_err());
+    }
+
+    // =========================================================================
+    // Effect builtin type signature tests
+    // =========================================================================
+
+    #[test]
+    fn test_read_file_signature() {
+        let source = r#"
+module example
+
+fn load(path: Text) -> Text effects(Fs) {
+  read_file(path)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_write_file_signature() {
+        let source = r#"
+module example
+
+fn save(path: Text, data: Text) -> Unit effects(Fs) {
+  write_file(path, data)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_http_get_signature() {
+        let source = r#"
+module example
+
+fn fetch(url: Text) -> Text effects(Net) {
+  http_get(url)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_http_post_signature() {
+        let source = r#"
+module example
+
+fn send(url: Text, body: Text) -> Text effects(Net) {
+  http_post(url, body)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_random_int_signature() {
+        let source = r#"
+module example
+
+fn roll_dice() -> Int effects(Rand) {
+  random_int(1, 6)
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_random_bool_signature() {
+        let source = r#"
+module example
+
+fn coin_flip() -> Bool effects(Rand) {
+  random_bool()
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_current_time_millis_signature() {
+        let source = r#"
+module example
+
+fn now() -> Int effects(Clock) {
+  current_time_millis()
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    #[test]
+    fn test_get_env_signature() {
+        let source = r#"
+module example
+
+fn home_dir() -> Option[Text] effects(Env) {
+  get_env("HOME")
+}
+"#;
+        assert!(check_module(source).is_ok());
+    }
+
+    // =========================================================================
+    // Automated sync test: interpreter builtins must have typechecker entries
+    // =========================================================================
+
+    #[test]
+    fn test_interpreter_typechecker_builtin_sync() {
+        // Extract builtin names from both source files by parsing the match arms.
+        // This test ensures every function dispatched in the interpreter has a
+        // corresponding entry in the type checker (ADR-005).
+        let interp_src = include_str!("../interpreter/mod.rs");
+        let tc_src = include_str!("mod.rs");
+
+        let interp_builtins = extract_interpreter_builtins(interp_src);
+        let tc_builtins = extract_typechecker_builtins(tc_src);
+
+        let mut missing: Vec<&str> = Vec::new();
+        for name in &interp_builtins {
+            if !tc_builtins.contains(name) {
+                missing.push(name);
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "Interpreter builtins missing from type checker (ADR-005 violation):\n  {}\n\
+             \nEvery builtin in the interpreter match dispatch must have a \
+             corresponding entry in the type checker's Expr::Ident match.\n\
+             See docs/adr/ADR-005-builtin-type-sync.md",
+            missing.join(", ")
+        );
+    }
+
+    /// Extract builtin function names from the interpreter's Call dispatch.
+    /// Looks for patterns like `"name" =>` inside the builtin match block
+    /// that starts after the `// Check for builtin functions first` comment.
+    fn extract_interpreter_builtins(src: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut in_call_dispatch = false;
+        let mut found_marker = false;
+        for line in src.lines() {
+            let trimmed = line.trim();
+            // Find the Call builtin dispatch (skip the Ident dispatch)
+            if trimmed.contains("Check for builtin functions first") {
+                found_marker = true;
+                continue;
+            }
+            if found_marker && !in_call_dispatch && trimmed.contains("match name.as_str()") {
+                in_call_dispatch = true;
+                continue;
+            }
+            if !in_call_dispatch {
+                continue;
+            }
+            // End of the match block
+            if trimmed == "_ => {}" {
+                break;
+            }
+            // Match lines like: "function_name" => {
+            if let Some(start) = trimmed.find('"') {
+                if let Some(end) = trimmed[start + 1..].find('"') {
+                    let name = &trimmed[start + 1..start + 1 + end];
+                    if trimmed[start + 1 + end + 1..]
+                        .trim_start()
+                        .starts_with("=>")
+                    {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// Extract builtin identifiers from the type checker's Expr::Ident match.
+    /// Looks for quoted strings in the builtin recognition block.
+    fn extract_typechecker_builtins(src: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        // Find the block starting with: // Built-in constructors and effects
+        // and ending at the `_ =>` fallthrough
+        let mut in_ident_match = false;
+        for line in src.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("Built-in constructors and effects") {
+                in_ident_match = true;
+                continue;
+            }
+            if !in_ident_match {
+                continue;
+            }
+            // When we hit the _ => fallthrough, we're done
+            if trimmed.starts_with("_ =>") || trimmed.starts_with("_ =") {
+                break;
+            }
+            // Extract quoted names from lines like: "name" | "name2" => ...
+            // or "name" => Type::Function { ... }
+            let mut rest = trimmed;
+            while let Some(start) = rest.find('"') {
+                rest = &rest[start + 1..];
+                if let Some(end) = rest.find('"') {
+                    let name = &rest[..end];
+                    // Filter out non-identifier strings and effect module names
+                    // Effect modules (Console, Fs, Net, Clock, Rand, Env) and
+                    // collection modules (Map, Set) are not callable builtins
+                    let effect_modules =
+                        ["Console", "Fs", "Net", "Clock", "Rand", "Env", "Map", "Set"];
+                    if !name.is_empty() && !name.contains(' ') && !effect_modules.contains(&name) {
+                        names.push(name.to_string());
+                    }
+                    rest = &rest[end + 1..];
+                } else {
+                    break;
+                }
+            }
+        }
+        names
     }
 }
