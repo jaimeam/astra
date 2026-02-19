@@ -44,6 +44,8 @@ pub struct Interpreter {
     pub search_paths: Vec<PathBuf>,
     /// Already-loaded modules (to prevent circular imports)
     loaded_modules: std::collections::HashSet<String>,
+    /// Cached module environments for already-loaded modules
+    loaded_module_envs: HashMap<String, Environment>,
     /// Modules currently being loaded (for circular import detection P4.2)
     loading_modules: std::collections::HashSet<String>,
     /// Call stack for stack traces (P5.2)
@@ -71,6 +73,7 @@ impl Interpreter {
             capabilities,
             search_paths: Vec::new(),
             loaded_modules: std::collections::HashSet::new(),
+            loaded_module_envs: HashMap::new(),
             loading_modules: std::collections::HashSet::new(),
             call_stack: Vec::new(),
             type_defs: HashMap::new(),
@@ -365,9 +368,31 @@ impl Interpreter {
     ) -> Result<(), RuntimeError> {
         let module_key = segments.join(".");
         if self.loaded_modules.contains(&module_key) {
-            return Ok(()); // Already loaded
+            // Module already executed — just import the requested names from cached env
+            if let Some(module_env) = self.loaded_module_envs.get(&module_key).cloned() {
+                for name in names {
+                    if let Some(value) = module_env.lookup(name).cloned() {
+                        let imported_value = match value {
+                            Value::Closure {
+                                name: fn_name,
+                                params,
+                                body,
+                                ..
+                            } => Value::Closure {
+                                name: fn_name,
+                                params,
+                                body,
+                                env: module_env.clone(),
+                            },
+                            other => other,
+                        };
+                        self.env.define(name.clone(), imported_value);
+                    }
+                }
+            }
+            return Ok(());
         }
-        self.loaded_modules.insert(module_key);
+        self.loaded_modules.insert(module_key.clone());
 
         let file_path = match self.resolve_module_path(segments) {
             Some(p) => p,
@@ -417,6 +442,8 @@ impl Interpreter {
                 self.env.define(name.clone(), imported_value);
             }
         }
+        // Cache the module env so subsequent filtered imports can pull names from it
+        self.loaded_module_envs.insert(module_key, module_env);
         Ok(())
     }
 
@@ -7138,5 +7165,76 @@ fn main() -> Int {
 "#;
         let result = parse_and_eval(source).unwrap();
         assert!(matches!(result, Value::Int(42)));
+    }
+
+    #[test]
+    fn test_filtered_import_different_names_from_same_module() {
+        // Regression test: when module A imports {foo} from C, and then
+        // module B (the main module) imports {bar} from C, the second import
+        // should still bring `bar` into scope even though C was already loaded
+        // by A's transitive dependency.
+        use std::fs;
+
+        let tmp = std::env::temp_dir().join("astra_import_test");
+        let content_dir = tmp.join("content");
+        let _ = fs::create_dir_all(&content_dir);
+
+        // content/store.astra - has two functions
+        fs::write(
+            content_dir.join("store.astra"),
+            r#"module content.store
+
+fn build_store() -> Text {
+  "store_built"
+}
+
+fn get_all_modules() -> Text {
+  "all_modules"
+}
+"#,
+        )
+        .unwrap();
+
+        // content/loader.astra - imports only build_store from content.store
+        fs::write(
+            content_dir.join("loader.astra"),
+            r#"module content.loader
+import content.store.{build_store}
+
+fn load_all_content() -> Text {
+  build_store()
+}
+"#,
+        )
+        .unwrap();
+
+        // main module - imports from both loader and store with different names
+        let source = r#"module example
+import content.loader.{load_all_content}
+import content.store.{get_all_modules}
+
+fn main() -> Text {
+  get_all_modules()
+}
+"#;
+
+        let source_file = SourceFile::new(PathBuf::from("test.astra"), source.to_string());
+        let lexer = Lexer::new(&source_file);
+        let mut parser = Parser::new(lexer, source_file.clone());
+        let module = parser.parse_module().expect("parse failed");
+
+        let mut interpreter = Interpreter::new();
+        interpreter.add_search_path(tmp.clone());
+        let result = interpreter.eval_module(&module);
+
+        // Clean up
+        let _ = fs::remove_dir_all(&tmp);
+
+        let value = result.expect("should resolve get_all_modules from content.store");
+        assert!(
+            matches!(value, Value::Text(ref s) if s == "all_modules"),
+            "expected Text(\"all_modules\"), got {:?}",
+            value
+        );
     }
 }
