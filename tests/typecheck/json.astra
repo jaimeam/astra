@@ -1,0 +1,60 @@
+module test_typecheck_json
+
+# Json type annotations
+fn identity_json(data: Json) -> Json {
+  data
+}
+
+# json_parse returns Json
+fn parse_json_object() -> Json {
+  json_parse("{\"key\": \"value\"}")
+}
+
+# json_stringify returns Text
+fn stringify_json(data: Json) -> Text {
+  json_stringify(data)
+}
+
+# Json is compatible with concrete types
+fn json_to_int(data: Json) -> Int {
+  data
+}
+
+fn json_to_text(data: Json) -> Text {
+  data
+}
+
+fn json_to_bool(data: Json) -> Bool {
+  data
+}
+
+# json_stringify accepts any type
+fn stringify_int() -> Text {
+  json_stringify(42)
+}
+
+fn stringify_text() -> Text {
+  json_stringify("hello")
+}
+
+fn stringify_list() -> Text {
+  json_stringify([1, 2, 3])
+}
+
+# Field access on Json returns Json
+fn json_field_access() -> Json {
+  let obj = json_parse("{\"name\": \"Astra\"}")
+  obj.name
+}
+
+# Index access on Json returns Json
+fn json_index_access() -> Json {
+  let arr = json_parse("[1, 2, 3]")
+  arr[0]
+}
+
+# Roundtrip: parse then stringify
+fn json_roundtrip() -> Text {
+  let data = json_parse("{\"x\": 1}")
+  json_stringify(data)
+}
