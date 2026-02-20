@@ -24,3 +24,8 @@ test "multiple deterministic effects" using effects(Clock = Clock.fixed(999), Ra
   assert_eq(time, 999)
   assert_eq(random, 8)
 }
+
+test "Clock.today returns date string" using effects(Clock = Clock.fixed(1700000000000)) {
+  let today = Clock.today()
+  assert_eq(today, "2023-11-14")
+}

@@ -351,11 +351,10 @@ impl Interpreter {
             if let Some(invariant) = &type_def.invariant {
                 let invariant = invariant.clone();
                 // Evaluate invariant with `self` bound to the value
-                let old_env = self.env.clone();
-                self.env = self.env.child();
+                self.env.push_scope();
                 self.env.define("self".to_string(), value.clone());
                 let result = self.eval_expr(&invariant);
-                self.env = old_env;
+                self.env.pop_scope();
 
                 match result {
                     Ok(Value::Bool(true)) => Ok(()),
@@ -436,8 +435,7 @@ impl Interpreter {
 
         // Load ALL module definitions into a temporary child environment so that
         // internal dependencies between module functions are preserved.
-        let saved_env = self.env.clone();
-        self.env = saved_env.child();
+        let saved_env = std::mem::replace(&mut self.env, Environment::new());
         self.load_module(&imported_module)?;
         let module_env = self.env.clone();
         self.env = saved_env;
@@ -482,10 +480,9 @@ impl Interpreter {
         if let Some(Value::Closure { params, body, .. }) = self.env.lookup("main").cloned() {
             if params.is_empty() {
                 // Execute in a child of the global environment
-                let call_env = self.env.child();
-                let old_env = std::mem::replace(&mut self.env, call_env);
+                self.env.push_scope();
                 let result = self.eval_block(&body.block);
-                self.env = old_env;
+                self.env.pop_scope();
                 // Handle early returns from ? operator
                 return match result {
                     Err(e) if e.is_early_return() => Ok(e.get_early_return().unwrap()),
@@ -1052,34 +1049,33 @@ impl Interpreter {
                 let val = self.eval_expr(expr)?;
                 for arm in arms {
                     if let Some(bindings) = match_pattern(&arm.pattern, &val) {
-                        // Create new environment with pattern bindings
-                        let mut match_env = self.env.child();
+                        // Create new scope with pattern bindings
+                        self.env.push_scope();
                         for (name, value) in bindings {
-                            match_env.define(name, value);
+                            self.env.define(name, value);
                         }
 
                         // Check guard if present
                         if let Some(guard) = &arm.guard {
-                            let old_env = std::mem::replace(&mut self.env, match_env.clone());
                             let guard_val = self.eval_expr(guard)?;
-                            self.env = old_env;
                             match guard_val {
                                 Value::Bool(true) => {}
-                                Value::Bool(false) => continue,
+                                Value::Bool(false) => {
+                                    self.env.pop_scope();
+                                    continue;
+                                }
                                 _ => {
+                                    self.env.pop_scope();
                                     return Err(RuntimeError::type_mismatch(
                                         "Bool",
                                         &format!("{:?}", guard_val),
-                                    ))
+                                    ));
                                 }
                             }
                         }
 
-                        let mut old_env = std::mem::replace(&mut self.env, match_env);
                         let result = self.eval_expr(&arm.body);
-                        // Propagate mutations from match arm scope back to parent
-                        old_env.propagate_from_child(&self.env);
-                        self.env = old_env;
+                        self.env.pop_scope();
                         return result;
                     }
                 }
@@ -1502,21 +1498,14 @@ impl Interpreter {
     /// Evaluate a block
     pub fn eval_block(&mut self, block: &Block) -> Result<Value, RuntimeError> {
         // Create a new scope for the block
-        let mut old_env = self.env.clone();
-        self.env = self.env.child();
+        self.env.push_scope();
 
         // Execute all statements
         for stmt in &block.stmts {
             match self.eval_stmt(stmt) {
                 Ok(()) => {}
-                Err(e) if e.is_return => {
-                    // Propagate mutations back before returning
-                    old_env.propagate_from_child(&self.env);
-                    self.env = old_env;
-                    return Err(e);
-                }
                 Err(e) => {
-                    self.env = old_env;
+                    self.env.pop_scope();
                     return Err(e);
                 }
             }
@@ -1524,14 +1513,18 @@ impl Interpreter {
 
         // Evaluate trailing expression or return Unit
         let result = if let Some(expr) = &block.expr {
-            self.eval_expr(expr)?
+            match self.eval_expr(expr) {
+                Ok(val) => val,
+                Err(e) => {
+                    self.env.pop_scope();
+                    return Err(e);
+                }
+            }
         } else {
             Value::Unit
         };
 
-        // Propagate mutations from child scope back to parent
-        old_env.propagate_from_child(&self.env);
-        self.env = old_env;
+        self.env.pop_scope();
         Ok(result)
     }
 
@@ -1690,22 +1683,23 @@ impl Interpreter {
                     && Self::has_self_tail_call(&body.block, fn_name);
 
                 let mut current_args = args;
-                let mut last_call_env: Option<Environment> = None;
+                let uses_closure_env = !env.is_empty();
 
                 let result = 'tco: loop {
-                    // Determine parent environment
-                    let parent_env = if env.bindings.is_empty() && env.parent.is_none() {
-                        &self.env
+                    // Swap to closure env if needed, otherwise use current env
+                    let saved_env = if uses_closure_env {
+                        Some(std::mem::replace(&mut self.env, env.clone()))
                     } else {
-                        &env
+                        None
                     };
 
-                    // Create new environment with appropriate parent
-                    let mut call_env = parent_env.child();
+                    // Push a new scope for params and local bindings
+                    self.env.push_scope();
+
                     // For named closures, define self in the call env to enable recursion
                     if let Some(ref fn_name_str) = name {
-                        if call_env.lookup(fn_name_str).is_none() {
-                            call_env.define(
+                        if self.env.lookup(fn_name_str).is_none() {
+                            self.env.define(
                                 fn_name_str.clone(),
                                 Value::Closure {
                                     name: name.clone(),
@@ -1717,22 +1711,27 @@ impl Interpreter {
                         }
                     }
                     for (param, arg) in params.iter().zip(current_args.iter().cloned()) {
-                        call_env.define(param.clone(), arg);
+                        self.env.define(param.clone(), arg);
                     }
 
                     // Check preconditions (requires clauses)
                     if !body.requires.is_empty() {
-                        let old_env = std::mem::replace(&mut self.env, call_env.clone());
                         for req_expr in &body.requires {
                             let cond = self.eval_expr(req_expr)?;
                             match cond {
                                 Value::Bool(true) => {}
                                 Value::Bool(false) => {
-                                    self.env = old_env;
+                                    self.env.pop_scope();
+                                    if let Some(saved) = saved_env {
+                                        self.env = saved;
+                                    }
                                     return Err(RuntimeError::precondition_violated(fn_name));
                                 }
                                 _ => {
-                                    self.env = old_env;
+                                    self.env.pop_scope();
+                                    if let Some(saved) = saved_env {
+                                        self.env = saved;
+                                    }
                                     return Err(RuntimeError::type_mismatch(
                                         "Bool",
                                         &format!("{:?}", cond),
@@ -1740,16 +1739,7 @@ impl Interpreter {
                                 }
                             }
                         }
-                        self.env = old_env;
                     }
-
-                    // Save call_env for postcondition checking
-                    if !body.ensures.is_empty() {
-                        last_call_env = Some(call_env.clone());
-                    }
-
-                    // Execute the body
-                    let old_env = std::mem::replace(&mut self.env, call_env);
 
                     if use_tco {
                         // TCO path: execute statements, then check tail expression
@@ -1767,33 +1757,51 @@ impl Interpreter {
                                 if let Some(expr) = &body.block.expr {
                                     match self.eval_expr_tco(expr, fn_name) {
                                         Ok(TcoResult::Value(val)) => {
-                                            self.env = old_env;
+                                            self.env.pop_scope();
+                                            if let Some(saved) = saved_env {
+                                                self.env = saved;
+                                            }
                                             break 'tco Ok(val);
                                         }
                                         Ok(TcoResult::TailCall(new_args)) => {
-                                            self.env = old_env;
+                                            self.env.pop_scope();
+                                            if let Some(saved) = saved_env {
+                                                self.env = saved;
+                                            }
                                             current_args = new_args;
                                             continue 'tco;
                                         }
                                         Err(e) => {
-                                            self.env = old_env;
+                                            self.env.pop_scope();
+                                            if let Some(saved) = saved_env {
+                                                self.env = saved;
+                                            }
                                             break 'tco Err(e);
                                         }
                                     }
                                 } else {
-                                    self.env = old_env;
+                                    self.env.pop_scope();
+                                    if let Some(saved) = saved_env {
+                                        self.env = saved;
+                                    }
                                     break 'tco Ok(Value::Unit);
                                 }
                             }
                             Err(e) => {
-                                self.env = old_env;
+                                self.env.pop_scope();
+                                if let Some(saved) = saved_env {
+                                    self.env = saved;
+                                }
                                 break 'tco Err(e);
                             }
                         }
                     } else {
-                        // Normal path
+                        // Normal path: eval_block pushes its own scope
                         let result = self.eval_block(&body.block);
-                        self.env = old_env;
+                        self.env.pop_scope();
+                        if let Some(saved) = saved_env {
+                            self.env = saved;
+                        }
                         break 'tco result;
                     }
                 };
@@ -1818,20 +1826,33 @@ impl Interpreter {
 
                 // Check postconditions (ensures clauses)
                 if !body.ensures.is_empty() {
-                    // Use the call env (which has param bindings) and add `result`
-                    let mut ensures_env = last_call_env.unwrap();
-                    ensures_env.define("result".to_string(), result.clone());
-                    let old_env = std::mem::replace(&mut self.env, ensures_env);
+                    // Re-evaluate in closure env with params + result
+                    let saved_env = if uses_closure_env {
+                        Some(std::mem::replace(&mut self.env, env.clone()))
+                    } else {
+                        None
+                    };
+                    self.env.push_scope();
+                    for (param, arg) in params.iter().zip(current_args.iter()) {
+                        self.env.define(param.clone(), arg.clone());
+                    }
+                    self.env.define("result".to_string(), result.clone());
                     for ens_expr in &body.ensures {
                         let cond = self.eval_expr(ens_expr)?;
                         match cond {
                             Value::Bool(true) => {}
                             Value::Bool(false) => {
-                                self.env = old_env;
+                                self.env.pop_scope();
+                                if let Some(saved) = saved_env {
+                                    self.env = saved;
+                                }
                                 return Err(RuntimeError::postcondition_violated(fn_name));
                             }
                             _ => {
-                                self.env = old_env;
+                                self.env.pop_scope();
+                                if let Some(saved) = saved_env {
+                                    self.env = saved;
+                                }
                                 return Err(RuntimeError::type_mismatch(
                                     "Bool",
                                     &format!("{:?}", cond),
@@ -1839,7 +1860,10 @@ impl Interpreter {
                             }
                         }
                     }
-                    self.env = old_env;
+                    self.env.pop_scope();
+                    if let Some(saved) = saved_env {
+                        self.env = saved;
+                    }
                 }
 
                 // Pop call stack frame
@@ -1908,17 +1932,19 @@ impl Interpreter {
                 match cond_val {
                     Value::Bool(true) => {
                         // Execute then branch with TCO awareness
-                        let old_env = self.env.clone();
-                        self.env = self.env.child();
+                        self.env.push_scope();
                         for stmt in &then_branch.stmts {
-                            self.eval_stmt(stmt)?;
+                            if let Err(e) = self.eval_stmt(stmt) {
+                                self.env.pop_scope();
+                                return Err(e);
+                            }
                         }
                         let result = if let Some(tail_expr) = &then_branch.expr {
                             self.eval_expr_tco(tail_expr, fn_name)
                         } else {
                             Ok(TcoResult::Value(Value::Unit))
                         };
-                        self.env = old_env;
+                        self.env.pop_scope();
                         result
                     }
                     Value::Bool(false) => {
@@ -1935,17 +1961,19 @@ impl Interpreter {
                 }
             }
             Expr::Block { block, .. } => {
-                let old_env = self.env.clone();
-                self.env = self.env.child();
+                self.env.push_scope();
                 for stmt in &block.stmts {
-                    self.eval_stmt(stmt)?;
+                    if let Err(e) = self.eval_stmt(stmt) {
+                        self.env.pop_scope();
+                        return Err(e);
+                    }
                 }
                 let result = if let Some(tail_expr) = &block.expr {
                     self.eval_expr_tco(tail_expr, fn_name)
                 } else {
                     Ok(TcoResult::Value(Value::Unit))
                 };
-                self.env = old_env;
+                self.env.pop_scope();
                 result
             }
             _ => {
@@ -2268,6 +2296,7 @@ impl Interpreter {
                     Err(RuntimeError::type_mismatch("Int", "other"))
                 }
             }
+            "today" => Ok(Value::Text(clock.today())),
             _ => Err(RuntimeError::unknown_method("Clock", method)),
         }
     }

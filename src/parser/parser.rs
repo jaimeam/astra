@@ -1379,8 +1379,17 @@ impl<'a> Parser<'a> {
                         span: start_span.merge(&end_span),
                         fields,
                     });
+                } else if self.check(TokenKind::RBrace) {
+                    // Single-field record: `{ name = expr }`
+                    self.advance();
+                    let end_span = self.current_span();
+                    return Ok(Expr::Record {
+                        id: NodeId::new(),
+                        span: start_span.merge(&end_span),
+                        fields: vec![(ident_name, Box::new(value))],
+                    });
                 } else {
-                    // No comma → block with assignment statement
+                    // No comma, not closing brace → block with assignment statement
                     let target = Expr::Ident {
                         id: NodeId::new(),
                         span: ident_span,
