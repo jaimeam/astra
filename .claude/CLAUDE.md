@@ -146,9 +146,28 @@ When adding a new built-in:
 See `docs/adr/ADR-005-builtin-type-sync.md` for the full rationale (born from a bug where
 `json_parse`/`json_stringify` had runtime implementations but no type checker entries).
 
+## File Size & Organization
+
+**Keep source files under ~500 lines of implementation code.** When a file grows beyond
+this, split logically related code into submodules (see `src/interpreter/` for an example
+of extracting `methods.rs`, `modules.rs`, `json.rs`, `regex.rs`, `pattern.rs`).
+
+Guidelines:
+- **Tests go in separate files**, not inline `#[cfg(test)] mod tests` blocks.
+  - For directory modules (`foo/mod.rs`): create `foo/tests.rs`
+  - For file modules (`foo.rs`): use `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`
+    and create the sibling `foo_tests.rs`
+- **Split `impl` blocks across files** when a struct has many methods — Rust allows
+  multiple `impl` blocks for the same type across files in the same crate module.
+- **Extract standalone functions** (those that don't take `&self`) into topic-specific
+  submodules when they form a coherent group (e.g., JSON, regex, pattern matching).
+- Use `pub(super)` or `pub(crate)` visibility for extracted code that shouldn't be
+  part of the public API.
+
 ## Testing Requirements
 
 - All new features need tests
 - Golden tests for parser/formatter output
 - Property tests for core algorithms where applicable
 - Tests must be deterministic (seeded randomness, fixed time)
+- **Tests live in separate files** (see "File Size & Organization" above)
