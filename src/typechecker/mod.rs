@@ -1598,7 +1598,25 @@ impl TypeChecker {
                     | BinaryOp::Lt
                     | BinaryOp::Le
                     | BinaryOp::Gt
-                    | BinaryOp::Ge => Type::Bool,
+                    | BinaryOp::Ge => {
+                        if left_ty != Type::Unknown
+                            && right_ty != Type::Unknown
+                            && !self.types_compatible(&left_ty, &right_ty)
+                        {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                                )
+                                .message(format!(
+                                    "Cannot compare `{}` with `{}`",
+                                    format_type(&left_ty),
+                                    format_type(&right_ty)
+                                ))
+                                .build(),
+                            );
+                        }
+                        Type::Bool
+                    }
                     // Logical operators return Bool
                     BinaryOp::And | BinaryOp::Or => Type::Bool,
                     // Arithmetic operators
@@ -1700,6 +1718,60 @@ impl TypeChecker {
                     .iter()
                     .map(|arg| self.check_expr_with_effects(arg, env, effects))
                     .collect();
+
+                // Handle overloaded built-in functions whose return type
+                // depends on the argument type (to_int, to_float).
+                if let Expr::Ident { name, .. } = func.as_ref() {
+                    match name.as_str() {
+                        "to_int" => {
+                            if arg_types.len() == 1 {
+                                return match &arg_types[0] {
+                                    Type::Text => Type::Option(Box::new(Type::Int)),
+                                    Type::Int | Type::Float | Type::Bool => Type::Int,
+                                    Type::Unknown => Type::Unknown,
+                                    other => {
+                                        self.diagnostics.push(
+                                            Diagnostic::error(
+                                                crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                                            )
+                                            .message(format!(
+                                                "Type mismatch in argument 1: expected `Int`, `Float`, `Text`, or `Bool`, found `{}`",
+                                                format_type(other)
+                                            ))
+                                            .span(args[0].span().clone())
+                                            .build(),
+                                        );
+                                        Type::Unknown
+                                    }
+                                };
+                            }
+                        }
+                        "to_float" => {
+                            if arg_types.len() == 1 {
+                                return match &arg_types[0] {
+                                    Type::Text => Type::Option(Box::new(Type::Float)),
+                                    Type::Int | Type::Float => Type::Float,
+                                    Type::Unknown => Type::Unknown,
+                                    other => {
+                                        self.diagnostics.push(
+                                            Diagnostic::error(
+                                                crate::diagnostics::error_codes::types::TYPE_MISMATCH,
+                                            )
+                                            .message(format!(
+                                                "Type mismatch in argument 1: expected `Int`, `Float`, or `Text`, found `{}`",
+                                                format_type(other)
+                                            ))
+                                            .span(args[0].span().clone())
+                                            .build(),
+                                        );
+                                        Type::Unknown
+                                    }
+                                };
+                            }
+                        }
+                        _ => {}
+                    }
+                }
 
                 if let Type::Function {
                     params,

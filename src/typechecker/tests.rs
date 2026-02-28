@@ -1563,3 +1563,106 @@ fn extract_typechecker_builtins(src: &str) -> Vec<String> {
     }
     names
 }
+
+#[test]
+fn test_to_int_text_returns_option_int() {
+    // to_int(Text) returns Option[Int], comparing with Int must be a type error
+    let result = check_module(
+        r#"
+module example
+fn main() -> Bool {
+  to_int("5") < 10
+}
+"#,
+    );
+    assert!(
+        result.is_err(),
+        "to_int(Text) < Int should be a type error (Option[Int] vs Int)"
+    );
+}
+
+#[test]
+fn test_to_float_text_returns_option_float() {
+    // to_float(Text) returns Option[Float], comparing with Float must be a type error
+    let result = check_module(
+        r#"
+module example
+fn main() -> Bool {
+  to_float("3.14") < 1.0
+}
+"#,
+    );
+    assert!(
+        result.is_err(),
+        "to_float(Text) < Float should be a type error (Option[Float] vs Float)"
+    );
+}
+
+#[test]
+fn test_to_int_from_int_returns_int() {
+    // to_int(Int) returns Int, so comparing with Int is fine
+    let result = check_module(
+        r#"
+module example
+fn main() -> Bool {
+  to_int(5) < 10
+}
+"#,
+    );
+    assert!(
+        result.is_ok(),
+        "to_int(Int) < Int should type-check: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_to_int_from_float_returns_int() {
+    // to_int(Float) returns Int
+    let result = check_module(
+        r#"
+module example
+fn main() -> Bool {
+  to_int(3.14) < 10
+}
+"#,
+    );
+    assert!(
+        result.is_ok(),
+        "to_int(Float) < Int should type-check: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_to_float_from_int_returns_float() {
+    // to_float(Int) returns Float
+    let result = check_module(
+        r#"
+module example
+fn main() -> Bool {
+  to_float(5) < 1.0
+}
+"#,
+    );
+    assert!(
+        result.is_ok(),
+        "to_float(Int) < Float should type-check: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_comparison_type_mismatch_option_vs_int() {
+    // Option[Int] cannot be compared with Int
+    let result = check_module(
+        r#"
+module example
+fn main() -> Bool {
+  let x: Option[Int] = Some(5)
+  x < 10
+}
+"#,
+    );
+    assert!(result.is_err(), "Option[Int] < Int should be a type error");
+}

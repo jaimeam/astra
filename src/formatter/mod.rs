@@ -535,7 +535,12 @@ impl Formatter {
                 self.write(&value.to_string());
             }
             Expr::FloatLit { value, .. } => {
-                self.write(&format!("{}", value));
+                let s = format!("{}", value);
+                if s.contains('.') {
+                    self.write(&s);
+                } else {
+                    self.write(&format!("{}.0", s));
+                }
             }
             Expr::BoolLit { value, .. } => {
                 self.write(if *value { "true" } else { "false" });
@@ -811,7 +816,12 @@ impl Formatter {
                 self.write(&value.to_string());
             }
             Pattern::FloatLit { value, .. } => {
-                self.write(&format!("{}", value));
+                let s = format!("{}", value);
+                if s.contains('.') {
+                    self.write(&s);
+                } else {
+                    self.write(&format!("{}.0", s));
+                }
             }
             Pattern::BoolLit { value, .. } => {
                 self.write(if *value { "true" } else { "false" });

@@ -177,3 +177,38 @@ fn test_escape_string_function() {
     assert_eq!(escape_string("tab\there"), "tab\\there");
     assert_eq!(escape_string("back\\slash"), "back\\\\slash");
 }
+
+#[test]
+fn test_float_literal_zero_preserves_decimal() {
+    let output = format_source("module example\n\nfn main() -> Float {\n  0.0\n}\n");
+    assert!(
+        output.contains("0.0"),
+        "Float literal 0.0 must be preserved, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("  0\n"),
+        "Float literal 0.0 must not be reduced to Int 0, got: {}",
+        output
+    );
+}
+
+#[test]
+fn test_float_literal_nonzero_preserves_decimal() {
+    let output = format_source("module example\n\nfn main() -> Float {\n  1.0\n}\n");
+    assert!(
+        output.contains("1.0"),
+        "Float literal 1.0 must be preserved, got: {}",
+        output
+    );
+}
+
+#[test]
+fn test_float_literal_with_fraction() {
+    let output = format_source("module example\n\nfn main() -> Float {\n  3.14\n}\n");
+    assert!(
+        output.contains("3.14"),
+        "Float literal 3.14 must be preserved, got: {}",
+        output
+    );
+}
