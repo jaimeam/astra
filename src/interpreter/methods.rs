@@ -226,6 +226,18 @@ impl Interpreter {
                         (full_url.clone(), Value::Map(Vec::new()))
                     };
 
+                    // Extract headers
+                    let headers_map: Vec<(Value, Value)> = request
+                        .headers()
+                        .iter()
+                        .map(|h| {
+                            (
+                                Value::Text(h.field.to_string()),
+                                Value::Text(h.value.as_str().to_string()),
+                            )
+                        })
+                        .collect();
+
                     // Read body
                     let mut body_buf = String::new();
                     let _ = request.as_reader().read_to_string(&mut body_buf);
@@ -236,6 +248,7 @@ impl Interpreter {
                         m.insert("path".to_string(), Value::Text(path_str));
                         m.insert("body".to_string(), Value::Text(body_buf));
                         m.insert("query".to_string(), query_map);
+                        m.insert("headers".to_string(), Value::Map(headers_map));
                         m
                     });
 
