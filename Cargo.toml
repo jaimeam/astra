@@ -1,6 +1,6 @@
 [package]
 name = "astra"
-version = "0.1.1"
+version = "1.0.0"
 edition = "2021"
 description = "Astra programming language - an LLM/Agent-native language"
 license = "MIT OR Apache-2.0"

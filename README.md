@@ -27,8 +27,8 @@ Plus the building blocks you'd expect:
 - **No null** - `Option[T]` with exhaustive matching; compiler catches missing cases
 - **Typed error handling** - `Result[T, E]` with `?` and `?else` for concise propagation
 - **Canonical formatting** - mandatory built-in formatter, no configuration
-- **JSON / regex / async** - built into the standard library
-- **Package management** - `astra pkg` for dependency management
+- **JSON / regex** - built into the standard library
+- **15 stdlib modules** - from `std.math` to `std.datetime` and `std.path`
 
 ```
 LLM generates code -> astra check -> JSON errors with fix suggestions -> LLM applies fixes -> repeat until passing
@@ -127,33 +127,11 @@ let cleaned = replace("\\s+", "  too   many   spaces  ", " ")
 let words = "hello world".split_pattern("\\s+")
 ```
 
-### Async/Await
+### Planned for v1.1
 
-Functions can be declared `async` and their results can be `await`ed. Calling an async function returns a `Future` value; `await` resolves it.
-
-```astra
-async fn fetch_data(url: Text) -> Text {
-  Net.get(url)
-}
-
-fn main() effects(Net) {
-  let data = await fetch_data("https://api.example.com/data")
-  println(data)
-}
-```
-
-### Package Management
-
-The `astra pkg` commands manage dependencies declared in `astra.toml`. Supports path, git, and registry dependencies with lockfile generation.
-
-```bash
-astra pkg add mylib --version "1.0"
-astra pkg add local-lib --path "../lib"
-astra pkg add remote-lib --git "https://github.com/example/lib"
-astra pkg install
-astra pkg list
-astra pkg remove mylib
-```
+- **Async/Await** — `async fn` and `await` syntax is reserved; full implementation coming in v1.1
+- **Package Manager** — `astra pkg` command exists; dependency resolution coming in v1.1
+- See [ADR-007](docs/adr/ADR-007-defer-async-pkg-to-v1.1.md) for rationale
 
 ## CLI Commands
 
@@ -169,22 +147,23 @@ astra pkg remove mylib
 | `astra init <name>` | Scaffold a new project |
 | `astra doc [files...]` | Generate API documentation |
 | `astra lsp` | Start LSP server |
-| `astra pkg install` | Install dependencies from astra.toml |
-| `astra pkg add <name>` | Add a dependency |
-| `astra pkg remove <name>` | Remove a dependency |
-| `astra pkg list` | List installed packages |
+| `astra pkg` | Package management (v1.1) |
 
 ## Documentation
 
-- **[Why Astra?](docs/why-astra.md)** - The case for an LLM-native language
-- [Getting Started](docs/getting-started.md) - Tutorial for your first Astra program
-- [Astra by Example](docs/examples.md) - Cookbook of common patterns and idioms
-- [Language Specification](docs/spec.md) - Complete syntax and semantics reference
-- [Effects System](docs/effects.md) - Guide to Astra's capability-based effects
-- [Testing Guide](docs/testing.md) - How to write and run tests
-- [Standard Library](docs/stdlib.md) - API reference for built-in types and functions
-- [Error Codes Reference](docs/errors.md) - All error codes with examples and fixes
-- [Formatting Rules](docs/formatting.md) - Canonical formatting specification
+- **[Why Astra?](docs/why-astra.md)** — The case for an LLM-native language
+- [Getting Started](docs/getting-started.md) — Tutorial for your first Astra program
+- [Astra by Example](docs/examples.md) — Cookbook of common patterns and idioms
+- [Language Specification](docs/spec.md) — Complete syntax and semantics reference
+- [Formal Grammar](docs/grammar.md) — EBNF grammar for the language
+- [Effects System](docs/effects.md) — Guide to Astra's capability-based effects
+- [Testing Guide](docs/testing.md) — How to write and run tests
+- [Standard Library](docs/stdlib.md) — API reference for built-in types and functions
+- [Error Codes Reference](docs/errors.md) — All error codes with examples and fixes
+- [Formatting Rules](docs/formatting.md) — Canonical formatting specification
+- [Performance](docs/performance.md) — Performance characteristics and guidance
+- [Stability Guarantee](docs/stability.md) — v1.0 stability promises
+- [Changelog](CHANGELOG.md) — Version history
 
 ## Project Structure
 
@@ -203,13 +182,15 @@ astra/
 └── examples/            # Example programs
 ```
 
-## Known Limitations
+## Known Limitations (v1.0)
 
-- **Traits are runtime-dispatched** - Trait method calls are resolved at runtime, not compile time. The type checker validates trait impl blocks but does not resolve trait methods on arbitrary expressions. Incorrect trait usage is caught at runtime.
+- **Interpreted only** — Tree-walking interpreter. Adequate for scripts and tools, not for compute-heavy workloads. See [docs/performance.md](docs/performance.md).
+- **Traits are runtime-dispatched** — The type checker validates trait impl blocks, but trait method calls are resolved at runtime.
+- **No debugger** — Use `println`, `assert`/`assert_eq`, and `test` blocks for debugging.
+- **Async/await not yet functional** — Syntax is reserved for v1.1.
+- **Package manager not yet functional** — `astra pkg` exists but resolution is not implemented until v1.1.
 
-- **Interpreted only** - All execution is via a tree-walking interpreter. Performance is adequate for small and medium programs but not suitable for compute-heavy workloads. For performance-critical code, consider calling out to external tools via effects.
-
-- **No debugger** - There is no step-through debugger. Use `println` for debugging output, `assert`/`assert_eq` for runtime checks, and `test` blocks for verifying behavior.
+See [docs/stability.md](docs/stability.md) for the v1.0 stability guarantee.
 
 ## Contributing
 
