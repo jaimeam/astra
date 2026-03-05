@@ -10,11 +10,13 @@
 
 | Dimension              | Status        | Details |
 |------------------------|---------------|---------|
-| **Rust toolchain**     | ~24,200 LOC   | Parser (3.9k), Type checker (4.2k), Interpreter (8.3k), plus formatter, CLI, diagnostics |
+| **Rust toolchain**     | ~24,200 LOC   | Parser (3.9k), Type checker (4.2k), Interpreter (8.3k), Formatter, CLI (1.8k), Diagnostics |
 | **Test suite**         | 392 tests     | 388 unit tests + 4 golden test suites (23 `.astra` golden files), all passing |
 | **Standard library**   | 13 modules    | core, prelude, option, result, error, list, collections, iter, string, regex, io, json, math |
 | **Examples**           | 15 programs   | From hello-world to a multi-module task tracker project |
-| **Documentation**      | 14 docs       | Spec, stdlib reference, error codes, 5 ADRs, getting-started guide, examples cookbook |
+| **Documentation**      | 14 docs       | Spec, stdlib reference, 57 error codes, 5 ADRs, getting-started guide, examples cookbook |
+| **CLI commands**       | 11 commands   | fmt, check, test, run, repl, init, doc, fix, explain, pkg, lsp |
+| **Error codes**        | 57 codes      | E0xxx (syntax), E1xxx (type), E2xxx (effect), E3xxx (contract), E4xxx (runtime), W0xxx (warnings) |
 
 ---
 
@@ -30,7 +32,7 @@
 - **Traits & impl blocks**: User-defined trait interfaces with method dispatch
 - **Closures/lambdas**: First-class functions with captured environments
 - **Pipe operator**: `x |> f` for functional composition
-- **String interpolation**: `"Hello, ${name}!"`
+- **String interpolation**: `"Hello, ${name}!"` with escape sequences
 - **Error propagation**: `?` and `?else` operators on Option/Result
 - **Modules & imports**: Multi-file programs, selective imports, aliasing, re-exports
 - **Mutable bindings**: `let mut` with compound assignment (`+=`, `-=`, etc.)
@@ -40,136 +42,154 @@
 
 ### Built-in Operations (50+ built-in functions)
 - **Numeric**: `abs`, `min`, `max`, `pow`, `sqrt`, `floor`, `ceil`, `round`, `range`
-- **String**: 15+ methods (split, replace, trim, contains, starts_with, etc.)
+- **String**: 15+ methods (split, replace, trim, contains, starts_with, regex methods, etc.)
 - **List**: 25+ methods (map, filter, fold, flat_map, sort, zip, enumerate, etc.)
 - **Map/Set**: Full CRUD plus set operations (union, intersection)
 - **JSON**: `json_parse`, `json_stringify`
 - **Regex**: `regex_match`, `regex_find_all`, `regex_replace`, `regex_split`, `regex_is_match`
 - **I/O**: File read/write, HTTP GET/POST, HTTP server (`Net.serve`), env vars, CLI args
 
-### Tooling
-- **Formatter**: `astra fmt` — canonical code formatting
-- **Type checker**: `astra check` — static analysis with lint warnings (W0xxx)
-- **Test runner**: `astra test` — runs test blocks with deterministic effect injection
-- **Interpreter**: `astra run` — execute programs
-- **Diagnostics**: 40+ error codes (E0xxx–E4xxx) with spans, suggestions, and machine-actionable fixes
+### Tooling (Comprehensive)
+- **Formatter**: `astra fmt` — canonical code formatting (idempotent, no config disputes)
+- **Type checker**: `astra check` — static analysis with lint warnings (W0xxx), `--watch` mode, incremental caching
+- **Test runner**: `astra test` — test blocks with deterministic effect injection, `--filter`, `--seed`, `--watch`
+- **Interpreter**: `astra run` — execute programs with real capabilities
+- **REPL**: `astra repl` — interactive exploration
+- **Project init**: `astra init` / `astra init --lib` — scaffold new projects
+- **Doc generator**: `astra doc` — API documentation (markdown/html)
+- **Auto-fixer**: `astra fix` — auto-apply diagnostic suggestions, `--dry-run`
+- **Error explainer**: `astra explain E1001` — detailed explanations for all 57 error codes
+- **Package manager**: `astra pkg` — install, add, remove, list (marked v1.1)
+- **LSP server**: `astra lsp` — IDE integration
+- **Diagnostics**: 57 error codes (E0xxx–W0xxx) with spans, suggestions, machine-actionable fixes, JSON output (`--json`)
 - **Pre-commit hooks**: Enforces fmt, clippy, and test on every commit
+
+### Testing Infrastructure
+- **Capability mocking**: `using effects(Rand = Rand.seeded(42), Clock = Clock.fixed(1000))` for deterministic tests
+- **Property testing**: `property` blocks with configurable iterations and seeds
+- **Golden tests**: Snapshot-based testing for parser, typechecker, effects, and runtime
+- **12 runtime test categories**: arithmetic, functions, control flow, loops, generics, destructuring, contracts, traits, effects, async, JSON, regex
 
 ---
 
-## Gap Analysis: What's Missing for v1.0
+## Gap Analysis: What Needs Attention for v1.0
 
-### Critical (Must Fix Before v1.0)
+### Critical (Must Resolve Before v1.0)
 
-1. **No package manager / dependency system**
-   Programs can import from `std.*` and local files, but there's no way to declare or fetch third-party dependencies. For a v1.0, at minimum a `astra.toml` manifest with dependency declaration and a resolution mechanism is needed.
+1. **Async/await completeness**
+   Async/await exists syntactically and `Future` is defined, but it appears to be a stub (v1.1 marker). For v1.0, either:
+   - Fully implement async with a runtime (event loop, concurrent futures)
+   - Explicitly defer it: remove from default feature set, document as experimental/v1.1
 
-2. **No compilation / performance story**
-   Astra is purely interpreted (tree-walking interpreter). For a v1.0 release:
-   - Performance benchmarks should be documented
-   - A clear stance on "interpreted is intentional" vs "compilation planned" should be stated
-   - At minimum, the interpreter should be profiled for pathological cases
+2. **Performance story**
+   Astra is a tree-walking interpreter. For a v1.0 release:
+   - Document performance expectations clearly ("scripting-speed, not systems-speed")
+   - Profile and benchmark common patterns
+   - Optimize hot paths (Map is O(n) Vec-of-pairs — consider hash-based implementation)
 
-3. **Limited error recovery in parser**
-   The parser appears to stop at the first error. For a v1.0 language with "machine-actionable diagnostics" as a design goal, multi-error recovery (reporting multiple errors per file) would significantly improve the developer experience.
+3. **Parser error recovery**
+   The parser appears to stop at the first error. For a language whose design goal is "machine-actionable diagnostics," multi-error recovery (reporting multiple errors per file) would significantly improve both developer and agent experience.
 
-4. **No REPL**
-   An interactive REPL is a standard expectation for a language with an interpreter. This is particularly important for an "agent-native" language where LLMs benefit from interactive exploration.
+4. **Package manager maturity**
+   `astra pkg` exists but is marked v1.1. For v1.0, at minimum:
+   - `astra.toml` dependency declaration should work
+   - Git-based or registry-based resolution should be functional
+   - If not ready, clearly document it as experimental
 
 ### Important (Strongly Recommended for v1.0)
 
-5. **Standard library completeness**
-   - **Missing**: Date/time manipulation (only `Clock.now()` and `Clock.today()`, no parsing/formatting)
+5. **Standard library gaps**
+   - **Missing**: Date/time manipulation (only `Clock.now()` and `Clock.today()`, no parsing/formatting/arithmetic)
    - **Missing**: File path utilities (join, dirname, basename, extension)
-   - **Missing**: Advanced string formatting (printf-style, number formatting)
+   - **Missing**: Advanced string formatting (printf-style, number formatting, padding beyond pad_left/pad_right)
    - **Missing**: Sorting with custom comparators on all collections
-   - **Missing**: HashMap/HashSet with proper hashing (current Map is a Vec of pairs — O(n) lookup)
+   - **Weak**: Map/Set use Vec internally — O(n) lookup instead of O(1)
 
-6. **No concurrency primitives**
-   Async/await exists syntactically but `Future` is a stub. For v1.0, either:
-   - Ship async as a fully working feature, or
-   - Remove it entirely and document it as post-v1.0
-
-7. **No debugging support**
+6. **Debugging support**
    - No `--debug` or `--trace` mode for step-through execution
-   - No stack trace on runtime errors (just error code + message)
-   - No source maps or breakpoint support
+   - Stack traces on runtime errors should show full call chain
+   - Source maps or breakpoint support would help adoption
 
-8. **Type system gaps**
-   - No intersection or union types
-   - No type narrowing after `is_some()`/`is_ok()` checks
+7. **Type system enhancements**
+   - No type narrowing after `is_some()`/`is_ok()` checks (flow-sensitive typing)
    - No associated types on traits
    - No default method implementations in traits
 
-9. **Documentation gaps**
-   - Language specification (`docs/spec.md`) should be fleshed out to cover all features
-   - No formal grammar (BNF/EBNF)
-   - No migration guide or changelog format
+8. **Documentation completeness**
+   - Language specification (`docs/spec.md`) should cover all features exhaustively
+   - Formal grammar (BNF/EBNF) needed for language lawyers and tool authors
+   - Changelog format and migration guide for version transitions
 
-### Nice to Have (Can Be Post-v1.0)
+### Nice to Have (Post-v1.0)
 
-10. **FFI / Host language interop** — Call Rust/WASM functions from Astra
-11. **LSP (Language Server Protocol)** — IDE support with autocomplete, go-to-definition
-12. **Playground / web REPL** — Try Astra in the browser (WASM target)
-13. **Property-based testing framework** — `property` blocks exist in syntax but implementation is unclear
-14. **Benchmarking built-in** — `bench` blocks for performance testing
-15. **Richer collection types** — Deque, PriorityQueue, SortedMap
-16. **Custom operators** — User-defined infix operators
+9. **FFI / Host language interop** — Call Rust/WASM functions from Astra
+10. **Playground / web REPL** — Try Astra in the browser (WASM target)
+11. **Benchmarking built-in** — `bench` blocks for performance testing
+12. **Richer collection types** — Deque, PriorityQueue, SortedMap, proper HashMap
+13. **Custom operators** — User-defined infix operators
+14. **Compilation target** — Bytecode VM or WASM compilation for performance
 
 ---
 
 ## v1.0 Release Recommendation
 
-### Verdict: **Not yet ready for v1.0, but close.**
+### Verdict: **Close to v1.0, with a few blockers to resolve.**
 
-Astra has a remarkably solid foundation for a language at this stage:
-- The core language is well-designed with clear principles
-- The type system + effect system is coherent and useful
-- Error diagnostics are excellent with stable error codes
-- The standard library covers essential functionality
-- Documentation quality is above average
-- The test suite is comprehensive with 392 passing tests
+Astra is in remarkably good shape:
 
-**However**, a v1.0 label carries a stability promise. The critical gaps — particularly the lack of a package manager, the purely interpreted performance story, and incomplete async — mean that users adopting Astra v1.0 would hit friction quickly on real-world projects.
+**Strengths:**
+- Complete, coherent language with types, effects, contracts, generics, and pattern matching
+- 11 CLI commands covering the full development lifecycle (fmt, check, test, run, repl, init, doc, fix, explain, pkg, lsp)
+- 57 error codes with detailed explanations and auto-fix suggestions
+- Deterministic testing with capability mocking
+- 392 passing tests across unit and golden test suites
+- Well-organized codebase with ADRs documenting design decisions
+- Standard library covering core functionality across 13 modules
+
+**Blockers for v1.0:**
+- Async and package management need to either work fully or be explicitly deferred
+- Parser needs multi-error recovery for the "agent-native" promise
+- Performance characteristics need documentation and basic optimization (Map/Set)
 
 ### Recommended Path to v1.0
 
-#### Phase 1: Stabilization (v0.9)
-- [ ] Decide async/await: ship it or defer it — no half-implemented features in v1.0
+#### Phase 1: Stabilization (current → v0.9)
+- [ ] Decide async/await: ship fully or explicitly defer to v1.1
+- [ ] Decide pkg: ship fully or explicitly defer to v1.1
 - [ ] Add multi-error recovery to the parser
-- [ ] Add a REPL (`astra repl`)
 - [ ] Improve stack traces on runtime errors
-- [ ] Fill stdlib gaps: date/time formatting, file paths, number formatting
+- [ ] Fill stdlib gaps: date/time formatting, file paths
+- [ ] Optimize Map/Set to use hash-based storage
 - [ ] Write a formal grammar (BNF)
-- [ ] Performance audit: benchmark the interpreter, document expected performance
+- [ ] Performance benchmarks and documentation
 
-#### Phase 2: Ecosystem (v0.95)
-- [ ] Design and implement `astra.toml` dependency declaration
-- [ ] Build a basic package registry or git-based dependency resolution
-- [ ] Add an LSP server (even minimal: diagnostics + go-to-definition)
-- [ ] Property test implementation (the syntax already exists)
+#### Phase 2: Polish (v0.9 → v1.0-rc)
+- [ ] Complete the language specification
+- [ ] Harden LSP for common IDE workflows
+- [ ] Add at least 3 non-trivial example projects
+- [ ] Publish a changelog and migration guide
+- [ ] Create a "v1.0 stability guarantee" document
 
 #### Phase 3: Release (v1.0)
 - [ ] Freeze all public APIs and error codes
-- [ ] Complete the language specification
-- [ ] Publish a changelog and migration guide
-- [ ] Create a "v1.0 stability guarantee" document
-- [ ] Ship with at least 3 non-trivial example projects
+- [ ] Final test pass across all platforms
+- [ ] Release announcement with documentation
 
 ---
 
 ## What Could Be Released Today
 
-If the goal is to get something into users' hands quickly, **Astra v0.1.0** (or v0.5.0) would be appropriate today. The language is fully functional for:
+Astra is fully functional **right now** for:
 - Educational use and language exploration
-- Small-to-medium scripts and tools
+- Small-to-medium scripts and automation tools
 - LLM/Agent code generation experiments
-- Teaching effect systems and contracts
+- Teaching effect systems, contracts, and capability-based security
+- Prototyping with deterministic, testable I/O
 
-A pre-1.0 version sets correct expectations while still inviting early adopters and contributors.
+A **v0.8.0** or **v0.9.0-beta** release would be appropriate today, signaling that the language is feature-complete and approaching stability, while setting expectations that some rough edges (async, pkg, performance) are still being polished.
 
 ---
 
 ## Decision
 
-**Recommended**: Release as **v0.5.0** (beta) now, targeting **v1.0** after completing Phases 1–3 above.
+**Recommended**: Release as **v0.9.0-beta** now, targeting **v1.0** after completing Phases 1–2 above. The language is closer to v1.0 than initially assessed — the tooling surface (REPL, LSP, pkg, doc, fix, explain) is already in place; the remaining work is stabilization and polish rather than greenfield development.
