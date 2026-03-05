@@ -1,0 +1,234 @@
+module examples.todo_app
+
+## A todo list application demonstrating records, enums, list operations,
+## the effect system, and contracts.
+
+enum Priority =
+  | Low
+  | Medium
+  | High
+  | Urgent
+
+enum Status =
+  | Pending
+  | InProgress
+  | Done
+
+## A single todo item with an id, title, priority, and status.
+type TodoItem = {
+  id: Int,
+  title: Text,
+  priority: Priority,
+  status: Status,
+}
+
+## Returns a human-readable label for a priority level.
+fn priority_label(p: Priority) -> Text
+{
+  match p {
+    Low => "low"
+    Medium => "medium"
+    High => "high"
+    Urgent => "URGENT"
+  }
+}
+
+## Returns a display character for a status.
+fn status_icon(s: Status) -> Text
+{
+  match s {
+    Pending => " "
+    InProgress => "~"
+    Done => "x"
+  }
+}
+
+## Creates a new todo item, ensuring the title is non-empty.
+fn create_todo(id: Int, title: Text, priority: Priority) -> Result[TodoItem, Text]
+  requires id > 0
+{
+  if title.len() == 0 {
+    Err("title cannot be empty")
+  } else {
+    Ok({
+      id = id,
+      title = title,
+      priority = priority,
+      status = Pending,
+    })
+  }
+}
+
+## Transitions a todo item to a new status.
+fn set_status(item: TodoItem, new_status: Status) -> TodoItem
+{
+  {
+    id = item.id,
+    title = item.title,
+    priority = item.priority,
+    status = new_status,
+  }
+}
+
+## Formats a single todo item for display.
+fn format_item(item: TodoItem) -> Text
+{
+  let icon = status_icon(item.status)
+  let prio = priority_label(item.priority)
+  "[${icon}] #${item.id} (${prio}) ${item.title}"
+}
+
+## Returns a numeric rank for a status, used for equality comparison.
+fn status_rank(s: Status) -> Int
+{
+  match s {
+    Pending => 0
+    InProgress => 1
+    Done => 2
+  }
+}
+
+## Returns a numeric rank for a priority, used for equality comparison.
+fn priority_rank(p: Priority) -> Int
+{
+  match p {
+    Low => 0
+    Medium => 1
+    High => 2
+    Urgent => 3
+  }
+}
+
+## Counts items matching a given status.
+fn count_by_status(items: List[TodoItem], target: Status) -> Int
+{
+  let target_rank = status_rank(target)
+  items.filter(fn(item) {
+    status_rank(item.status) == target_rank
+  }).len()
+}
+
+## Returns only items with the given priority.
+fn filter_by_priority(items: List[TodoItem], target: Priority) -> List[TodoItem]
+{
+  let target_rank = priority_rank(target)
+  items.filter(fn(item) {
+    priority_rank(item.priority) == target_rank
+  })
+}
+
+## Builds a summary report of all todos.
+fn summary(items: List[TodoItem]) -> Text
+  ensures result.len() > 0
+{
+  let total = items.len()
+  let done = count_by_status(items, Done)
+  let pending = count_by_status(items, Pending)
+  let in_progress = count_by_status(items, InProgress)
+  "Total: ${total} | Done: ${done} | In Progress: ${in_progress} | Pending: ${pending}"
+}
+
+## Prints all todos and a summary to the console.
+fn print_todos(items: List[TodoItem])
+  effects(Console)
+{
+  Console.println("=== Todo List ===")
+  for item in items {
+    Console.println("  ${format_item(item)}")
+  }
+  Console.println(summary(items))
+}
+
+fn main()
+  effects(Console)
+{
+  let t1 = create_todo(1, "Write parser module", High)
+  let t2 = create_todo(2, "Add unit tests", Medium)
+  let t3 = create_todo(3, "Update README", Low)
+  let t4 = create_todo(4, "Fix critical bug", Urgent)
+
+  let mut todos = []
+  for result in [t1, t2, t3, t4] {
+    match result {
+      Ok(item) => { todos = todos + [item] }
+      Err(e) => Console.println("Error: ${e}")
+    }
+  }
+
+  ## Mark some items as done or in progress
+  todos = todos.map(fn(item) {
+    if item.id == 1 {
+      set_status(item, Done)
+    } else if item.id == 4 {
+      set_status(item, InProgress)
+    } else {
+      item
+    }
+  })
+
+  print_todos(todos)
+
+  Console.println("\nHigh priority items:")
+  let high = filter_by_priority(todos, High)
+  for item in high {
+    Console.println("  ${format_item(item)}")
+  }
+}
+
+test "create todo succeeds with valid input" {
+  let result = create_todo(1, "Test task", Medium)
+  match result {
+    Ok(item) => {
+      assert_eq(item.id, 1)
+      assert_eq(item.title, "Test task")
+    }
+    Err(e) => assert(false)
+  }
+}
+
+test "create todo fails with empty title" {
+  let result = create_todo(1, "", Low)
+  assert_eq(result, Err("title cannot be empty"))
+}
+
+test "set status changes item status" {
+  let item = {
+    id = 1,
+    title = "task",
+    priority = Low,
+    status = Pending,
+  }
+  let updated = set_status(item, Done)
+  assert_eq(status_icon(updated.status), "x")
+}
+
+test "count by status" {
+  let items = [
+    { id = 1, title = "a", priority = Low, status = Done },
+    { id = 2, title = "b", priority = Medium, status = Pending },
+    { id = 3, title = "c", priority = High, status = Done },
+  ]
+  assert_eq(count_by_status(items, Done), 2)
+  assert_eq(count_by_status(items, Pending), 1)
+  assert_eq(count_by_status(items, InProgress), 0)
+}
+
+test "filter by priority" {
+  let items = [
+    { id = 1, title = "a", priority = High, status = Pending },
+    { id = 2, title = "b", priority = Low, status = Pending },
+    { id = 3, title = "c", priority = High, status = Done },
+  ]
+  let high_items = filter_by_priority(items, High)
+  assert_eq(high_items.len(), 2)
+}
+
+test "summary includes counts" {
+  let items = [
+    { id = 1, title = "a", priority = Low, status = Done },
+    { id = 2, title = "b", priority = Medium, status = Pending },
+  ]
+  let report = summary(items)
+  assert(report.contains("Total: 2"))
+  assert(report.contains("Done: 1"))
+}
