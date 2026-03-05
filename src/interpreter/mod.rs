@@ -806,7 +806,7 @@ impl Interpreter {
                     let val = self.eval_expr(v)?;
                     pairs.push((key, val));
                 }
-                Ok(Value::Map(pairs))
+                Ok(Value::Map(sorted_map_from(pairs)))
             }
 
             // Lambda expression
@@ -978,15 +978,13 @@ impl Interpreter {
                         }
                     }
                     (Value::Map(entries), key) => {
-                        for (k, v) in entries {
-                            if values_equal(k, key) {
-                                return Ok(v.clone());
-                            }
+                        match map_get(entries, key) {
+                            Some(v) => Ok(v.clone()),
+                            None => Err(RuntimeError::new(
+                                "E4002",
+                                format!("key not found in map: {}", format_value(key)),
+                            )),
                         }
-                        Err(RuntimeError::new(
-                            "E4002",
-                            format!("key not found in map: {}", format_value(key)),
-                        ))
                     }
                     (Value::Text(s), Value::Int(i)) => {
                         let i = *i;
