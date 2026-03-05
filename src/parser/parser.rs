@@ -781,64 +781,91 @@ impl<'a> Parser<'a> {
         let mut expr = None;
 
         while !self.check(TokenKind::RBrace) && !self.is_eof() {
-            if self.check(TokenKind::Let) || self.check(TokenKind::Return) {
-                stmts.push(self.parse_stmt()?);
-            } else if self.check(TokenKind::Fn) && matches!(self.peek2().kind, TokenKind::Ident(_))
-            {
-                // Local named function definition: `fn name(...) { ... }`
-                stmts.push(self.parse_local_fn_stmt()?);
-            } else {
-                // Parse an expression
-                let e = self.parse_expr()?;
-
-                // Check for assignment: `expr = value`
-                if self.check(TokenKind::Eq) {
-                    self.advance();
-                    let value = self.parse_expr()?;
-                    let span = e.span().merge(value.span());
-                    stmts.push(Stmt::Assign {
-                        id: NodeId::new(),
-                        span,
-                        target: Box::new(e),
-                        value: Box::new(value),
-                    });
+            match self.parse_block_element(&mut stmts, &mut expr) {
+                Ok(done) => {
+                    if done {
+                        break;
+                    }
                 }
-                // E1: Compound assignment operators (+=, -=, *=, /=, %=)
-                else if let Some(op) = self.check_compound_assign() {
-                    self.advance();
-                    let rhs = self.parse_expr()?;
-                    let span = e.span().merge(rhs.span());
-                    // Desugar `x += expr` into `x = x + expr`
-                    let desugared = Expr::Binary {
-                        id: NodeId::new(),
-                        span: span.clone(),
-                        op,
-                        left: Box::new(e.clone()),
-                        right: Box::new(rhs),
-                    };
-                    stmts.push(Stmt::Assign {
-                        id: NodeId::new(),
-                        span,
-                        target: Box::new(e),
-                        value: Box::new(desugared),
-                    });
-                } else if self.check(TokenKind::RBrace) {
-                    // If we're at the end of the block, this is the final expression
-                    expr = Some(Box::new(e));
-                    break;
-                } else {
-                    // Otherwise, this is an expression statement
-                    let span = e.span().clone();
-                    stmts.push(Stmt::Expr {
-                        id: NodeId::new(),
-                        span,
-                        expr: Box::new(e),
-                    });
+                Err(diag) => {
+                    // Multi-error recovery: record the error and skip to the
+                    // next statement boundary so we can report multiple errors.
+                    self.errors.push(diag);
+                    self.recover_to_next_stmt();
                 }
             }
         }
 
         Ok((stmts, expr))
+    }
+
+    /// Parse a single block element (statement or trailing expression).
+    /// Returns `Ok(true)` when the block's trailing expression has been found
+    /// and parsing should stop, or `Ok(false)` to continue.
+    fn parse_block_element(
+        &mut self,
+        stmts: &mut Vec<Stmt>,
+        expr: &mut Option<Box<Expr>>,
+    ) -> Result<bool, Diagnostic> {
+        if self.check(TokenKind::Let) || self.check(TokenKind::Return) {
+            stmts.push(self.parse_stmt()?);
+            Ok(false)
+        } else if self.check(TokenKind::Fn) && matches!(self.peek2().kind, TokenKind::Ident(_)) {
+            // Local named function definition: `fn name(...) { ... }`
+            stmts.push(self.parse_local_fn_stmt()?);
+            Ok(false)
+        } else {
+            // Parse an expression
+            let e = self.parse_expr()?;
+
+            // Check for assignment: `expr = value`
+            if self.check(TokenKind::Eq) {
+                self.advance();
+                let value = self.parse_expr()?;
+                let span = e.span().merge(value.span());
+                stmts.push(Stmt::Assign {
+                    id: NodeId::new(),
+                    span,
+                    target: Box::new(e),
+                    value: Box::new(value),
+                });
+                Ok(false)
+            }
+            // E1: Compound assignment operators (+=, -=, *=, /=, %=)
+            else if let Some(op) = self.check_compound_assign() {
+                self.advance();
+                let rhs = self.parse_expr()?;
+                let span = e.span().merge(rhs.span());
+                // Desugar `x += expr` into `x = x + expr`
+                let desugared = Expr::Binary {
+                    id: NodeId::new(),
+                    span: span.clone(),
+                    op,
+                    left: Box::new(e.clone()),
+                    right: Box::new(rhs),
+                };
+                stmts.push(Stmt::Assign {
+                    id: NodeId::new(),
+                    span,
+                    target: Box::new(e),
+                    value: Box::new(desugared),
+                });
+                Ok(false)
+            } else if self.check(TokenKind::RBrace) {
+                // If we're at the end of the block, this is the final expression
+                *expr = Some(Box::new(e));
+                Ok(true)
+            } else {
+                // Otherwise, this is an expression statement
+                let span = e.span().clone();
+                stmts.push(Stmt::Expr {
+                    id: NodeId::new(),
+                    span,
+                    expr: Box::new(e),
+                });
+                Ok(false)
+            }
+        }
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, Diagnostic> {
@@ -2255,6 +2282,33 @@ impl<'a> Parser<'a> {
                 | TokenKind::Type
                 | TokenKind::Enum
                 | TokenKind::Fn
+                | TokenKind::Effect
+                | TokenKind::Public
+                | TokenKind::Trait
+                | TokenKind::Impl
+                | TokenKind::Test
+                | TokenKind::Property => return,
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Recover to the next statement boundary within a block.
+    /// Skips tokens until we find a `let`, `return`, `fn`, `}`, or a new line
+    /// with a recognizable statement-start token.
+    fn recover_to_next_stmt(&mut self) {
+        while !self.is_eof() {
+            match self.peek().kind {
+                // Statement-starting keywords
+                TokenKind::Let | TokenKind::Return | TokenKind::Fn => return,
+                // End of block — stop so the caller can see }
+                TokenKind::RBrace => return,
+                // Top-level item keywords — stop here too so item-level recovery works
+                TokenKind::Import
+                | TokenKind::Type
+                | TokenKind::Enum
                 | TokenKind::Effect
                 | TokenKind::Public
                 | TokenKind::Trait
