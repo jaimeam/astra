@@ -1,0 +1,151 @@
+module std.path
+
+## Returns the file extension from a path (without the dot).
+## Returns None if there is no extension.
+public fn extension(path: Text) -> Option[Text]
+{
+  let base = basename(path)
+  let idx = base.index_of(".")
+  match idx {
+    Some(i) => {
+      let ext = base.slice(i + 1, base.len())
+      if ext.len() > 0 { Some(ext) } else { None }
+    }
+    None => None
+  }
+}
+
+## Returns the last component of a path.
+public fn basename(path: Text) -> Text
+{
+  let parts = path.split("/")
+  let last_part = parts.last()
+  match last_part {
+    Some(p) => {
+      if p.len() == 0 {
+        let without_trailing = parts.take(len(parts) - 1)
+        without_trailing.last().unwrap_or("")
+      } else {
+        p
+      }
+    }
+    None => ""
+  }
+}
+
+## Returns the directory portion of a path (everything before the last component).
+public fn dirname(path: Text) -> Text
+{
+  let parts = path.split("/")
+  if len(parts) <= 1 {
+    "."
+  } else {
+    let dir_parts = parts.take(len(parts) - 1)
+    let result = dir_parts.join("/")
+    if result.len() == 0 { "/" } else { result }
+  }
+}
+
+## Joins two path segments with a separator.
+public fn join(base: Text, child: Text) -> Text
+{
+  if child.starts_with("/") {
+    child
+  } else if base.ends_with("/") {
+    base + child
+  } else {
+    base + "/" + child
+  }
+}
+
+## Returns the filename without its extension.
+public fn stem(path: Text) -> Text
+{
+  let base = basename(path)
+  let idx = base.index_of(".")
+  match idx {
+    Some(i) => base.slice(0, i)
+    None => base
+  }
+}
+
+## Returns true if the path is absolute (starts with /).
+public fn is_absolute(path: Text) -> Bool
+{
+  path.starts_with("/")
+}
+
+## Returns true if the path is relative (does not start with /).
+public fn is_relative(path: Text) -> Bool
+{
+  not is_absolute(path)
+}
+
+## Normalizes a path by resolving "." and ".." segments.
+public fn normalize(path: Text) -> Text
+{
+  let parts = path.split("/")
+  let mut stack: List[Text] = []
+
+  for part in parts {
+    if part == "." or part == "" {
+      let skip = true
+    } else if part == ".." {
+      if stack.len() > 0 {
+        stack = stack.take(stack.len() - 1)
+      } else {
+        let skip = true
+      }
+    } else {
+      stack = stack.push(part)
+    }
+  }
+
+  let result = stack.join("/")
+  if is_absolute(path) {
+    "/" + result
+  } else if result.len() == 0 {
+    "."
+  } else {
+    result
+  }
+}
+
+test "basename" {
+  assert_eq(basename("/home/user/file.txt"), "file.txt")
+  assert_eq(basename("file.txt"), "file.txt")
+  assert_eq(basename("/home/user/"), "user")
+}
+
+test "dirname" {
+  assert_eq(dirname("/home/user/file.txt"), "/home/user")
+  assert_eq(dirname("file.txt"), ".")
+}
+
+test "extension" {
+  assert_eq(extension("file.txt"), Some("txt"))
+  assert_eq(extension("file"), None)
+  assert_eq(extension("archive.tar.gz"), Some("tar.gz"))
+}
+
+test "join" {
+  assert_eq(join("/home", "user"), "/home/user")
+  assert_eq(join("/home/", "user"), "/home/user")
+  assert_eq(join("/home", "/absolute"), "/absolute")
+}
+
+test "stem" {
+  assert_eq(stem("file.txt"), "file")
+  assert_eq(stem("file"), "file")
+  assert_eq(stem("/path/to/data.csv"), "data")
+}
+
+test "normalize" {
+  assert_eq(normalize("/home/user/../docs/./file.txt"), "/home/docs/file.txt")
+  assert_eq(normalize("a/b/../c"), "a/c")
+}
+
+test "is_absolute and is_relative" {
+  assert_eq(is_absolute("/home"), true)
+  assert_eq(is_relative("home"), true)
+}

@@ -1,0 +1,174 @@
+module std.datetime
+
+## Returns the current time as milliseconds since the Unix epoch.
+public fn now_millis() -> Int effects(Clock)
+{
+  Clock.now()
+}
+
+## Returns today's date as a "YYYY-MM-DD" string.
+public fn today() -> Text effects(Clock)
+{
+  Clock.today()
+}
+
+## Extracts the year from a "YYYY-MM-DD" date string.
+public fn year(date: Text) -> Int
+{
+  let parts = date.split("-")
+  let y = to_int(parts.get(0).unwrap_or("0"))
+  y.unwrap_or(0)
+}
+
+## Extracts the month (1-12) from a "YYYY-MM-DD" date string.
+public fn month(date: Text) -> Int
+{
+  let parts = date.split("-")
+  let m = to_int(parts.get(1).unwrap_or("0"))
+  m.unwrap_or(0)
+}
+
+## Extracts the day (1-31) from a "YYYY-MM-DD" date string.
+public fn day(date: Text) -> Int
+{
+  let parts = date.split("-")
+  let d = to_int(parts.get(2).unwrap_or("0"))
+  d.unwrap_or(0)
+}
+
+## Formats milliseconds since epoch into a human-readable date string "YYYY-MM-DD".
+## Uses a simplified calculation (no timezone support).
+public fn format_date(millis: Int) -> Text
+{
+  let total_days = millis / 86400000
+  let mut y = 1970
+  let mut remaining = total_days
+
+  while remaining >= 365 {
+    let days_in_year = if is_leap_year(y) { 366 } else { 365 }
+    if remaining < days_in_year {
+      break
+    } else {
+      remaining = remaining - days_in_year
+      y = y + 1
+    }
+  }
+
+  let days_in_months = if is_leap_year(y) {
+    [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  } else {
+    [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  }
+
+  let mut m = 0
+  while m < 12 {
+    let dm = days_in_months.get(m).unwrap_or(30)
+    if remaining < dm {
+      break
+    } else {
+      remaining = remaining - dm
+      m = m + 1
+    }
+  }
+
+  let d = remaining + 1
+  let year_str = pad_int(y, 4)
+  let month_str = pad_int(m + 1, 2)
+  let day_str = pad_int(d, 2)
+  year_str + "-" + month_str + "-" + day_str
+}
+
+## Returns true if the given year is a leap year.
+public fn is_leap_year(y: Int) -> Bool
+{
+  (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
+}
+
+## Computes the difference between two dates in days.
+## Both dates must be "YYYY-MM-DD" strings.
+public fn days_between(date1: Text, date2: Text) -> Int
+{
+  let d1 = date_to_days(date1)
+  let d2 = date_to_days(date2)
+  abs(d2 - d1)
+}
+
+## Adds a number of days to a "YYYY-MM-DD" date string.
+public fn add_days(date: Text, n: Int) -> Text
+{
+  let total = date_to_days(date) + n
+  days_to_date(total)
+}
+
+## Internal: convert a date string to days since epoch.
+fn date_to_days(date: Text) -> Int
+{
+  let y = year(date)
+  let m = month(date)
+  let d = day(date)
+
+  let mut days = 0
+  let mut yr = 1970
+  while yr < y {
+    days = days + if is_leap_year(yr) { 366 } else { 365 }
+    yr = yr + 1
+  }
+
+  let months = if is_leap_year(y) {
+    [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  } else {
+    [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  }
+
+  let mut mo = 1
+  while mo < m {
+    days = days + months.get(mo - 1).unwrap_or(30)
+    mo = mo + 1
+  }
+  days + d - 1
+}
+
+## Internal: convert days since epoch to a date string.
+fn days_to_date(total_days: Int) -> Text
+{
+  let millis = total_days * 86400000
+  format_date(millis)
+}
+
+## Internal: pad an integer with leading zeros.
+fn pad_int(n: Int, width: Int) -> Text
+{
+  let s = to_text(n)
+  let mut result = s
+  while result.len() < width {
+    result = "0" + result
+  }
+  result
+}
+
+test "year extraction" {
+  assert_eq(year("2026-03-05"), 2026)
+  assert_eq(month("2026-03-05"), 3)
+  assert_eq(day("2026-03-05"), 5)
+}
+
+test "leap year" {
+  assert_eq(is_leap_year(2000), true)
+  assert_eq(is_leap_year(1900), false)
+  assert_eq(is_leap_year(2024), true)
+  assert_eq(is_leap_year(2023), false)
+}
+
+test "format date" {
+  assert_eq(format_date(0), "1970-01-01")
+  assert_eq(format_date(86400000), "1970-01-02")
+}
+
+test "add days" {
+  assert_eq(add_days("2026-01-01", 1), "2026-01-02")
+  assert_eq(add_days("2026-01-31", 1), "2026-02-01")
+}
+
+test "days between" {
+  assert_eq(days_between("2026-01-01", "2026-01-10"), 9)
+}
