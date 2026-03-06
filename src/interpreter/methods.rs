@@ -7,7 +7,10 @@ use std::collections::HashMap;
 
 use super::error::{check_arity, RuntimeError};
 use super::regex::{regex_find_all, regex_is_match, regex_match, regex_replace, regex_split};
-use super::value::{compare_values, format_value, values_equal, Value};
+use super::value::{
+    compare_values, format_value, map_get, map_remove, map_set, set_add, set_contains, set_remove,
+    sorted_map_from, sorted_set_from, values_equal, Value,
+};
 use super::Interpreter;
 
 impl Interpreter {
@@ -490,7 +493,7 @@ impl Interpreter {
                             }
                         }
                     }
-                    Ok(Value::Map(entries))
+                    Ok(Value::Map(sorted_map_from(entries)))
                 } else {
                     Err(RuntimeError::type_mismatch("List", "other"))
                 }
@@ -509,13 +512,7 @@ impl Interpreter {
             "new" => Ok(Value::Set(Vec::new())),
             "from" => {
                 if let Some(Value::List(items)) = args.into_iter().next() {
-                    let mut unique = Vec::new();
-                    for item in items {
-                        if !unique.iter().any(|e| values_equal(e, &item)) {
-                            unique.push(item);
-                        }
-                    }
-                    Ok(Value::Set(unique))
+                    Ok(Value::Set(sorted_set_from(items)))
                 } else {
                     Err(RuntimeError::type_mismatch("List", "other"))
                 }
@@ -1089,21 +1086,17 @@ impl Interpreter {
             (Value::Map(entries), "is_empty") => Ok(Value::Bool(entries.is_empty())),
             (Value::Map(entries), "get") => {
                 if let Some(key) = args.first() {
-                    for (k, v) in entries {
-                        if values_equal(k, key) {
-                            return Ok(Value::Some(Box::new(v.clone())));
-                        }
+                    match map_get(entries, key) {
+                        Some(v) => Ok(Value::Some(Box::new(v.clone()))),
+                        None => Ok(Value::None),
                     }
-                    Ok(Value::None)
                 } else {
                     Err(RuntimeError::arity_mismatch(1, 0))
                 }
             }
             (Value::Map(entries), "contains_key") => {
                 if let Some(key) = args.first() {
-                    Ok(Value::Bool(
-                        entries.iter().any(|(k, _)| values_equal(k, key)),
-                    ))
+                    Ok(Value::Bool(map_get(entries, key).is_some()))
                 } else {
                     Err(RuntimeError::arity_mismatch(1, 0))
                 }
@@ -1127,25 +1120,14 @@ impl Interpreter {
                 if args.len() == 2 {
                     let key = args[0].clone();
                     let val = args[1].clone();
-                    let mut new_entries: Vec<(Value, Value)> = entries
-                        .iter()
-                        .filter(|(k, _)| !values_equal(k, &key))
-                        .cloned()
-                        .collect();
-                    new_entries.push((key, val));
-                    Ok(Value::Map(new_entries))
+                    Ok(Value::Map(map_set(entries, key, val)))
                 } else {
                     Err(RuntimeError::arity_mismatch(2, args.len()))
                 }
             }
             (Value::Map(entries), "remove") => {
                 if let Some(key) = args.first() {
-                    let new_entries: Vec<(Value, Value)> = entries
-                        .iter()
-                        .filter(|(k, _)| !values_equal(k, key))
-                        .cloned()
-                        .collect();
-                    Ok(Value::Map(new_entries))
+                    Ok(Value::Map(map_remove(entries, key)))
                 } else {
                     Err(RuntimeError::arity_mismatch(1, 0))
                 }
@@ -1156,30 +1138,21 @@ impl Interpreter {
             (Value::Set(elements), "is_empty") => Ok(Value::Bool(elements.is_empty())),
             (Value::Set(elements), "contains") => {
                 if let Some(val) = args.first() {
-                    Ok(Value::Bool(elements.iter().any(|e| values_equal(e, val))))
+                    Ok(Value::Bool(set_contains(elements, val)))
                 } else {
                     Err(RuntimeError::arity_mismatch(1, 0))
                 }
             }
             (Value::Set(elements), "add") => {
                 if let Some(val) = args.into_iter().next() {
-                    let mut new_elements = elements.clone();
-                    if !new_elements.iter().any(|e| values_equal(e, &val)) {
-                        new_elements.push(val);
-                    }
-                    Ok(Value::Set(new_elements))
+                    Ok(Value::Set(set_add(elements, val)))
                 } else {
                     Err(RuntimeError::arity_mismatch(1, 0))
                 }
             }
             (Value::Set(elements), "remove") => {
                 if let Some(val) = args.first() {
-                    let new_elements: Vec<Value> = elements
-                        .iter()
-                        .filter(|e| !values_equal(e, val))
-                        .cloned()
-                        .collect();
-                    Ok(Value::Set(new_elements))
+                    Ok(Value::Set(set_remove(elements, val)))
                 } else {
                     Err(RuntimeError::arity_mismatch(1, 0))
                 }
@@ -1189,9 +1162,7 @@ impl Interpreter {
                 if let Some(Value::Set(other)) = args.first() {
                     let mut result = elements.clone();
                     for item in other {
-                        if !result.iter().any(|e| values_equal(e, item)) {
-                            result.push(item.clone());
-                        }
+                        result = set_add(&result, item.clone());
                     }
                     Ok(Value::Set(result))
                 } else {
@@ -1202,7 +1173,7 @@ impl Interpreter {
                 if let Some(Value::Set(other)) = args.first() {
                     let result: Vec<Value> = elements
                         .iter()
-                        .filter(|e| other.iter().any(|o| values_equal(e, o)))
+                        .filter(|e| set_contains(other, e))
                         .cloned()
                         .collect();
                     Ok(Value::Set(result))

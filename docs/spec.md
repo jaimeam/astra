@@ -1,6 +1,7 @@
-# Astra Language Specification (v0.1 Draft)
+# Astra Language Specification (v1.0)
 
 > This document defines the syntax and semantics of the Astra programming language.
+> For the formal grammar, see [grammar.md](grammar.md).
 
 ## 1. Lexical Structure
 
@@ -25,206 +26,314 @@ letter := 'a'..'z' | 'A'..'Z'
 digit := '0'..'9'
 ```
 
-Reserved keywords cannot be used as identifiers:
+Reserved keywords:
 ```
-and, as, assert, bool, else, effects, ensures, enum, false,
-fn, for, if, import, in, Int, invariant, let, match, module,
-mut, not, Option, or, property, public, requires, Result,
-return, test, Text, then, true, type, Unit, using, where
+and, as, assert, async, await, break, continue, effect, else,
+effects, ensures, enum, false, fn, for, forall, if, impl, import,
+in, invariant, let, match, module, mut, not, or, property, public,
+requires, return, test, then, trait, true, type, using, while
 ```
 
 ### 1.4 Literals
 
 ```
-int_literal := digit+
-bool_literal := 'true' | 'false'
-text_literal := '"' <string_char>* '"'
-string_char := <any char except '"' or '\\'> | escape_sequence
-escape_sequence := '\\' ('n' | 'r' | 't' | '\\' | '"')
+int_literal    := digit+
+float_literal  := digit+ '.' digit+
+bool_literal   := 'true' | 'false'
+text_literal   := '"' string_char* '"'
+multiline_text := '"""' <any>* '"""'
+string_char    := <any char except '"' or '\\'> | escape_sequence
+escape_sequence := '\\' ('n' | 'r' | 't' | '\\' | '"' | '0' | '$')
+unit_literal   := '(' ')'
 ```
 
 ### 1.5 Operators and Punctuation
 
 ```
-operators := '+' | '-' | '*' | '/' | '%' | '==' | '!=' | '<' | '>' | '<=' | '>='
-           | 'and' | 'or' | 'not' | '?' | '?else'
+operators   := '+' | '-' | '*' | '/' | '%'
+             | '==' | '!=' | '<' | '>' | '<=' | '>='
+             | 'and' | 'or' | 'not'
+             | '?' | '?else' | '|>'
+             | '+=' | '-=' | '*=' | '/=' | '%='
 
-punctuation := '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':' | '=' | '->' | '=>' | '|'
+punctuation := '(' | ')' | '{' | '}' | '[' | ']'
+             | ',' | ':' | '=' | '->' | '=>' | '|' | '.'
+             | '..' | '..='
 ```
 
-## 2. Grammar
+## 2. Module System
 
-### 2.1 Modules
+### 2.1 Module Declaration
 
-```
-module := 'module' module_path item*
-module_path := identifier ('.' identifier)*
+Every Astra source file begins with a module declaration:
 
-item := import_decl | type_def | enum_def | fn_def | test_block | property_block
+```astra
+module examples.mymodule
 ```
 
 ### 2.2 Imports
 
-```
-import_decl := 'import' module_path ('as' identifier)?
-             | 'import' module_path '.{' identifier (',' identifier)* '}'
-```
-
-### 2.3 Type Definitions
-
-```
-type_def := 'type' identifier type_params? '=' type_expr invariant_clause?
-type_params := '[' identifier (',' identifier)* ']'
-invariant_clause := 'invariant' expr
-
-type_expr := named_type | record_type | function_type
-named_type := identifier type_args?
-type_args := '[' type_expr (',' type_expr)* ']'
-record_type := '{' field_def (',' field_def)* '}'
-field_def := identifier ':' type_expr
-function_type := '(' type_expr (',' type_expr)* ')' '->' type_expr effects_clause?
+```astra
+import foo.bar                     ## Whole module
+import foo.bar as Alias            ## Aliased import
+import foo.bar.{A, B, C}          ## Selective import
+public import foo.bar              ## Re-export
 ```
 
-### 2.4 Enum Definitions
-
-```
-enum_def := 'enum' identifier type_params? '=' variant ('|' variant)*
-variant := identifier variant_data?
-variant_data := '(' field_def (',' field_def)* ')'
-```
-
-### 2.5 Function Definitions
-
-```
-fn_def := visibility? 'fn' identifier '(' params? ')' return_type? effects_clause? contract_clauses? block
-
-visibility := 'public'
-params := param (',' param)*
-param := identifier ':' type_expr
-return_type := '->' type_expr
-effects_clause := 'effects' '(' identifier (',' identifier)* ')'
-contract_clauses := requires_clause* ensures_clause*
-requires_clause := 'requires' expr
-ensures_clause := 'ensures' expr
-```
-
-### 2.6 Statements
-
-```
-stmt := let_stmt | assign_stmt | return_stmt | expr_stmt
-
-let_stmt := 'let' 'mut'? identifier type_annotation? '=' expr
-type_annotation := ':' type_expr
-assign_stmt := expr '=' expr
-return_stmt := 'return' expr?
-expr_stmt := expr
-```
-
-### 2.7 Expressions
-
-```
-expr := or_expr
-
-or_expr := and_expr ('or' and_expr)*
-and_expr := cmp_expr ('and' cmp_expr)*
-cmp_expr := add_expr (cmp_op add_expr)?
-cmp_op := '==' | '!=' | '<' | '>' | '<=' | '>='
-add_expr := mul_expr (('+' | '-') mul_expr)*
-mul_expr := unary_expr (('*' | '/' | '%') unary_expr)*
-unary_expr := 'not' unary_expr | postfix_expr
-postfix_expr := primary_expr (call_args | field_access | method_call | try_expr)*
-call_args := '(' (expr (',' expr)*)? ')'
-field_access := '.' identifier
-method_call := '.' identifier call_args
-try_expr := '?' | '?else' expr
-
-primary_expr := int_literal | bool_literal | text_literal
-              | identifier | qualified_name
-              | record_expr | enum_expr
-              | if_expr | match_expr | block
-              | '(' expr ')'
-
-qualified_name := identifier '.' identifier
-record_expr := '{' field_init (',' field_init)* '}'
-field_init := identifier '=' expr
-enum_expr := identifier ('(' expr ')')?
-
-if_expr := 'if' expr block ('else' (if_expr | block))?
-match_expr := 'match' expr '{' match_arm (',' match_arm)* '}'
-match_arm := pattern '=>' expr
-block := '{' stmt* expr? '}'
-```
-
-### 2.8 Patterns
-
-```
-pattern := '_' | identifier | literal_pattern | record_pattern | enum_pattern
-literal_pattern := int_literal | bool_literal | text_literal
-record_pattern := '{' field_pattern (',' field_pattern)* '}'
-field_pattern := identifier ('=' pattern)?
-enum_pattern := identifier ('(' pattern ')')?
-```
-
-### 2.9 Tests and Properties
-
-```
-test_block := 'test' text_literal using_clause? block
-property_block := 'property' text_literal using_clause? block
-
-using_clause := 'using' 'effects' '(' effect_binding (',' effect_binding)* ')'
-effect_binding := identifier '=' expr
+Standard library modules are imported via `std.*`:
+```astra
+import std.datetime
+import std.path.{basename, extension}
 ```
 
 ## 3. Type System
 
 ### 3.1 Built-in Types
 
-| Type | Description |
-|------|-------------|
-| `Int` | 64-bit signed integer |
-| `Bool` | Boolean (true/false) |
-| `Text` | UTF-8 string |
-| `Unit` | Unit type (empty tuple) |
-| `Option[T]` | Optional value |
-| `Result[T, E]` | Success or error |
+| Type | Description | Default value |
+|------|-------------|---------------|
+| `Int` | 64-bit signed integer | `0` |
+| `Float` | 64-bit floating point | `0.0` |
+| `Bool` | Boolean | `false` |
+| `Text` | UTF-8 string | `""` |
+| `Unit` | Unit type (empty tuple) | `()` |
 
-### 3.2 Type Inference
+### 3.2 Compound Types
 
-- Type inference is performed within function bodies
+| Type | Description | Literal syntax |
+|------|-------------|----------------|
+| `List[T]` | Ordered collection | `[1, 2, 3]` |
+| `Tuple` | Fixed-size mixed collection | `(1, "hello", true)` |
+| `Map[K, V]` | Key-value pairs (sorted) | `Map.from([(k, v)])` |
+| `Set[T]` | Unique values (sorted) | `Set.from([1, 2, 3])` |
+| `Record` | Named fields | `{ name = "Alice", age = 30 }` |
+| `Option[T]` | Optional value: `Some(T)` or `None` | `Some(42)`, `None` |
+| `Result[T, E]` | Success or error: `Ok(T)` or `Err(E)` | `Ok(42)`, `Err("fail")` |
+| `(T) -> U` | Function type | `fn(x: Int) -> Int { x + 1 }` |
+
+### 3.3 User-Defined Types
+
+#### Type Aliases
+```astra
+type UserId = Int
+type Percentage = Int
+  invariant self >= 0 and self <= 100
+```
+
+#### Enums
+```astra
+enum Shape =
+  | Circle(radius: Float)
+  | Rectangle(width: Float, height: Float)
+  | Point
+```
+
+#### Traits
+```astra
+trait Describable {
+  fn describe(self: Text) -> Text
+}
+
+impl Describable for Int {
+  fn describe(self: Text) -> Text { "an integer" }
+}
+```
+
+### 3.4 Generics
+
+Functions and types support type parameters:
+
+```astra
+fn identity[T](x: T) -> T { x }
+fn apply[T, U](x: T, f: (T) -> U) -> U { f(x) }
+fn show[T: Show](x: T) -> Text { x.describe() }  ## With trait bound
+```
+
+### 3.5 Type Inference
+
 - Public function signatures require explicit type annotations
 - Local variables can omit type annotations when inferrable
+- Lambda parameters can omit types: `fn(x) { x + 1 }`
+- Constraint-based unification resolves generic type parameters
 
-### 3.3 Type Checking Rules
+## 4. Expressions
 
-1. All expressions have a type
-2. Function arguments must match parameter types exactly
-3. Match expressions must be exhaustive over enum variants
-4. The `?` operator requires `Option` or `Result` type
-5. Effects must be declared in function signature
+### 4.1 Operator Precedence (lowest to highest)
 
-## 4. Effects System
+| Precedence | Operators | Associativity |
+|-----------|-----------|---------------|
+| 1 | `\|>` (pipe) | Left |
+| 2 | `or` | Left |
+| 3 | `and` | Left |
+| 4 | `==`, `!=`, `<`, `>`, `<=`, `>=` | None |
+| 5 | `+`, `-` | Left |
+| 6 | `*`, `/`, `%` | Left |
+| 7 | `not`, `-` (negation) | Prefix |
+| 8 | `.` (field/method), `[i]` (index), `?`, `?else` | Postfix |
 
-### 4.1 Built-in Effects
+### 4.2 Control Flow
 
-| Effect | Capability Module | Description |
-|--------|-------------------|-------------|
-| `Net` | `capabilities.net` | Network I/O |
-| `Fs` | `capabilities.fs` | Filesystem |
-| `Clock` | `capabilities.clock` | Time access |
-| `Rand` | `capabilities.rand` | Randomness |
-| `Env` | `capabilities.env` | Environment |
-| `Console` | `capabilities.console` | Console I/O |
+```astra
+## If expression (always produces a value)
+let x = if cond { a } else { b }
 
-### 4.2 Effect Rules
+## Match expression with exhaustiveness checking
+match shape {
+  Circle(r) => 3.14 * r * r
+  Rectangle(w, h) => w * h
+  Point => 0.0
+}
 
-1. Functions are pure by default
-2. Effectful operations require declared effects
-3. Callers must declare all effects of callees
-4. Effects can be injected in tests
+## Match with guard clauses
+match n {
+  x if x > 0 => "positive"
+  x if x < 0 => "negative"
+  _ => "zero"
+}
 
-## 5. Contracts
+## For-in loop
+for item in list { process(item) }
+for (key, value) in pairs { println("${key}: ${value}") }
 
-### 5.1 Preconditions
+## While loop
+while condition { body }
+
+## Break, continue, return
+break
+continue
+return value
+```
+
+### 4.3 String Interpolation
+
+```astra
+let name = "world"
+let greeting = "Hello, ${name}!"
+let computed = "sum = ${a + b}"
+```
+
+Escape sequences: `\n`, `\r`, `\t`, `\\`, `\"`, `\0`, `\$`
+
+### 4.4 Range Expressions
+
+```astra
+let exclusive = 0..10    ## [0, 1, 2, ..., 9]
+let inclusive = 0..=10   ## [0, 1, 2, ..., 10]
+```
+
+### 4.5 Index Access
+
+```astra
+list[0]        ## List indexing (supports negative: list[-1])
+map[key]       ## Map lookup (error if key not found)
+text[i]        ## Character indexing
+tuple.0        ## Tuple field access
+```
+
+### 4.6 Pipe Operator
+
+```astra
+data |> transform |> validate |> save
+## Equivalent to: save(validate(transform(data)))
+```
+
+### 4.7 Error Propagation
+
+```astra
+let value = maybe_none()?         ## Propagates None to caller
+let value = maybe_err()?          ## Propagates Err to caller
+let value = risky()?else default  ## Use default on failure
+```
+
+### 4.8 Lambdas
+
+```astra
+fn(x: Int) -> Int { x * 2 }
+fn(x) { x * 2 }                   ## Type inference
+list.map(fn(x) { x + 1 })
+```
+
+### 4.9 Hole Expression
+
+```astra
+let x = ???   ## Placeholder; type-checks but errors at runtime (E4013)
+```
+
+## 5. Statements
+
+```astra
+let x = 42                         ## Immutable binding
+let mut y = 0                      ## Mutable binding
+let { name, age } = person         ## Destructuring
+y = y + 1                          ## Assignment (mutable only)
+y += 1                             ## Compound assignment (+=, -=, *=, /=, %=)
+return value                       ## Early return
+```
+
+## 6. Function Definitions
+
+```astra
+public fn divide(a: Int, b: Int) -> Int
+  effects(Console)
+  requires b != 0
+  ensures result >= 0
+{
+  Console.println("dividing")
+  a / b
+}
+```
+
+Components:
+- `public` — visibility modifier (default is private)
+- Type parameters: `fn identity[T](x: T) -> T`
+- `effects(...)` — declares required capabilities
+- `requires` — precondition (checked before execution)
+- `ensures` — postcondition (`result` refers to return value)
+
+## 7. Effects System
+
+### 7.1 Built-in Effects
+
+| Effect | Methods |
+|--------|---------|
+| `Console` | `print(text)`, `println(text)`, `read_line()` |
+| `Fs` | `read(path)`, `write(path, content)`, `exists(path)` |
+| `Net` | `get(url)`, `post(url, body)`, `serve(port, handler)` |
+| `Clock` | `now()`, `today()`, `sleep(millis)` |
+| `Rand` | `int(min, max)`, `bool()`, `float()` |
+| `Env` | `get(name)`, `args()` |
+
+### 7.2 Effect Rules
+
+1. **Pure by default** — functions without `effects(...)` cannot use I/O
+2. **Declaration required** — effectful operations require declared effects
+3. **Transitive propagation** — callers must declare all effects of callees
+4. **Testable** — effects can be mocked in test blocks with `using effects(...)`
+
+### 7.3 User-Defined Effects
+
+```astra
+effect Logger {
+  fn log(msg: Text) -> Unit
+}
+```
+
+### 7.4 Deterministic Testing
+
+```astra
+test "seeded random" using effects(Rand = Rand.seeded(42)) {
+  let x = Rand.int(1, 100)
+  assert(x > 0)
+}
+
+test "fixed clock" using effects(Clock = Clock.fixed(1000)) {
+  assert_eq(Clock.now(), 1000)
+}
+```
+
+## 8. Contracts
+
+### 8.1 Preconditions
 
 ```astra
 fn divide(a: Int, b: Int) -> Int
@@ -234,132 +343,114 @@ fn divide(a: Int, b: Int) -> Int
 }
 ```
 
-### 5.2 Postconditions
+Violated preconditions produce error E3001.
+
+### 8.2 Postconditions
 
 ```astra
 fn abs(n: Int) -> Int
   ensures result >= 0
 {
-  if n < 0 { -n } else { n }
+  if n < 0 { 0 - n } else { n }
 }
 ```
 
-### 5.3 Type Invariants
+Violated postconditions produce error E3002.
+
+### 8.3 Type Invariants
 
 ```astra
 type PositiveInt = Int
   invariant self > 0
 ```
 
-## 6. Standard Library
+Violated invariants produce error E3003.
 
-See [Standard Library Reference](stdlib.md) for the full API documentation.
+## 9. Pattern Matching
 
-### 6.1 Built-in Types
+### 9.1 Pattern Types
 
-| Type | Variants | Description |
-|------|----------|-------------|
-| `Int` | — | 64-bit signed integer |
-| `Bool` | `true`, `false` | Boolean |
-| `Text` | — | UTF-8 string |
-| `Unit` | — | Empty type |
-| `Option[T]` | `Some(T)`, `None` | Optional value |
-| `Result[T, E]` | `Ok(T)`, `Err(E)` | Success or error |
-| `List[T]` | — | Ordered collection |
+| Pattern | Example | Binds |
+|---------|---------|-------|
+| Wildcard | `_` | Nothing |
+| Identifier | `x` | Value to `x` |
+| Literal | `42`, `true`, `"hello"` | Nothing |
+| Record | `{ name, age }` | Fields to variables |
+| Variant | `Some(x)`, `None` | Inner value |
+| Tuple | `(a, b, c)` | Elements to variables |
+| Guard | `x if x > 0` | Value to `x` if guard passes |
 
-### 6.2 Built-in Functions
+### 9.2 Exhaustiveness
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `print` | `(Text) -> Unit` | Print text (requires Console) |
-| `println` | `(Text) -> Unit` | Print text with newline (requires Console) |
-| `assert` | `(Bool) -> Unit` | Assert condition is true |
-| `assert_eq` | `(T, T) -> Unit` | Assert two values are equal |
-| `len` | `(List[T]) -> Int` | Get length of a list |
-| `to_text` | `(T) -> Text` | Convert value to text |
+Match expressions on known types (Option, Result, Bool, user enums) must
+cover all variants. Missing cases produce error E1004.
 
-### 6.3 std.option
+### 9.3 Destructuring
 
-| Function | Signature |
-|----------|-----------|
-| `is_some` | `(Option[T]) -> Bool` |
-| `is_none` | `(Option[T]) -> Bool` |
-| `unwrap_or` | `(Option[T], T) -> T` |
-| `map` | `(Option[T], (T) -> U) -> Option[U]` |
+Patterns work in `let` bindings and `for` loops:
 
-### 6.4 std.result
+```astra
+let { name, age } = person
+let (x, y) = point
+for (key, value) in map.entries() { ... }
+```
 
-| Function | Signature |
-|----------|-----------|
-| `is_ok` | `(Result[T, E]) -> Bool` |
-| `is_err` | `(Result[T, E]) -> Bool` |
-| `unwrap_or` | `(Result[T, E], T) -> T` |
-| `map` | `(Result[T, E], (T) -> U) -> Result[U, E]` |
-| `map_err` | `(Result[T, E], (E) -> F) -> Result[T, F]` |
+## 10. Testing
 
-### 6.5 std.list
+```astra
+test "addition" {
+  assert_eq(1 + 1, 2)
+}
 
-| Function | Signature |
-|----------|-----------|
-| `is_empty` | `(List[T]) -> Bool` |
-| `head` | `(List[T]) -> Option[T]` |
+property "list reverse is involutory"
+  using effects(Rand = Rand.seeded(42))
+{
+  let xs = [Rand.int(0, 100), Rand.int(0, 100), Rand.int(0, 100)]
+  assert_eq(xs.reverse().reverse(), xs)
+}
+```
 
-### 6.6 Error Propagation Operators
+## 11. Diagnostics and Linting
 
-- `?` — Propagates `None` or `Err(e)` to the calling function's return value
-- `?else expr` — Provides a fallback value when `?` would propagate
+### 11.1 Error Code Categories
 
-## 7. Evaluation Semantics
+| Range | Category | Example |
+|-------|----------|---------|
+| E0xxx | Syntax/parsing | E0001: Unexpected token |
+| E1xxx | Type errors | E1001: Type mismatch |
+| E2xxx | Effect errors | E2001: Effect not declared |
+| E3xxx | Contract violations | E3001: Precondition violated |
+| E4xxx | Runtime errors | E4003: Division by zero |
+| W0xxx | Warnings | W0001: Unused variable |
 
-### 7.1 Evaluation Order
-
-- Expressions are evaluated left-to-right
-- Function arguments are evaluated before the call
-- Short-circuit evaluation for `and` and `or`
-
-### 7.2 Pattern Matching
-
-- Patterns are matched top-to-bottom
-- First matching arm is executed
-- Non-exhaustive matches are compile errors
-
-### 7.3 Error Propagation
-
-- `?` on `None` returns `None` from function
-- `?` on `Err(e)` returns `Err(e)` from function
-- `?else expr` provides fallback on failure
-
-## 8. Diagnostics and Linting
-
-### 8.1 Diagnostic Model
-
-All compiler output uses structured diagnostics with:
-- Stable error code (`E####` for errors, `W####` for warnings)
-- Severity level: `error`, `warning`, `info`, `hint`
-- Source span with file, line, and column
-- Optional notes and suggested fixes
-- JSON output via `--json` flag
-
-### 8.2 Built-in Lint Checks
-
-The type checker emits warnings for common issues. Warnings do not prevent compilation unless `--strict` mode is enabled.
+### 11.2 Built-in Lint Checks
 
 | Code | Description |
 |------|-------------|
 | W0001 | Unused variable (suppress with `_` prefix) |
 | W0002 | Unused import |
 | W0003 | Unreachable code after `return` |
-| W0004 | Deprecated feature (reserved) |
 | W0005 | Wildcard pattern on known exhaustive type |
 | W0006 | Shadowed binding in same scope |
-| W0007 | Redundant type annotation (reserved) |
+| W0008 | Unused private function |
 
-### 8.3 Strict Mode
+### 11.3 Strict Mode
 
-`astra check --strict` treats all warnings as errors. The check exits with a non-zero status if any warnings are present. This is intended for CI and production use.
+`astra check --strict` treats all warnings as errors.
 
-Strictness can also be configured in `astra.toml`:
-```toml
-[lint]
-level = "deny"
-```
+## 12. Standard Library
+
+See [stdlib.md](stdlib.md) for the complete API reference.
+
+15 modules: `std.core`, `std.prelude`, `std.option`, `std.result`, `std.error`,
+`std.list`, `std.collections`, `std.iter`, `std.string`, `std.math`, `std.io`,
+`std.json`, `std.regex`, `std.datetime`, `std.path`.
+
+## 13. Future Work (v1.1)
+
+The following features are syntactically reserved but not included in v1.0:
+
+- **Async/await** — `async fn` and `await` expressions
+- **Package manager** — `astra pkg` for dependency management
+
+See [ADR-007](adr/ADR-007-defer-async-pkg-to-v1.1.md) for rationale.

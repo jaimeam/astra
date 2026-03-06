@@ -19,7 +19,7 @@ use crate::parser::ast::*;
 
 pub use capabilities::*;
 pub use environment::Environment;
-pub use error::{check_arity, RuntimeError};
+pub use error::{check_arity, CallFrame, RuntimeError};
 pub use pattern::match_pattern;
 pub use value::*;
 
@@ -79,7 +79,7 @@ pub struct Interpreter {
     /// Modules currently being loaded (for circular import detection P4.2)
     loading_modules: std::collections::HashSet<String>,
     /// Call stack for stack traces (P5.2)
-    call_stack: Vec<String>,
+    call_stack: Vec<CallFrame>,
     /// Type definitions for invariant enforcement (P2.3)
     type_defs: HashMap<String, TypeDef>,
     /// Effect definitions (P6.2)
@@ -806,7 +806,7 @@ impl Interpreter {
                     let val = self.eval_expr(v)?;
                     pairs.push((key, val));
                 }
-                Ok(Value::Map(pairs))
+                Ok(Value::Map(sorted_map_from(pairs)))
             }
 
             // Lambda expression
@@ -978,15 +978,13 @@ impl Interpreter {
                         }
                     }
                     (Value::Map(entries), key) => {
-                        for (k, v) in entries {
-                            if values_equal(k, key) {
-                                return Ok(v.clone());
-                            }
+                        match map_get(entries, key) {
+                            Some(v) => Ok(v.clone()),
+                            None => Err(RuntimeError::new(
+                                "E4002",
+                                format!("key not found in map: {}", format_value(key)),
+                            )),
                         }
-                        Err(RuntimeError::new(
-                            "E4002",
-                            format!("key not found in map: {}", format_value(key)),
-                        ))
                     }
                     (Value::Text(s), Value::Int(i)) => {
                         let i = *i;
@@ -1293,7 +1291,9 @@ impl Interpreter {
                 let fn_name = name.as_deref().unwrap_or("<anonymous>");
 
                 // Push call stack frame (P5.2: stack traces)
-                self.call_stack.push(fn_name.to_string());
+                let frame_span = Some(body.block.span.clone());
+                self.call_stack
+                    .push(CallFrame::new(fn_name, frame_span));
 
                 // P6.4: TCO - detect simple self-recursive tail calls
                 let use_tco = name.is_some()
@@ -1609,7 +1609,18 @@ impl Interpreter {
         }
         let mut trace = String::from("Stack trace:\n");
         for (i, frame) in self.call_stack.iter().rev().enumerate() {
-            trace.push_str(&format!("  {}: {}\n", i, frame));
+            if let Some(span) = &frame.span {
+                trace.push_str(&format!(
+                    "  {}: {} ({}:{}:{})\n",
+                    i,
+                    frame.name,
+                    span.file.display(),
+                    span.start_line,
+                    span.start_col
+                ));
+            } else {
+                trace.push_str(&format!("  {}: {}\n", i, frame.name));
+            }
         }
         trace
     }

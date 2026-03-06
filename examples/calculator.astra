@@ -1,0 +1,214 @@
+module examples.calculator
+
+## A simple arithmetic expression evaluator.
+## Demonstrates enum types, pattern matching, recursion, and Result error handling.
+
+## Tokens produced by the lexer.
+enum Token =
+  | TNum(value: Int)
+  | TPlus
+  | TMinus
+  | TMul
+  | TDiv
+  | TLParen
+  | TRParen
+
+## Abstract syntax tree for arithmetic expressions.
+enum Expr =
+  | Num(value: Int)
+  | Add(left: Expr, right: Expr)
+  | Sub(left: Expr, right: Expr)
+  | Mul(left: Expr, right: Expr)
+  | Div(left: Expr, right: Expr)
+  | Neg(inner: Expr)
+
+## Evaluates an expression tree, returning an error on division by zero.
+fn eval(expr: Expr) -> Result[Int, Text]
+{
+  match expr {
+    Num(n) => Ok(n)
+    Neg(inner) => {
+      let val = eval(inner)?
+      Ok(0 - val)
+    }
+    Add(left, right) => eval_binop(left, right, "add")
+    Sub(left, right) => eval_binop(left, right, "sub")
+    Mul(left, right) => eval_binop(left, right, "mul")
+    Div(left, right) => {
+      let lv = eval(left)?
+      let rv = eval(right)?
+      if rv == 0 {
+        Err("division by zero")
+      } else {
+        Ok(lv / rv)
+      }
+    }
+  }
+}
+
+## Evaluates a binary operation given left/right expressions and an operator name.
+fn eval_binop(left: Expr, right: Expr, op: Text) -> Result[Int, Text]
+{
+  let lv = eval(left)?
+  let rv = eval(right)?
+  if op == "add" {
+    Ok(lv + rv)
+  } else if op == "sub" {
+    Ok(lv - rv)
+  } else {
+    Ok(lv * rv)
+  }
+}
+
+## Builds an expression from a description string and evaluates it.
+## Supports simple cases for demonstration purposes.
+fn describe(expr: Expr) -> Text
+{
+  match eval(expr) {
+    Ok(n) => "result: ${n}"
+    Err(e) => "error: ${e}"
+  }
+}
+
+## Checks if an expression is a number with a specific value.
+fn is_num(expr: Expr, n: Int) -> Bool
+{
+  match expr {
+    Num(v) => v == n
+    other => false
+  }
+}
+
+## Simplifies an addition expression.
+fn simplify_add(left: Expr, right: Expr) -> Expr
+{
+  let sl = simplify(left)
+  let sr = simplify(right)
+  if is_num(sl, 0) {
+    sr
+  } else if is_num(sr, 0) {
+    sl
+  } else {
+    Add(sl, sr)
+  }
+}
+
+## Simplifies a subtraction expression.
+fn simplify_sub(left: Expr, right: Expr) -> Expr
+{
+  let sl = simplify(left)
+  let sr = simplify(right)
+  if is_num(sr, 0) {
+    sl
+  } else {
+    Sub(sl, sr)
+  }
+}
+
+## Simplifies a multiplication expression.
+fn simplify_mul(left: Expr, right: Expr) -> Expr
+{
+  let sl = simplify(left)
+  let sr = simplify(right)
+  if is_num(sl, 0) or is_num(sr, 0) {
+    Num(0)
+  } else if is_num(sl, 1) {
+    sr
+  } else if is_num(sr, 1) {
+    sl
+  } else {
+    Mul(sl, sr)
+  }
+}
+
+## Simplifies a division expression.
+fn simplify_div(left: Expr, right: Expr) -> Expr
+{
+  let sl = simplify(left)
+  let sr = simplify(right)
+  if is_num(sl, 0) {
+    Num(0)
+  } else if is_num(sr, 1) {
+    sl
+  } else {
+    Div(sl, sr)
+  }
+}
+
+## Simplifies an expression by folding constant sub-expressions.
+fn simplify(expr: Expr) -> Expr
+{
+  match expr {
+    Num(n) => Num(n)
+    Neg(inner) => {
+      let s = simplify(inner)
+      match s {
+        Num(v) => Num(0 - v)
+        other => Neg(other)
+      }
+    }
+    Add(left, right) => simplify_add(left, right)
+    Sub(left, right) => simplify_sub(left, right)
+    Mul(left, right) => simplify_mul(left, right)
+    Div(left, right) => simplify_div(left, right)
+  }
+}
+
+fn main()
+  effects(Console)
+{
+  ## (3 + 5) * 2
+  let expr1 = Mul(Add(Num(3), Num(5)), Num(2))
+  Console.println("(3 + 5) * 2 = ${describe(expr1)}")
+
+  ## 10 / (5 - 5) => division by zero
+  let expr2 = Div(Num(10), Sub(Num(5), Num(5)))
+  Console.println("10 / (5 - 5) = ${describe(expr2)}")
+
+  ## Simplify: (x + 0) * 1 => x
+  let expr3 = Mul(Add(Num(7), Num(0)), Num(1))
+  let simplified = simplify(expr3)
+  Console.println("simplified (7 + 0) * 1 = ${describe(simplified)}")
+}
+
+test "eval simple addition" {
+  assert_eq(eval(Add(Num(2), Num(3))), Ok(5))
+}
+
+test "eval nested expression" {
+  ## (3 + 5) * 2 = 16
+  let expr = Mul(Add(Num(3), Num(5)), Num(2))
+  assert_eq(eval(expr), Ok(16))
+}
+
+test "eval division by zero returns error" {
+  let expr = Div(Num(10), Num(0))
+  assert_eq(eval(expr), Err("division by zero"))
+}
+
+test "eval negation" {
+  assert_eq(eval(Neg(Num(42))), Ok(-42))
+}
+
+test "eval subtraction and division" {
+  ## (20 - 8) / 3 = 4
+  let expr = Div(Sub(Num(20), Num(8)), Num(3))
+  assert_eq(eval(expr), Ok(4))
+}
+
+test "simplify addition with zero" {
+  let expr = Add(Num(0), Num(5))
+  assert_eq(eval(simplify(expr)), Ok(5))
+}
+
+test "simplify multiplication by one" {
+  let expr = Mul(Num(7), Num(1))
+  let simplified = simplify(expr)
+  assert_eq(eval(simplified), Ok(7))
+}
+
+test "simplify multiplication by zero" {
+  let expr = Mul(Num(99), Num(0))
+  let simplified = simplify(expr)
+  assert_eq(eval(simplified), Ok(0))
+}

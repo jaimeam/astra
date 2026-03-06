@@ -2,6 +2,31 @@ use super::*;
 use std::path::PathBuf;
 
 #[test]
+fn test_multi_error_recovery_items() {
+    // Two bad items — parser should report errors for both.
+    // Each `type` line is missing the name, so the parser errors and recovers.
+    let source = r#"module mymod
+
+type = bad
+
+type = also_bad
+
+fn good(x: Int) -> Int {
+  x + 1
+}
+"#;
+    let result = parse_source(source, &PathBuf::from("test.astra"));
+    assert!(result.is_err(), "Expected parse errors");
+    let errors = result.unwrap_err();
+    // Should report at least 2 errors (one per bad type def)
+    assert!(
+        errors.len() >= 2,
+        "Expected at least 2 errors, got {}",
+        errors.len()
+    );
+}
+
+#[test]
 fn test_parse_empty_module() {
     let source = "module mymod\n";
     let result = parse_source(source, &PathBuf::from("test.astra"));

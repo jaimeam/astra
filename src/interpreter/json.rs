@@ -1,7 +1,7 @@
 //! JSON parsing and stringifying for Astra values.
 
 use super::error::RuntimeError;
-use super::value::{format_value, Value};
+use super::value::{format_value, sorted_map_from, Value};
 
 /// Parse a JSON string into an Astra Value
 pub(super) fn json_parse_value(input: &str) -> Result<Value, RuntimeError> {
@@ -230,7 +230,7 @@ fn json_parse_object(input: &str) -> Result<(Value, &str), RuntimeError> {
         }
     }
 
-    Ok((Value::Map(entries), rest))
+    Ok((Value::Map(sorted_map_from(entries)), rest))
 }
 
 fn json_parse_array(input: &str) -> Result<(Value, &str), RuntimeError> {

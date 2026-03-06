@@ -226,3 +226,20 @@ pub fn check_arity<T>(args: &[T], expected: usize) -> Result<(), RuntimeError> {
         Ok(())
     }
 }
+
+/// A single frame in the call stack, carrying a function name and optional
+/// source location for richer stack traces.
+#[derive(Debug, Clone)]
+pub struct CallFrame {
+    pub name: String,
+    pub span: Option<crate::diagnostics::Span>,
+}
+
+impl CallFrame {
+    pub fn new(name: impl Into<String>, span: Option<crate::diagnostics::Span>) -> Self {
+        Self {
+            name: name.into(),
+            span,
+        }
+    }
+}
