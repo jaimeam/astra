@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          STAGING="astra-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/astra" "$STAGING/"
+          cp README.md LICENSE* "$STAGING/" 2>/dev/null || true
+          tar czf "$STAGING.tar.gz" "$STAGING"
+          shasum -a 256 "$STAGING.tar.gz" > "$STAGING.tar.gz.sha256"
+          echo "ASSET=$STAGING.tar.gz" >> $GITHUB_ENV
+          echo "CHECKSUM=$STAGING.tar.gz.sha256" >> $GITHUB_ENV
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          STAGING="astra-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/astra.exe" "$STAGING/"
+          cp README.md LICENSE* "$STAGING/" 2>/dev/null || true
+          7z a "$STAGING.zip" "$STAGING"
+          certutil -hashfile "$STAGING.zip" SHA256 > "$STAGING.zip.sha256"
+          echo "ASSET=$STAGING.zip" >> $GITHUB_ENV
+          echo "CHECKSUM=$STAGING.zip.sha256" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-${{ matrix.target }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.CHECKSUM }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Determine version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cat > release_notes.md << 'NOTES'
+          ## Installation
+
+          **macOS / Linux:**
+          ```sh
+          curl -fsSL https://raw.githubusercontent.com/jaimeam/astra/main/install-binary.sh | sh
+          ```
+
+          **Or download a binary below** and add it to your `PATH`.
+
+          ### Checksums
+          Each archive has an accompanying `.sha256` file for integrity verification.
+
+          ### Targets
+          | Platform | File |
+          |----------|------|
+          | Linux x86_64 | `astra-VERSION-x86_64-unknown-linux-gnu.tar.gz` |
+          | Linux aarch64 | `astra-VERSION-aarch64-unknown-linux-gnu.tar.gz` |
+          | macOS x86_64 | `astra-VERSION-x86_64-apple-darwin.tar.gz` |
+          | macOS aarch64 (Apple Silicon) | `astra-VERSION-aarch64-apple-darwin.tar.gz` |
+          | Windows x86_64 | `astra-VERSION-x86_64-pc-windows-msvc.zip` |
+          NOTES
+          sed -i "s/VERSION/$VERSION/g" release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Astra ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: artifacts/*
