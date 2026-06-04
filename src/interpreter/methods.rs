@@ -21,35 +21,29 @@ impl Interpreter {
         method: &str,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        // Check if receiver is an effect identifier
+        // Dispatch effects ONLY when the receiver is an actual effect/namespace
+        // reference (`Value::Effect`), never when it is a plain `Value::Text`.
+        // This keys method dispatch off the receiver's *type*, so a string
+        // whose content happens to spell an effect name (e.g. "Netback") still
+        // resolves its Text method. See ADR-008.
         match receiver {
-            Value::Text(name) if name == "Console.println" || name.starts_with("Console") => {
-                self.call_console_method(method, args)
-            }
-            Value::Text(name) if name.starts_with("Fs") => self.call_fs_method(method, args),
-            Value::Text(name) if name.starts_with("Net") => self.call_net_method(method, args),
-            Value::Text(name) if name.starts_with("Clock") => self.call_clock_method(method, args),
-            Value::Text(name) if name.starts_with("Rand") => self.call_rand_method(method, args),
-            Value::Text(name) if name.starts_with("Env") => self.call_env_method(method, args),
-            // Map/Set static constructors
-            Value::Text(name) if name == "Map" => self.call_map_static_method(method, args),
-            Value::Text(name) if name == "Set" => self.call_set_static_method(method, args),
-            // For direct calls like Console.println()
-            _ => {
-                // Try to interpret receiver as effect name
-                if let Value::Text(ref s) = receiver {
-                    if s == "Console" {
-                        return self.call_console_method(method, args);
-                    }
-                    // P6.2: User-defined effect dispatch
-                    // If the receiver name matches a user-defined effect, look for a handler
-                    if self.effect_defs.contains_key(s) {
-                        return self.call_user_effect_method(s, method, args);
-                    }
+            Value::Effect(name) => match name.as_str() {
+                "Console" => self.call_console_method(method, args),
+                "Fs" => self.call_fs_method(method, args),
+                "Net" => self.call_net_method(method, args),
+                "Clock" => self.call_clock_method(method, args),
+                "Rand" => self.call_rand_method(method, args),
+                "Env" => self.call_env_method(method, args),
+                "Map" => self.call_map_static_method(method, args),
+                "Set" => self.call_set_static_method(method, args),
+                // P6.2: User-defined effect dispatch
+                other if self.effect_defs.contains_key(other) => {
+                    self.call_user_effect_method(other, method, args)
                 }
-                // Check if this is an Option/Result method
-                self.call_value_method(receiver, method, args)
-            }
+                other => Err(RuntimeError::unknown_method(other, method)),
+            },
+            // Everything else (Text, List, Option, Result, ...) resolves by type.
+            _ => self.call_value_method(receiver, method, args),
         }
     }
 
@@ -1213,6 +1207,7 @@ impl Interpreter {
             Value::Variant { .. } | Value::VariantConstructor { .. } => "Variant",
             Value::Closure { .. } => "Closure",
             Value::Future { .. } => "Future",
+            Value::Effect(_) => "Effect",
         }
     }
 

@@ -2512,10 +2512,12 @@ impl TypeChecker {
                 }
             }
             // Named type that matches a type param name
-            Type::Named(name, args) if type_params.contains(name) && args.is_empty() => {
-                if !bindings.contains_key(name) {
-                    bindings.insert(name.clone(), actual.clone());
-                }
+            Type::Named(name, args)
+                if type_params.contains(name)
+                    && args.is_empty()
+                    && !bindings.contains_key(name) =>
+            {
+                bindings.insert(name.clone(), actual.clone());
             }
             Type::List(inner) => {
                 if let Type::List(actual_inner) = actual {

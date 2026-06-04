@@ -3739,3 +3739,119 @@ fn test_net_serve_query_params() {
 
     drop(handle);
 }
+
+// ---------------------------------------------------------------------------
+// Regression: string method dispatch must key off the receiver's TYPE, not its
+// string value. Previously a string literal whose content began with an
+// effect/capability name (Net, Fs, Console, ...) was misrouted to that effect,
+// raising E4004/E4006 at runtime. See ADR-008.
+// ---------------------------------------------------------------------------
+
+fn eval_text(source: &str) -> String {
+    match parse_and_eval(source).expect("eval failed") {
+        Value::Text(s) => s,
+        other => panic!("expected Text, got {:?}", other),
+    }
+}
+
+/// `<value>.to_lower()` must resolve as a Text method regardless of what the
+/// string spells — even when it starts with (or exactly equals) an effect name.
+fn assert_to_lower(input: &str, expected: &str) {
+    let source = format!(
+        "module example\n\nfn main() -> Text {{\n  \"{}\".to_lower()\n}}\n",
+        input
+    );
+    assert_eq!(eval_text(&source), expected, "to_lower(\"{}\")", input);
+}
+
+#[test]
+fn test_string_value_never_dispatches_to_effect() {
+    // Every effect/capability namespace name, as a string prefix.
+    assert_to_lower("Netback", "netback");
+    assert_to_lower("Network", "network");
+    assert_to_lower("Netflix", "netflix");
+    assert_to_lower("Fsfoo", "fsfoo");
+    assert_to_lower("Console", "console");
+    assert_to_lower("Consoleable", "consoleable");
+    assert_to_lower("Clockwork", "clockwork");
+    assert_to_lower("Random", "random");
+    assert_to_lower("Environment", "environment");
+    assert_to_lower("Mapper", "mapper");
+    assert_to_lower("Settings", "settings");
+
+    // Exact-match strings (the bare effect name as a value).
+    assert_to_lower("Net", "net");
+    assert_to_lower("Fs", "fs");
+    assert_to_lower("Clock", "clock");
+    assert_to_lower("Rand", "rand");
+    assert_to_lower("Env", "env");
+    assert_to_lower("Map", "map");
+    assert_to_lower("Set", "set");
+
+    // Previously-passing cases must not regress.
+    assert_to_lower("Coke", "coke");
+    assert_to_lower("NETBACK", "netback");
+    assert_to_lower("netback", "netback");
+}
+
+#[test]
+fn test_all_string_methods_on_effect_prefixed_literal() {
+    // Exercise the full set of Text methods on a value whose content starts
+    // with an effect name; none may be hijacked by effect dispatch.
+    assert_eq!(
+        eval_text("module m\nfn main()->Text{\"Netback\".to_upper()}"),
+        "NETBACK"
+    );
+    assert_eq!(
+        eval_text("module m\nfn main()->Text{\"Netback\".to_lower()}"),
+        "netback"
+    );
+    assert_eq!(
+        eval_text("module m\nfn main()->Text{\"  Net  \".trim()}"),
+        "Net"
+    );
+    assert_eq!(
+        eval_text("module m\nfn main()->Text{\"Netback\".replace(\"back\",\"work\")}"),
+        "Network"
+    );
+
+    assert!(matches!(
+        parse_and_eval("module m\nfn main()->Bool{\"Netback\".contains(\"back\")}").unwrap(),
+        Value::Bool(true)
+    ));
+    assert!(matches!(
+        parse_and_eval("module m\nfn main()->Bool{\"Netback\".starts_with(\"Net\")}").unwrap(),
+        Value::Bool(true)
+    ));
+    assert!(matches!(
+        parse_and_eval("module m\nfn main()->Bool{\"Netback\".ends_with(\"back\")}").unwrap(),
+        Value::Bool(true)
+    ));
+    assert!(matches!(
+        parse_and_eval("module m\nfn main()->Int{\"Net\".len()}").unwrap(),
+        Value::Int(3)
+    ));
+    assert!(matches!(
+        parse_and_eval("module m\nfn main()->List{\"Fs,Net\".split(\",\")}").unwrap(),
+        Value::List(_)
+    ));
+}
+
+#[test]
+fn test_effect_namespace_still_dispatches() {
+    // An actual effect *identifier* receiver must still reach effect dispatch.
+    // Console.println goes through the console capability (MockConsole here).
+    let result =
+        parse_and_eval("module m\n\nfn main() -> Unit {\n  Console.println(\"hi\")\n}\n").unwrap();
+    assert!(matches!(result, Value::Unit));
+
+    // Map/Set static constructors are namespace dispatch, not Text values.
+    assert!(matches!(
+        parse_and_eval("module m\nfn main()->Map{Map.new()}").unwrap(),
+        Value::Map(_)
+    ));
+    assert!(matches!(
+        parse_and_eval("module m\nfn main()->Set{Set.new()}").unwrap(),
+        Value::Set(_)
+    ));
+}

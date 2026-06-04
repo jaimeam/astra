@@ -332,123 +332,115 @@ impl LspServer {
         // Find the item at the cursor position
         for item in &module.items {
             match item {
-                Item::FnDef(def) => {
-                    if span_contains(&def.span, line, col) {
-                        let params_str: Vec<String> = def
-                            .params
-                            .iter()
-                            .map(|p| format!("{}: {}", p.name, format_type_expr(&p.ty)))
-                            .collect();
-                        let ret_str = def
-                            .return_type
-                            .as_ref()
-                            .map(|t| format!(" -> {}", format_type_expr(t)))
-                            .unwrap_or_default();
-                        let effects_str = if def.effects.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" effects({})", def.effects.join(", "))
-                        };
+                Item::FnDef(def) if span_contains(&def.span, line, col) => {
+                    let params_str: Vec<String> = def
+                        .params
+                        .iter()
+                        .map(|p| format!("{}: {}", p.name, format_type_expr(&p.ty)))
+                        .collect();
+                    let ret_str = def
+                        .return_type
+                        .as_ref()
+                        .map(|t| format!(" -> {}", format_type_expr(t)))
+                        .unwrap_or_default();
+                    let effects_str = if def.effects.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" effects({})", def.effects.join(", "))
+                    };
 
-                        let type_params_str = if def.type_params.is_empty() {
-                            String::new()
-                        } else {
-                            format!("[{}]", def.type_params.join(", "))
-                        };
+                    let type_params_str = if def.type_params.is_empty() {
+                        String::new()
+                    } else {
+                        format!("[{}]", def.type_params.join(", "))
+                    };
 
-                        let hover_text = format!(
-                            "```astra\nfn {}{}({}){}{}\n```",
-                            def.name,
-                            type_params_str,
-                            params_str.join(", "),
-                            ret_str,
-                            effects_str,
-                        );
-                        return json!({
-                            "contents": {
-                                "kind": "markdown",
-                                "value": hover_text
-                            }
-                        });
-                    }
+                    let hover_text = format!(
+                        "```astra\nfn {}{}({}){}{}\n```",
+                        def.name,
+                        type_params_str,
+                        params_str.join(", "),
+                        ret_str,
+                        effects_str,
+                    );
+                    return json!({
+                        "contents": {
+                            "kind": "markdown",
+                            "value": hover_text
+                        }
+                    });
                 }
-                Item::TypeDef(def) => {
-                    if span_contains(&def.span, line, col) {
-                        let hover_text = format!(
-                            "```astra\ntype {} = {}\n```",
-                            def.name,
-                            format_type_expr(&def.value)
-                        );
-                        return json!({
-                            "contents": {
-                                "kind": "markdown",
-                                "value": hover_text
-                            }
-                        });
-                    }
+                Item::TypeDef(def) if span_contains(&def.span, line, col) => {
+                    let hover_text = format!(
+                        "```astra\ntype {} = {}\n```",
+                        def.name,
+                        format_type_expr(&def.value)
+                    );
+                    return json!({
+                        "contents": {
+                            "kind": "markdown",
+                            "value": hover_text
+                        }
+                    });
                 }
-                Item::EnumDef(def) => {
-                    if span_contains(&def.span, line, col) {
-                        let variants: Vec<String> = def
-                            .variants
-                            .iter()
-                            .map(|v| {
-                                if v.fields.is_empty() {
-                                    v.name.clone()
-                                } else {
-                                    let fields: Vec<String> = v
-                                        .fields
-                                        .iter()
-                                        .map(|f| format!("{}: {}", f.name, format_type_expr(&f.ty)))
-                                        .collect();
-                                    format!("{}({})", v.name, fields.join(", "))
-                                }
-                            })
-                            .collect();
-                        let hover_text = format!(
-                            "```astra\nenum {} {{\n  {}\n}}\n```",
-                            def.name,
-                            variants.join("\n  ")
-                        );
-                        return json!({
-                            "contents": {
-                                "kind": "markdown",
-                                "value": hover_text
-                            }
-                        });
-                    }
-                }
-                Item::TraitDef(def) => {
-                    if span_contains(&def.span, line, col) {
-                        let methods: Vec<String> = def
-                            .methods
-                            .iter()
-                            .map(|m| {
-                                let ps: Vec<String> = m
-                                    .params
+                Item::EnumDef(def) if span_contains(&def.span, line, col) => {
+                    let variants: Vec<String> = def
+                        .variants
+                        .iter()
+                        .map(|v| {
+                            if v.fields.is_empty() {
+                                v.name.clone()
+                            } else {
+                                let fields: Vec<String> = v
+                                    .fields
                                     .iter()
-                                    .map(|p| format!("{}: {}", p.name, format_type_expr(&p.ty)))
+                                    .map(|f| format!("{}: {}", f.name, format_type_expr(&f.ty)))
                                     .collect();
-                                let ret = m
-                                    .return_type
-                                    .as_ref()
-                                    .map(|t| format!(" -> {}", format_type_expr(t)))
-                                    .unwrap_or_default();
-                                format!("fn {}({}){}", m.name, ps.join(", "), ret)
-                            })
-                            .collect();
-                        let hover_text = format!(
-                            "```astra\ntrait {} {{\n  {}\n}}\n```",
-                            def.name,
-                            methods.join("\n  ")
-                        );
-                        return json!({
-                            "contents": {
-                                "kind": "markdown",
-                                "value": hover_text
+                                format!("{}({})", v.name, fields.join(", "))
                             }
-                        });
-                    }
+                        })
+                        .collect();
+                    let hover_text = format!(
+                        "```astra\nenum {} {{\n  {}\n}}\n```",
+                        def.name,
+                        variants.join("\n  ")
+                    );
+                    return json!({
+                        "contents": {
+                            "kind": "markdown",
+                            "value": hover_text
+                        }
+                    });
+                }
+                Item::TraitDef(def) if span_contains(&def.span, line, col) => {
+                    let methods: Vec<String> = def
+                        .methods
+                        .iter()
+                        .map(|m| {
+                            let ps: Vec<String> = m
+                                .params
+                                .iter()
+                                .map(|p| format!("{}: {}", p.name, format_type_expr(&p.ty)))
+                                .collect();
+                            let ret = m
+                                .return_type
+                                .as_ref()
+                                .map(|t| format!(" -> {}", format_type_expr(t)))
+                                .unwrap_or_default();
+                            format!("fn {}({}){}", m.name, ps.join(", "), ret)
+                        })
+                        .collect();
+                    let hover_text = format!(
+                        "```astra\ntrait {} {{\n  {}\n}}\n```",
+                        def.name,
+                        methods.join("\n  ")
+                    );
+                    return json!({
+                        "contents": {
+                            "kind": "markdown",
+                            "value": hover_text
+                        }
+                    });
                 }
                 _ => {}
             }
