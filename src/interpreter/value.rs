@@ -20,6 +20,11 @@ pub enum Value {
     Bool(bool),
     /// Text string
     Text(String),
+    /// Effect / capability namespace reference (e.g. `Net`, `Fs`, `Console`,
+    /// `Map`, `Set`, or a user-defined effect). This is distinct from `Text`
+    /// so that method dispatch keys off the receiver's *type*, never the
+    /// string value a `Text` happens to hold. See ADR-008.
+    Effect(String),
     /// Record value
     Record(HashMap<String, Value>),
     /// Enum variant
@@ -84,6 +89,7 @@ pub fn values_equal(left: &Value, right: &Value) -> bool {
         (Value::Float(a), Value::Float(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Text(a), Value::Text(b)) => a == b,
+        (Value::Effect(a), Value::Effect(b)) => a == b,
         (Value::None, Value::None) => true,
         (Value::Some(a), Value::Some(b)) => values_equal(a, b),
         (Value::Ok(a), Value::Ok(b)) => values_equal(a, b),
@@ -141,6 +147,7 @@ fn type_tag(v: &Value) -> u8 {
         Value::Int(_) => 2,
         Value::Float(_) => 3,
         Value::Text(_) => 4,
+        Value::Effect(_) => 18,
         Value::None => 5,
         Value::Some(_) => 6,
         Value::Ok(_) => 7,
@@ -173,10 +180,12 @@ pub fn compare_values_total(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Text(x), Value::Text(y)) => x.cmp(y),
         (Value::None, Value::None) => Ordering::Equal,
-        (Value::Some(x), Value::Some(y)) | (Value::Ok(x), Value::Ok(y)) | (Value::Err(x), Value::Err(y)) => {
-            compare_values_total(x, y)
-        }
-        (Value::Tuple(xs), Value::Tuple(ys)) | (Value::List(xs), Value::List(ys)) | (Value::Set(xs), Value::Set(ys)) => {
+        (Value::Some(x), Value::Some(y))
+        | (Value::Ok(x), Value::Ok(y))
+        | (Value::Err(x), Value::Err(y)) => compare_values_total(x, y),
+        (Value::Tuple(xs), Value::Tuple(ys))
+        | (Value::List(xs), Value::List(ys))
+        | (Value::Set(xs), Value::Set(ys)) => {
             for (x, y) in xs.iter().zip(ys.iter()) {
                 let c = compare_values_total(x, y);
                 if c != Ordering::Equal {
@@ -290,6 +299,7 @@ pub fn format_value(value: &Value) -> String {
         }
         Value::Bool(b) => b.to_string(),
         Value::Text(s) => s.clone(),
+        Value::Effect(name) => name.clone(),
         Value::Record(fields) => {
             let field_strs: Vec<String> = fields
                 .iter()

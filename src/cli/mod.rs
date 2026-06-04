@@ -1364,7 +1364,7 @@ fn run_fix(
 
         // Sort edits by start position (descending) so we apply from end to start
         // This avoids offset invalidation
-        edits.sort_by(|a, b| b.span.start.cmp(&a.span.start));
+        edits.sort_by_key(|e| std::cmp::Reverse(e.span.start));
 
         // Deduplicate edits at the same span
         edits.dedup_by(|a, b| a.span.start == b.span.start && a.span.end == b.span.end);

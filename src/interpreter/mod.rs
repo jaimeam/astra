@@ -128,7 +128,7 @@ impl Interpreter {
                 // Check for effect names first
                 match name.as_str() {
                     "Console" | "Fs" | "Net" | "Clock" | "Rand" | "Env" | "Map" | "Set" => {
-                        Ok(Value::Text(name.clone()))
+                        Ok(Value::Effect(name.clone()))
                     }
                     // Option/Result constructors
                     "None" => Ok(Value::None),
@@ -147,7 +147,7 @@ impl Interpreter {
                     _ => {
                         // P6.2: Check user-defined effect names
                         if self.effect_defs.contains_key(name) {
-                            return Ok(Value::Text(name.clone()));
+                            return Ok(Value::Effect(name.clone()));
                         }
                         self.env
                             .lookup(name)
@@ -977,15 +977,13 @@ impl Interpreter {
                             Ok(items[actual_idx as usize].clone())
                         }
                     }
-                    (Value::Map(entries), key) => {
-                        match map_get(entries, key) {
-                            Some(v) => Ok(v.clone()),
-                            None => Err(RuntimeError::new(
-                                "E4002",
-                                format!("key not found in map: {}", format_value(key)),
-                            )),
-                        }
-                    }
+                    (Value::Map(entries), key) => match map_get(entries, key) {
+                        Some(v) => Ok(v.clone()),
+                        None => Err(RuntimeError::new(
+                            "E4002",
+                            format!("key not found in map: {}", format_value(key)),
+                        )),
+                    },
                     (Value::Text(s), Value::Int(i)) => {
                         let i = *i;
                         let chars: Vec<char> = s.chars().collect();
@@ -1292,8 +1290,7 @@ impl Interpreter {
 
                 // Push call stack frame (P5.2: stack traces)
                 let frame_span = Some(body.block.span.clone());
-                self.call_stack
-                    .push(CallFrame::new(fn_name, frame_span));
+                self.call_stack.push(CallFrame::new(fn_name, frame_span));
 
                 // P6.4: TCO - detect simple self-recursive tail calls
                 let use_tco = name.is_some()

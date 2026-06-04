@@ -110,9 +110,10 @@ pub(super) fn json_stringify_value(value: &Value) -> String {
                 format!("\"{}\"", name)
             }
         }
-        Value::Closure { .. } | Value::VariantConstructor { .. } | Value::Future { .. } => {
-            "null".to_string()
-        }
+        Value::Closure { .. }
+        | Value::VariantConstructor { .. }
+        | Value::Future { .. }
+        | Value::Effect(_) => "null".to_string(),
     }
 }
 
